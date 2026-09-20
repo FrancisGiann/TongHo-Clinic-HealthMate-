@@ -1,0 +1,53 @@
+:root {
+  /* Primitive palette */
+  --color-teal-700: #24125f;
+  --color-teal-600: #302078;
+  --color-teal-100: #eeeaff;
+  --color-coral-600: #d9232e;
+  --color-coral-100: #ffe8ea;
+  --color-amber-600: #b7791f;
+  --color-amber-100: #fff4dd;
+  --color-indigo-900: #21115f;
+  --color-indigo-800: #302078;
+  --color-slate-700: #414568;
+  --color-slate-500: #747991;
+  --color-slate-200: #e5e4ee;
+  --color-slate-50: #f8f8fc;
+  --color-white: #ffffff;
+
+  /* Semantic palette */
+  --color-background: var(--color-slate-50);
+  --color-surface: var(--color-white);
+  --color-foreground: var(--color-indigo-900);
+  --color-muted-foreground: var(--color-slate-500);
+  --color-border: var(--color-slate-200);
+  --color-primary: var(--color-teal-600);
+  --color-primary-hover: var(--color-teal-700);
+  --color-danger: var(--color-coral-600);
+  --color-warning: var(--color-amber-600);
+
+  /* Component tokens */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --radius-control: 8px;
+  --radius-panel: 12px;
+  --radius-feature: 16px;
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--color-primary) 18%, transparent);
+  --font-body: 'Inter', sans-serif;
+  --font-display: 'Outfit', sans-serif;
+}
+
+.dark {
+  --color-background: #17152f;
+  --color-surface: #242047;
+  --color-foreground: #f4f2ff;
+  --color-muted-foreground: #b9b6d0;
+  --color-border: #45416d;
+  --color-primary: #aaa2f2;
+  --color-primary-hover: #d1ccff;
+}
