@@ -63,7 +63,10 @@ a {
   padding: 25px 16px 18px;
   display: flex;
   flex-direction: column;
-  position: relative;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
   z-index: 2;
   transition: width 0.25s ease;
 }
@@ -168,6 +171,13 @@ nav {
   display: grid;
   gap: 5px;
 }
+.sidebar > nav {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #d4d1e6 transparent;
+}
 nav a,
 .sidebar-bottom > a {
   display: flex;
@@ -205,6 +215,7 @@ nav a.protected-link:hover .lock-badge {
 }
 .sidebar-bottom {
   margin-top: auto;
+  flex: 0 0 auto;
   border-top: 1px solid var(--line);
   padding-top: 14px;
 }
@@ -2471,7 +2482,7 @@ td small {
 .stock-alert strong { font-size: 12px; }
 .stock-alert p { color: #b65062; font-size: 10px; margin: 4px 0 0; }
 .toolbar-inline { display: flex; gap: 8px; }
-.adjust-actions { display: flex; gap: 5px; align-items: center; }
+.adjust-actions { display: flex; gap: 4px; align-items: center; min-width: 156px; }
 .adjust-actions button { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--teal); cursor: pointer; transition: 0.15s; }
 .adjust-actions button:hover {
   background: #e5e0ff;
@@ -2484,14 +2495,11 @@ td small {
 .adjust-actions .icon-btn-small:hover { border-color: var(--purple); background: #f0effa; }
 .adjust-actions .icon-btn-small.danger { background: #fff5f5; border-color: #ffd0d8; color: var(--rose); }
 .adjust-actions .icon-btn-small.danger:hover { border-color: var(--rose); background: #fff0f2; }
-.restock-row-btn { border: 0; background: #eeedf9; color: var(--teal); border-radius: 6px; padding: 6px 8px; font-size: 10px; font-weight: 700; cursor: pointer; transition: 0.15s; }
-.restock-row-btn:hover {
-  background: #dcd9f4;
-  transform: translateY(-1px);
-}
-.restock-row-btn:active {
-  transform: translateY(0) scale(0.97);
-}
+.inventory-table table { min-width: 760px; table-layout: fixed; }
+.inventory-table th:first-child,
+.inventory-table td:first-child { width: 24%; }
+.inventory-table th:last-child,
+.inventory-table td:last-child { width: 164px; padding-left: 8px; padding-right: 8px; }
 .modal-backdrop { 
   position: fixed; 
   inset: 0; 
@@ -2637,7 +2645,7 @@ td small {
 }
 .restock-item-preview { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 8px; background: #eeedf9; color: var(--teal); margin-bottom: 17px; }
 .restock-item-preview div { flex: 1; }.restock-item-preview strong,.restock-item-preview span { display: block; }.restock-item-preview strong { color: var(--ink); font-size: 12px; }.restock-item-preview span { color: var(--muted); font-size: 10px; margin-top: 3px; }
-.dark .restock-row-btn,.dark .restock-item-preview { background: #302a67; color: #d8d4ff; }.dark .restock-item-preview strong { color: #f3f1ff; }
+.dark .restock-item-preview { background: #302a67; color: #d8d4ff; }.dark .restock-item-preview strong { color: #f3f1ff; }
 .dark .modal-card { background: #1c1945; border-color: #383263; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6); }
 .dark .modal-card label { color: #f3f1ff; }
 .dark .modal-card label input,
@@ -2811,6 +2819,7 @@ td small {
 .dark .audit-card { background: #0b1e1d; border-color: #284845; }
 .inline-entry-form { max-width: 850px; margin-bottom: 20px; }
 .inline-entry-form .primary-btn { margin-top: 4px; }
+.report-filter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 
 /* Login Page Styles */
 .login-container {
@@ -2984,6 +2993,10 @@ td small {
   border-color: var(--teal);
   box-shadow: 0 0 0 4px rgba(41, 32, 111, 0.1);
   background: #fff;
+}
+.login-field .field-hint {
+  margin: 6px 0 0;
+  line-height: 1.4;
 }
 .login-options-row {
   display: flex;
@@ -3189,6 +3202,33 @@ td small {
 .password-toggle:hover {
   color: var(--teal);
   transform: translateY(-50%) scale(1.1);
+}
+.password-pair {
+  display: grid;
+  gap: 16px;
+}
+.password-pair-toggle {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: -8px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--teal);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.password-pair-toggle:hover {
+  color: var(--teal-dark);
+}
+.password-pair-toggle:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 .login-error {
   display: flex;
@@ -3475,7 +3515,7 @@ td small {
 .logout-btn {
   border: 0;
   background: none;
-  color: #c9c6df;
+  color: var(--muted);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -5112,7 +5152,6 @@ input:focus {
   border-radius: 10px;
   background: #fafbfc;
   transition: var(--transition);
-  cursor: pointer;
   text-align: left;
 }
 
@@ -5120,6 +5159,25 @@ input:focus {
   border-color: var(--teal);
   background: #f5faf9;
   transform: translateX(4px);
+}
+
+.recent-patient-profile {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.recent-patient-profile:focus-visible,
+.quick-visit-btn:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 3px;
 }
 
 .recent-patient-info {
@@ -5165,6 +5223,25 @@ input:focus {
   transform: scale(1.1);
 }
 
+.empty-state-icon {
+  width: 58px;
+  height: 58px;
+  margin: 0 auto 14px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: #eeeaff;
+  color: var(--teal);
+}
+
+.dashboard-footer,
+.dashboard > footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
 /* Dark Mode Adjustments */
 .dark .todays-summary-widget {
   background: linear-gradient(135deg, #1c1945 0%, #252051 100%);
@@ -5189,6 +5266,15 @@ input:focus {
 .dark .recent-patient-item {
   background: #1a1840;
   border-color: #3d3768;
+}
+
+.dark .recent-patient-profile {
+  background: transparent;
+  color: #f3f1ff;
+}
+
+.dark .recent-patient-info strong {
+  color: #f3f1ff;
 }
 
 .dark .recent-patient-item:hover {
@@ -5351,11 +5437,18 @@ nav a.active,
   border-color: #e35b68;
 }
 .settings-tabs {
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: #c6c3db transparent;
+  padding-bottom: 8px;
   box-shadow: 0 2px 8px rgba(33, 17, 95, 0.04);
 }
 .settings-tabs::-webkit-scrollbar {
-  display: none;
+  display: block;
+  height: 5px;
+}
+.settings-tabs::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #c6c3db;
 }
 .settings-tabs button {
   min-height: 36px;
@@ -5385,6 +5478,7 @@ nav a.active,
   .settings-tabs {
     margin-right: -4px;
     padding: 3px;
+    padding-bottom: 8px;
   }
   .settings-tab-panel {
     padding: 18px;
@@ -5403,4 +5497,43 @@ nav a.active,
   .summary-stats {
     grid-template-columns: 1fr;
   }
+  .report-filter-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.connection-banner {
+  position: fixed;
+  z-index: 1200;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: var(--navy);
+  color: #fff;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.22);
+}
+.connection-banner.error,
+.risk-high {
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  color: #9f1239;
+}
+.risk-result {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 12px;
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
+}
+.risk-result p,
+.risk-result small {
+  display: block;
+  margin-top: 5px;
+}
+.login-help,
+.field-hint {
+  color: var(--muted);
+  font-size: 12px;
 }

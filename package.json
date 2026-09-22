@@ -6,8 +6,13 @@
   "scripts": {
     "dev": "concurrently \"npm run server\" \"vite --host 0.0.0.0\"",
     "build": "vite build",
+    "start": "node server.js",
     "preview": "vite preview",
-    "server": "node server.js"
+    "server": "node server.js",
+    "db:migrate": "node server/migrate.js",
+    "db:seed-demo": "node server/seed-demo.js",
+    "test": "node --test server/*.test.js server/**/*.test.js",
+    "check": "node --check server.js && node --check server/app.js && npm test && npm run build"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -17,10 +22,10 @@
     "express": "^5.2.1",
     "lucide-react": "latest",
     "nodemailer": "^9.1.1",
+    "pg": "^8.23.0",
     "react": "latest",
     "react-dom": "latest",
-    "react-router-dom": "latest",
-    "xlsx": "^0.18.5"
+    "react-router-dom": "latest"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "latest",

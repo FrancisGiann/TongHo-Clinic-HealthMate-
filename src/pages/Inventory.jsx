@@ -3,6 +3,7 @@ import {
   ArrowDownToLine,
   ArrowUpDown,
   Edit2,
+  PackageCheck,
   PackagePlus,
   Search,
   Trash2,
@@ -234,7 +235,7 @@ export default function Inventory({ data, setData }) {
           </div>
         </div>
       )}
-      <section className="panel table-panel">
+      <section className="panel table-panel inventory-table">
         <div className="panel-heading">
           <div>
             <p className="section-kicker">Current stock</p>
@@ -302,7 +303,7 @@ export default function Inventory({ data, setData }) {
                     <button aria-label={`Add one ${item.unit} to ${item.name}`} onClick={() => adjust(item.id, 1)} title="Add one unit">
                       <PackagePlus size={13} />
                     </button>
-                    <button className="restock-row-btn" onClick={() => openRestock(item)}>Restock</button>
+                    <button className="icon-btn-small" aria-label={`Restock ${item.name}`} onClick={() => openRestock(item)} title="Restock item"><PackageCheck size={13} /></button>
                     <button className="icon-btn-small" aria-label={`Edit ${item.name}`} onClick={() => openEditForm(item)} title="Edit item">
                       <Edit2 size={13} />
                     </button>

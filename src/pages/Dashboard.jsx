@@ -4,10 +4,13 @@ import {
   ChevronRight,
   ClipboardCheck,
   Clock3,
+  Heart,
+  MoreHorizontal,
   Package,
   Plus,
   Siren,
   ShieldAlert,
+  Stethoscope,
   Users,
 } from "lucide-react";
 import { useState } from "react";
@@ -66,7 +69,7 @@ export default function Dashboard({ data, user }) {
   const lowStockItems = data.inventory.filter(item => item.quantity <= item.reorderLevel);
   lowStockItems.slice(0, 2).forEach(item => {
     clinicAlerts.push({
-      icon: "!",
+      icon: Package,
       title: `${item.name} stock is low`,
       text: `${item.quantity} ${item.unit} remaining · reorder at ${item.reorderLevel}`,
       tone: "rose",
@@ -82,7 +85,7 @@ export default function Dashboard({ data, user }) {
     const student = getStudent(apt.studentId);
     if (student.name) {
       clinicAlerts.push({
-        icon: "◷",
+        icon: CalendarDays,
         title: `${student.name} has a follow-up`,
         text: `${apt.reason} · ${apt.date} at ${apt.time}`,
         tone: "amber",
@@ -98,7 +101,7 @@ export default function Dashboard({ data, user }) {
   if (data.students.length > 0 && screeningRate < 80) {
     const unscreened = Math.max(0, data.students.length - screenedStudents);
     clinicAlerts.push({
-      icon: "✓",
+      icon: ClipboardCheck,
       title: "Health screenings needed",
       text: `${unscreened} student${unscreened !== 1 ? 's' : ''} pending screening`,
       tone: "teal",
@@ -111,7 +114,7 @@ export default function Dashboard({ data, user }) {
   );
   if (urgentIncidents.length > 0) {
     clinicAlerts.unshift({
-      icon: "!",
+      icon: ShieldAlert,
       title: `${urgentIncidents.length} urgent incident${urgentIncidents.length === 1 ? '' : 's'} need review`,
       text: "Severe or critical safety record",
       tone: "rose",
@@ -135,7 +138,7 @@ export default function Dashboard({ data, user }) {
           </div>
         </section>
         <div className="panel" style={{ textAlign: 'center', padding: '50px 20px', marginTop: '20px' }}>
-          <div style={{ fontSize: '52px', marginBottom: '12px' }}>🏫👩‍⚕️</div>
+          <div className="empty-state-icon"><Users size={32} /></div>
           <h3 style={{ font: '600 20px Outfit', marginBottom: '8px' }}>Welcome to HealthMate+ PRO</h3>
           <p style={{ color: 'var(--muted)', maxWidth: '400px', margin: '0 auto 20px', lineHeight: '1.5', fontSize: '13px' }}>
             Your school clinic management system is ready. Let's start by adding your first student to the records.
@@ -145,7 +148,7 @@ export default function Dashboard({ data, user }) {
           </button>
         </div>
         <div className="dashboard-footer">
-          {data.settings.schoolYear} · <span>♥</span> HealthMate+
+          {data.settings.schoolYear} · <Heart size={12} aria-hidden="true" /> HealthMate+
         </div>
       </div>
     );
@@ -295,7 +298,7 @@ export default function Dashboard({ data, user }) {
                           {visit.chiefComplaint} <span>·</span> {visit.type}
                         </p>
                       </div>
-                      <button className="more-btn" onClick={() => navigate(`/students/${student.id}`)} aria-label={`Open ${student.name}`}>•••</button>
+                      <button className="more-btn" onClick={() => navigate(`/students/${student.id}`)} aria-label={`Open ${student.name}`}><MoreHorizontal size={17} /></button>
                     </div>
                   );
                 })}
@@ -306,7 +309,7 @@ export default function Dashboard({ data, user }) {
             </>
           ) : (
             <div className="empty-state" style={{ textAlign: 'center', padding: '3rem 1rem' }}>
-              <div style={{ fontSize: '3.5rem', marginBottom: '1rem' }}>🩺✨</div>
+              <div className="empty-state-icon"><Stethoscope size={30} /></div>
               <h4 style={{ margin: '0 0 0.5rem', fontSize: '1.1rem' }}>No visits yet</h4>
               <p style={{ color: 'var(--text-2)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>It's a quiet day in the clinic.</p>
               <button className="full-btn" onClick={() => navigate('/new-visit')} style={{ width: 'auto', display: 'inline-flex', padding: '0.5rem 1rem', margin: '0 auto' }}>
@@ -461,7 +464,7 @@ export default function Dashboard({ data, user }) {
         </section>
       </div>
       <footer style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-3)', padding: '2rem 0 1rem' }}>
-        {data.settings.schoolYear} · ♥ HealthMate+
+        {data.settings.schoolYear} · <Heart size={12} aria-hidden="true" /> HealthMate+
       </footer>
     </div>
   );
@@ -499,10 +502,10 @@ function Action({ icon: Icon, label, text, tone, onClick }) {
   );
 }
 
-function Alert({ icon, title, text, tone, onClick }) {
+function Alert({ icon: Icon, title, text, tone, onClick }) {
   return (
     <button type="button" className="alert-item" onClick={onClick}>
-      <div className={`alert-icon ${tone}`}>{icon}</div>
+      <div className={`alert-icon ${tone}`}><Icon size={16} /></div>
       <div>
         <strong>{title}</strong>
         <p>{text}</p>

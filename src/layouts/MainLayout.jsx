@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Activity,
   Bell,
+  CalendarDays,
   ClipboardList,
   FileBarChart,
   HeartPulse,
@@ -10,6 +11,7 @@ import {
   LockKeyhole,
   LogOut,
   Menu,
+  Moon,
   Package,
   PanelLeftClose,
   PanelLeftOpen,
@@ -17,12 +19,14 @@ import {
   Settings,
   ShieldAlert,
   Stethoscope,
+  Sun,
   Syringe,
   Users,
   X,
 } from "lucide-react";
+import { api } from "../utils/api";
 
-const nav = [
+const staffNav = [
   { to: "/", label: "Dashboard", icon: Home },
   { to: "/students", label: "Students", icon: Users },
   { to: "/new-visit", label: "New Visit", icon: Stethoscope },
@@ -32,6 +36,12 @@ const nav = [
   { to: "/queue", label: "Queue", icon: Activity },
   { to: "/inventory", label: "Inventory", icon: Package },
   { to: "/reports", label: "Reports", icon: FileBarChart },
+  { to: "/appointments", label: "Appointments", icon: CalendarDays },
+];
+
+const portalNav = [
+  { to: "/", label: "My Health Portal", icon: Home },
+  { to: "/appointments", label: "Appointments", icon: CalendarDays },
 ];
 
 export default function MainLayout({ settings, dark, setDark, user, onLogout, data }) {
@@ -40,20 +50,23 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
   const [logoSource, setLogoSource] = useState("/Logo.jpg");
   const [clock, setClock] = useState(() => new Date());
   const [showNotifications, setShowNotifications] = useState(false);
+  const [serverNotifications, setServerNotifications] = useState([]);
   const location = useLocation();
   const navigate = useNavigate();
-  const title =
-    nav.find((item) => item.to === location.pathname)?.label ||
-    (location.pathname.includes("student") ? "Student Profile" : "Settings");
+  const isStaff = ['school_nurse', 'system_administrator'].includes(user?.role);
+  const nav = isStaff ? staffNav : portalNav;
+  const title = nav.find((item) => item.to === location.pathname)?.label
+    || (location.pathname === "/students/new" ? "New Health Record" : null)
+    || (location.pathname.startsWith("/students/") ? "Student Profile" : "Settings");
   const userDisplayName = user?.name?.replace(/^Nurse\s+/i, "") || settings.nurseName.replace(/^Nurse\s+/i, "");
-  const userRoleLabel = user?.role === "system_administrator" ? "Administrator" : user?.role === "viewer" ? "Viewer" : "Clinic staff";
+  const userRoleLabel = user?.role === "system_administrator" ? "Administrator" : user?.role === "school_nurse" ? "School nurse" : user?.role === "guardian" ? "Guardian" : "Student";
   
   // Generate dynamic clinic alerts
   const clinicAlerts = [];
   
   if (data) {
     // Low stock alerts
-    const lowStockItems = data.inventory.filter(item => item.quantity <= item.reorderLevel);
+    const lowStockItems = (data.inventory || []).filter(item => item.quantity <= item.reorderLevel);
     lowStockItems.slice(0, 2).forEach(item => {
       clinicAlerts.push({
         title: `${item.name} stock is low`,
@@ -87,12 +100,18 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
       });
     }
   }
+  serverNotifications.filter((item) => item.status !== 'read').slice(0, 5).forEach((item) => {
+    clinicAlerts.push({ title: item.subject, text: item.body, id: item.id });
+  });
   
   useEffect(() => setMobileOpen(false), [location.pathname]);
   useEffect(() => {
     const timer = setInterval(() => setClock(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+  useEffect(() => {
+    api.get('/api/notifications').then((result) => setServerNotifications(result.notifications || [])).catch(() => {});
+  }, [user?.id]);
   return (
     <div className={`app-shell ${dark ? "dark" : ""}`}>
       <aside
@@ -143,11 +162,13 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <NavLink to="/settings" className="protected-link" title="Settings - requires authentication">
-            <Settings size={18} />
-            <span>Settings</span>
-            <LockKeyhole className="lock-badge" size={13} aria-label="Protected access" />
-          </NavLink>
+          {isStaff && (
+            <NavLink to="/settings" className="protected-link" title="Settings - requires authentication">
+              <Settings size={18} />
+              <span>Settings</span>
+              <LockKeyhole className="lock-badge" size={13} aria-label="Protected access" />
+            </NavLink>
+          )}
           <button className="logout-btn" onClick={onLogout} aria-label="Sign out and close session">
             <LogOut size={18} />
             <span>Sign out</span>
@@ -180,13 +201,15 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
           </div>
           <div className="top-actions">
             <span className="live-clock">{clock.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-            <button
-              className="icon-btn"
-              onClick={() => navigate("/students")}
-              aria-label="Search or browse students"
-            >
-              <Search size={19} />
-            </button>
+            {isStaff && (
+              <button
+                className="icon-btn"
+                onClick={() => navigate("/students")}
+                aria-label="Search or browse students"
+              >
+                <Search size={19} />
+              </button>
+            )}
             <button
               className="icon-btn notification"
               onClick={() => setShowNotifications(!showNotifications)}
@@ -229,11 +252,11 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
                   className="notification-footer" 
                   onClick={() => { 
                     setShowNotifications(false); 
-                    navigate('/reports'); 
+                    navigate(isStaff ? '/reports' : '/appointments'); 
                   }}
-                  aria-label="View all reports in detail"
+                  aria-label={isStaff ? "View all reports in detail" : "View appointments"}
                 >
-                  View all reports
+                  {isStaff ? 'View all reports' : 'View appointments'}
                 </button>
               </div>
             )}
@@ -242,8 +265,8 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
               onClick={() => setDark(!dark)}
               aria-label="Toggle theme"
             >
-              <span>☼</span>
-              <span>☾</span>
+              <Sun size={13} aria-hidden="true" />
+              <Moon size={13} aria-hidden="true" />
               <b />
             </button>
           </div>

@@ -65,6 +65,9 @@ const collectionKeys = [
   'immunizations',
   'incidents',
   'appointments',
+  'queue',
+  'dispenseLogs',
+  'stockAdjustments',
 ];
 
 const createInitialData = () => ({
@@ -94,14 +97,7 @@ function normalizeData(value) {
  * @returns {Object} Complete application data object
  */
 export function loadData() {
-  const saved = localStorage.getItem('schoolcare-data');
-  if (!saved) return createInitialData();
-  try { 
-    return normalizeData(JSON.parse(saved));
-  } catch (error) {
-    console.warn('Failed to parse stored data, using seed', error);
-    return createInitialData();
-  }
+  return createInitialData();
 }
 
 /**
@@ -111,15 +107,7 @@ export function loadData() {
  * @throws {Error} If localStorage is unavailable or quota exceeded
  */
 export function saveData(data) { 
-  try {
-    localStorage.setItem('schoolcare-data', JSON.stringify(data)); 
-    return data;
-  } catch (error) {
-    if (error.name === 'QuotaExceededError') {
-      console.error('Storage quota exceeded. Unable to save data.');
-    }
-    throw error;
-  }
+  return normalizeData(data);
 }
 
 /**
@@ -127,7 +115,6 @@ export function saveData(data) {
  * @returns {Object} The seed data object
  */
 export function resetData() { 
-  localStorage.removeItem('schoolcare-data'); 
   return createInitialData();
 }
 

@@ -45,32 +45,18 @@ export default function RecentPatientsWidget({ data }) {
           const colors = ['coral', 'teal', 'amber', 'violet', 'blue'];
           
           return (
-            <div
-              key={patient.id}
-              className="recent-patient-item"
-              onClick={() => navigate(`/students/${patient.id}`)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  navigate(`/students/${patient.id}`);
-                }
-              }}
-              role="button"
-              tabIndex={0}
-            >
-              <div className={`avatar small ${colors[colorIndex]}`}>
-                {initials}
-              </div>
-              <div className="recent-patient-info">
-                <strong>{patient.name}</strong>
-                <span>{patient.lastComplaint || 'Check-up'}</span>
-              </div>
+            <div key={patient.id} className="recent-patient-item">
+              <button className="recent-patient-profile" onClick={() => navigate(`/students/${patient.id}`)}>
+                <span className={`avatar small ${colors[colorIndex]}`}>{initials}</span>
+                <span className="recent-patient-info">
+                  <strong>{patient.name}</strong>
+                  <span>{patient.lastComplaint || 'Check-up'}</span>
+                </span>
+              </button>
               <button
                 className="quick-visit-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  navigate('/new-visit', { state: { selectedStudent: patient } });
-                }}
+                onClick={() => navigate('/new-visit', { state: { selectedStudent: patient } })}
+                aria-label={`Start quick visit for ${patient.name}`}
                 title="Quick visit"
               >
                 <Stethoscope size={14} />

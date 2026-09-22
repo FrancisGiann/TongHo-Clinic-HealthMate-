@@ -1,6 +1,38 @@
-import { BarChart3, Download, FileText, PieChart } from "lucide-react";
+import { useEffect, useState } from "react";
+import { BarChart3, Download, FileText, PieChart, Save } from "lucide-react";
+import { api } from "../utils/api";
 export default function Reports({ data }) {
   const exportReport = () => window.print();
+  const today = new Date().toISOString().slice(0, 10);
+  const [period, setPeriod] = useState('monthly');
+  const [start, setStart] = useState(`${today.slice(0, 8)}01`);
+  const [end, setEnd] = useState(today);
+  const [serverReport, setServerReport] = useState(null);
+  const [reportMessage, setReportMessage] = useState('');
+  const [reportError, setReportError] = useState('');
+  const loadReport = async () => {
+    setReportError('');
+    try {
+      setServerReport(await api.get(`/api/reports?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`));
+    } catch (error) {
+      setReportError(error.message);
+    }
+  };
+  useEffect(() => { loadReport(); }, [start, end]);
+  const choosePeriod = (value) => {
+    setPeriod(value);
+    const date = new Date();
+    if (value === 'daily') setStart(today);
+    if (value === 'weekly') { date.setDate(date.getDate() - 6); setStart(date.toISOString().slice(0, 10)); }
+    if (value === 'monthly') setStart(`${today.slice(0, 8)}01`);
+    setEnd(today);
+  };
+  const saveSnapshot = async () => {
+    try {
+      await api.post('/api/reports/snapshots', { start, end, type: period });
+      setReportMessage('Report snapshot saved for audit and future reference.');
+    } catch (error) { setReportError(error.message); }
+  };
   const complaintCounts = data.visits.reduce(
     (counts, visit) => ({
       ...counts,
@@ -45,19 +77,18 @@ export default function Reports({ data }) {
           <h2>Reports & insights</h2>
           <p>Understand the patterns behind your clinic’s daily work.</p>
         </div>
-        <button className="secondary-btn" onClick={exportReport}>
-          <Download size={16} /> Export report
-        </button>
+        <div className="intro-actions"><button className="secondary-btn" onClick={saveSnapshot}><Save size={16} /> Save snapshot</button><button className="secondary-btn" onClick={exportReport}><Download size={16} /> Print / PDF</button></div>
       </div>
+      <section className="panel inline-entry-form"><div className="report-filter-grid"><label>Report period<select value={period} onChange={(event) => choosePeriod(event.target.value)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="custom">Custom</option></select></label><label>Start date<input type="date" value={start} max={end} onChange={(event) => { setPeriod('custom'); setStart(event.target.value); }} /></label><label>End date<input type="date" value={end} min={start} max={today} onChange={(event) => { setPeriod('custom'); setEnd(event.target.value); }} /></label></div>{reportMessage && <p className="success-message">{reportMessage}</p>}{reportError && <div className="error-banner" role="alert">{reportError}</div>}</section>
       <div className="report-kpis">
         <div>
           <span>Visits this period</span>
-          <strong>{data.visits.length}</strong>
-          <small>{data.visits.length > 0 ? 'Today' : 'No visits yet'}</small>
+          <strong>{serverReport?.totals?.visits ?? 0}</strong>
+          <small>{start} to {end}</small>
         </div>
         <div>
           <span>Top complaint</span>
-          <strong className="report-word">{topComplaint}</strong>
+          <strong className="report-word">{Object.entries(serverReport?.complaints || complaintCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || topComplaint}</strong>
           <small>Most recorded concern</small>
         </div>
         <div>

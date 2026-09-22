@@ -1,8 +1,8 @@
 import { useRef, useState, useEffect } from "react";
 import { useLocation } from "react-router-dom";
 import { Check, Database, Download, Lock, RotateCcw, Save, ShieldCheck, Upload, X, UserCog, Bell, SlidersHorizontal, FileBarChart, Building2, KeyRound } from "lucide-react";
-import * as XLSX from "xlsx";
 import { resetData, saveData } from "../db/database";
+import { downloadCsv } from "../utils/csv";
 import {
   approveNurseAccount,
   getAuditLogs,
@@ -10,8 +10,10 @@ import {
   getUsersForAdmin,
   createManagedUser,
   rejectNurseAccount,
+  resendInvitation,
   updateUserStatus,
   updateMfaPreference,
+  changePassword,
   authenticateUser,
 } from "../utils/auth";
 
@@ -38,8 +40,8 @@ export default function Settings({ data, setData, user }) {
   const location = useLocation();
   const [form, setForm] = useState(data.settings);
   const [saved, setSaved] = useState(false);
-  const [isAuthorized, setIsAuthorized] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(true);
+  const [isAuthorized, setIsAuthorized] = useState(true);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [attempts, setAttempts] = useState(0);
@@ -47,36 +49,26 @@ export default function Settings({ data, setData, user }) {
   const [auditLogs, setAuditLogs] = useState([]);
   const [mfaEnabled, setMfaEnabled] = useState(Boolean(user?.mfaEnabled));
   const [reviewMessage, setReviewMessage] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPasswordValue, setNewPasswordValue] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const isAdmin = user?.role === 'system_administrator';
   const [activeTab, setActiveTab] = useState(isAdmin ? 'account' : 'account');
   const [users, setUsers] = useState([]);
   const [notifications, setNotifications] = useState({ lowStock: true, visits: true, immunizations: true, email: false, sms: false, inApp: true });
   const [securitySettings, setSecuritySettings] = useState({ retention: '5 years', passwordReset: false, sessionTimeout: '30 minutes' });
   const [showUserForm, setShowUserForm] = useState(false);
-  const [newUser, setNewUser] = useState({ name: '', email: '', role: 'Nurse' });
+  const [newUser, setNewUser] = useState({ name: '', email: '', role: 'Nurse', patientId: '', relationship: 'Guardian' });
   const fileInput = useRef(null);
   const studentFileInput = useRef(null);
 
-  // Check if already authorized in this session
-  useEffect(() => {
-    const authSession = sessionStorage.getItem('settings-auth');
-    if (authSession) {
-      const authData = JSON.parse(authSession);
-      // Check if authorization is still valid (within 30 minutes)
-      if (isAdmin && authData.username === user?.username && Date.now() - authData.timestamp < 30 * 60 * 1000) {
-        setIsAuthorized(true);
-        setShowAuthModal(false);
-      } else {
-        sessionStorage.removeItem('settings-auth');
-      }
-    }
-  }, [isAdmin, user?.username]);
-
   useEffect(() => {
     setMfaEnabled(Boolean(user?.mfaEnabled));
-    setPendingRegistrations(getPendingRegistrations());
-    setAuditLogs(getAuditLogs().slice(-8).reverse());
-    setUsers(getUsersForAdmin());
+    Promise.all([getPendingRegistrations(), getAuditLogs(), getUsersForAdmin()]).then(([pending, logs, accounts]) => {
+      setPendingRegistrations(pending);
+      setAuditLogs(logs.slice(0, 8));
+      setUsers(accounts);
+    });
   }, [user]);
 
   useEffect(() => {
@@ -129,7 +121,7 @@ export default function Settings({ data, setData, user }) {
     if (!user?.username) return;
 
     const nextValue = !mfaEnabled;
-    const result = await updateMfaPreference(user.username, nextValue);
+    const result = await updateMfaPreference(nextValue);
 
     if (result.success) {
       setMfaEnabled(nextValue);
@@ -137,23 +129,34 @@ export default function Settings({ data, setData, user }) {
       setTimeout(() => setReviewMessage(""), 2500);
     }
   };
-
-  const refreshReviewData = () => {
-    setPendingRegistrations(getPendingRegistrations());
-    setAuditLogs(getAuditLogs().slice(-8).reverse());
-    setUsers(getUsersForAdmin());
+  const handlePasswordChange = async () => {
+    if (newPasswordValue !== confirmPassword) return setReviewMessage('New passwords do not match.');
+    const result = await changePassword(user?.username, currentPassword, newPasswordValue);
+    setReviewMessage(result.success ? result.message : result.error);
+    if (result.success) {
+      setCurrentPassword('');
+      setNewPasswordValue('');
+      setConfirmPassword('');
+    }
   };
 
-  const handleApprove = (username) => {
-    const result = approveNurseAccount(username, user?.username || 'system_administrator');
-    setReviewMessage(result.message);
-    refreshReviewData();
+  const refreshReviewData = async () => {
+    const [pending, logs, accounts] = await Promise.all([getPendingRegistrations(), getAuditLogs(), getUsersForAdmin()]);
+    setPendingRegistrations(pending);
+    setAuditLogs(logs.slice(0, 8));
+    setUsers(accounts);
   };
 
-  const handleReject = (username) => {
-    const result = rejectNurseAccount(username, 'Admin rejected the submitted nurse account.', user?.username || 'system_administrator');
+  const handleApprove = async (username) => {
+    const result = await approveNurseAccount(username, user?.username || 'system_administrator');
     setReviewMessage(result.message);
-    refreshReviewData();
+    await refreshReviewData();
+  };
+
+  const handleReject = async (username) => {
+    const result = await rejectNurseAccount(username, 'Admin rejected the submitted nurse account.', user?.username || 'system_administrator');
+    setReviewMessage(result.message);
+    await refreshReviewData();
   };
   const update = (event) =>
     setForm({ ...form, [event.target.name]: event.target.value });
@@ -180,24 +183,11 @@ export default function Settings({ data, setData, user }) {
     URL.revokeObjectURL(url);
   };
   const exportData = () => {
-    const workbook = XLSX.utils.book_new();
-    Object.entries(data).forEach(([table, records]) => {
-      const rows = Array.isArray(records) ? records : [records];
-      const sheet = XLSX.utils.json_to_sheet(rows);
-      const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
-      sheet["!cols"] = Array.from({ length: range.e.c + 1 }, (_, column) => {
-        const values = [];
-        for (let row = range.s.r; row <= range.e.r; row += 1) {
-          values.push(String(sheet[XLSX.utils.encode_cell({ r: row, c: column })]?.v ?? ""));
-        }
-        return { wch: Math.min(34, Math.max(14, Math.max(...values.map((value) => value.length)) + 2)) };
-      });
-      sheet["!rows"] = [{ hpt: 24 }];
-      sheet["!freeze"] = { xSplit: 0, ySplit: 1 };
-      sheet["!autofilter"] = { ref: sheet["!ref"] || "A1:A1" };
-      XLSX.utils.book_append_sheet(workbook, sheet, table.slice(0, 31));
+    const rows = Object.entries(data).flatMap(([collection, records]) => {
+      const values = Array.isArray(records) ? records : [records];
+      return values.map((record) => ({ Collection: collection, ...(record || {}) }));
     });
-    XLSX.writeFile(workbook, `healthmate-backup-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    downloadCsv(`healthmate-records-${new Date().toISOString().slice(0, 10)}.csv`, rows);
   };
   const importData = async (event) => {
     const file = event.target.files?.[0];
@@ -256,17 +246,21 @@ export default function Settings({ data, setData, user }) {
   const handleCreateUser = async (event) => {
     event.preventDefault();
     const result = await createManagedUser(newUser);
-    setReviewMessage(result.success ? `Account created. Temporary password: ${result.temporaryPassword}` : result.error);
+    setReviewMessage(result.success ? (result.emailSent === false ? result.message : 'Invitation sent successfully.') : result.error);
     if (result.success) {
-      setNewUser({ name: '', email: '', role: 'Nurse' });
+      setNewUser({ name: '', email: '', role: 'Nurse', patientId: '', relationship: 'Guardian' });
       setShowUserForm(false);
-      refreshReviewData();
+      await refreshReviewData();
     }
   };
-  const handleUserStatus = (account) => {
-    const result = updateUserStatus(account.username, account.status === 'active' ? 'deactivated' : 'active');
+  const handleUserStatus = async (account) => {
+    const result = await updateUserStatus(account.id, account.status === 'active' ? 'deactivated' : 'active');
     setReviewMessage(result.success ? `${account.name} is now ${account.status === 'active' ? 'inactive' : 'active'}.` : result.error);
-    refreshReviewData();
+    await refreshReviewData();
+  };
+  const handleResendInvitation = async (account) => {
+    const result = await resendInvitation(account.id);
+    setReviewMessage(result.success ? result.message : result.error);
   };
   
   // If not authorized, show authentication modal
@@ -345,9 +339,9 @@ export default function Settings({ data, setData, user }) {
           <h2>Settings</h2>
           <p>Keep your clinic identity and contact details current.</p>
         </div>
-        <button className="primary-btn" onClick={save}>
-          <Save size={16} /> Save changes
-        </button>
+        {isAdmin && activeTab === 'school' && <button className="primary-btn" onClick={save}>
+          <Save size={16} /> Save clinic settings
+        </button>}
       </div>
       <nav className="settings-tabs" aria-label="Settings sections">
         {tabs.map(([key, label, Icon]) => (
@@ -369,7 +363,7 @@ export default function Settings({ data, setData, user }) {
               <div className="disabled-note"><KeyRound size={14} /> Password changes are protected and require confirmation.</div>
             </div>
           </div>
-          <div className="settings-subsection"><h4>Change password</h4><div className="three-fields"><label>Current password<input type="password" /></label><label>New password<input type="password" /></label><label>Confirm password<input type="password" /></label></div><button className="primary-btn">Update password</button></div>
+          <div className="settings-subsection"><h4>Change password</h4><div className="three-fields"><label>Current password<input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>New password<input type="password" value={newPasswordValue} onChange={(event) => setNewPasswordValue(event.target.value)} /></label><label>Confirm password<input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></label></div><button type="button" className="primary-btn" onClick={handlePasswordChange}>Update password</button>{reviewMessage && <p className="success-message">{reviewMessage}</p>}</div>
           <div className="settings-subsection security-row"><div><h4>Two-factor authentication</h4><p>Require a verification code when signing in from a new device.</p></div><button type="button" className={`setting-switch ${mfaEnabled ? 'on' : ''}`} onClick={handleMfaToggle} aria-pressed={mfaEnabled}><span />{mfaEnabled ? 'On' : 'Off'}</button></div>
         </section>
       )}
@@ -378,14 +372,14 @@ export default function Settings({ data, setData, user }) {
         <section className="panel settings-tab-panel">
           <div className="settings-panel-heading"><div><p className="section-kicker">Access control</p><h3>User management</h3></div><button className="primary-btn" onClick={() => setShowUserForm(!showUserForm)}><UserCog size={15} /> Add new user</button></div>
           <p className="tab-description">Manage who can access clinic records. Nurses can be assigned a grade or section after their account is approved.</p>
-          {showUserForm && <form className="inline-user-form" onSubmit={handleCreateUser}><label>Name<input value={newUser.name} onChange={(event) => setNewUser({ ...newUser, name: event.target.value })} required /></label><label>Email<input type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} required /></label><label>Role<select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value })}><option>Admin</option><option>Nurse</option></select></label><button type="submit" className="primary-btn">Create account</button></form>}
+          {showUserForm && <form className="inline-user-form" onSubmit={handleCreateUser}><label>Name<input value={newUser.name} onChange={(event) => setNewUser({ ...newUser, name: event.target.value })} required /></label><label>Email<input type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} required /></label><label>Role<select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value, patientId: '' })}><option>Admin</option><option>Nurse</option><option>Student</option><option>Guardian</option></select></label>{['Student', 'Guardian'].includes(newUser.role) && <label>Linked patient<select value={newUser.patientId} onChange={(event) => setNewUser({ ...newUser, patientId: event.target.value })} required><option value="">Select patient…</option>{data.students.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label>}{newUser.role === 'Guardian' && <label>Relationship<input value={newUser.relationship} onChange={(event) => setNewUser({ ...newUser, relationship: event.target.value })} required /></label>}<button type="submit" className="primary-btn">Send invitation</button></form>}
           {reviewMessage && <p className="success-message"><Check size={14} /> {reviewMessage}</p>}
-          <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{users.map((account) => <tr key={account.username}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{account.role === 'system_administrator' ? 'Admin' : 'Nurse'}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status === 'active' ? 'Active' : 'Inactive'}</span></td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td><button type="button" className="table-action">Edit</button><button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button><button type="button" className="table-action">Reset password</button></td></tr>)}</tbody></table></div>
+          <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{users.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.status === 'invited' ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}</td></tr>)}</tbody></table></div>
         </section>
       )}
 
       {activeTab === 'notifications' && (
-        <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><p className="section-kicker">Preferences</p><h3>{isAdmin ? 'Notifications' : 'My notifications'}</h3></div></div><div className="preference-list">{(isAdmin ? [['lowStock','Low stock alerts','Notify when supplies reach their reorder threshold'],['visits','New visit logged alerts','Keep administrators aware of clinic activity'],['immunizations','Immunization due reminders','Surface upcoming and overdue doses']] : [['lowStock','Assigned student allergy flags','Highlight allergy alerts for your assigned students'],['visits','Follow-up reminders','Remind me about scheduled follow-ups']]).map(([key,label,description]) => <div className="preference-row" key={key}><div><strong>{label}</strong><span>{description}</span></div><button type="button" className={`setting-switch ${notifications[key] ? 'on' : ''}`} onClick={() => toggleNotification(key)}><span />{notifications[key] ? 'On' : 'Off'}</button></div>)}</div><h4 className="preference-title">Notification methods</h4><div className="method-grid">{[['email','Email'],['sms','SMS'],['inApp','In-app']].map(([key,label]) => <label key={key}><input type="checkbox" checked={notifications[key]} onChange={() => toggleNotification(key)} /> {label}</label>)}</div></section>
+        <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><p className="section-kicker">Preferences</p><h3>{isAdmin ? 'Notifications' : 'My notifications'}</h3></div></div><div className="preference-list">{(isAdmin ? [['lowStock','Low stock alerts','Notify when supplies reach their reorder threshold'],['visits','New visit logged alerts','Keep administrators aware of clinic activity'],['immunizations','Immunization due reminders','Surface upcoming and overdue doses']] : [['lowStock','Assigned student allergy flags','Highlight allergy alerts for your assigned students'],['visits','Follow-up reminders','Remind me about scheduled follow-ups']]).map(([key,label,description]) => <div className="preference-row" key={key}><div><strong>{label}</strong><span>{description}</span></div><button type="button" className={`setting-switch ${notifications[key] ? 'on' : ''}`} onClick={() => toggleNotification(key)}><span />{notifications[key] ? 'On' : 'Off'}</button></div>)}</div><h4 className="preference-title">Notification methods</h4><div className="method-grid">{[['email','Email'],['inApp','In-app']].map(([key,label]) => <label key={key}><input type="checkbox" checked={notifications[key]} onChange={() => toggleNotification(key)} /> {label}</label>)}</div></section>
       )}
 
       {activeTab === 'security' && isAdmin && (
@@ -401,7 +395,7 @@ export default function Settings({ data, setData, user }) {
       )}
 
       {activeTab === 'data' && isAdmin && (
-        <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><p className="section-kicker">Records & continuity</p><h3>Data & reports</h3></div></div><div className="data-command-grid"><button className="data-action" onClick={exportData}><Download size={17} /><span><strong>Export all data</strong><small>Excel workbook with separate record sheets</small></span></button><button className="data-action" onClick={exportWorkspaceBackup}><Database size={17} /><span><strong>Backup now</strong><small>Download a complete JSON workspace backup</small></span></button><button className="data-action" onClick={() => studentFileInput.current?.click()}><Upload size={17} /><span><strong>Import students</strong><small>Upload a CSV roster</small></span></button></div><input ref={studentFileInput} type="file" accept="text/csv,.csv" hidden onChange={importStudentsCsv} /><div className="preference-row"><div><strong>Automatic backups</strong><span>Schedule a local backup reminder.</span></div><select><option>Daily</option><option>Weekly</option><option>Off</option></select></div><h4 className="preference-title">System activity logs</h4><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>User</th><th>Action</th><th>Timestamp</th></tr></thead><tbody>{auditLogs.map((entry, index) => <tr key={`${entry.timestamp}-${index}`}><td>{getAuditSubject(entry)}</td><td>{getAuditMeta(entry.event).label}</td><td>{new Date(entry.timestamp).toLocaleString()}</td></tr>)}</tbody></table></div></section>
+        <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><p className="section-kicker">Records & continuity</p><h3>Data & reports</h3></div></div><div className="data-command-grid"><button className="data-action" onClick={exportData}><Download size={17} /><span><strong>Export all data</strong><small>Spreadsheet-safe CSV record export</small></span></button><button className="data-action" onClick={exportWorkspaceBackup}><Database size={17} /><span><strong>Backup now</strong><small>Download a complete JSON workspace backup</small></span></button><button className="data-action" onClick={() => studentFileInput.current?.click()}><Upload size={17} /><span><strong>Import students</strong><small>Upload a CSV roster</small></span></button></div><input ref={studentFileInput} type="file" accept="text/csv,.csv" hidden onChange={importStudentsCsv} /><p className="disabled-note">Schedule encrypted database backups with the hosting provider; local exports are manual.</p><h4 className="preference-title">System activity logs</h4><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>User</th><th>Action</th><th>Timestamp</th></tr></thead><tbody>{auditLogs.map((entry, index) => <tr key={`${entry.timestamp}-${index}`}><td>{getAuditSubject(entry)}</td><td>{getAuditMeta(entry.event).label}</td><td>{new Date(entry.timestamp).toLocaleString()}</td></tr>)}</tbody></table></div></section>
       )}
 
       {activeTab === 'schedule' && !isAdmin && <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><p className="section-kicker">Assigned by administrator</p><h3>My schedule</h3></div><span className="settings-badge">View only</span></div><div className="schedule-card"><strong>Monday – Friday</strong><span>08:00 AM – 04:00 PM</span><small>Assigned grade / section: All clinic referrals</small></div></section>}
@@ -524,24 +518,25 @@ export default function Settings({ data, setData, user }) {
           <div className="workspace-card">
             <div className="workspace-card-topline">
               <div className="workspace-icon"><Database size={18} /></div>
-              <span className="workspace-status"><i /> Local only</span>
+              <span className="workspace-status"><i /> Central database</span>
             </div>
             <h3>Workspace data</h3>
-            <p>Records are saved in this browser and stay available on this device until you clear site data or restore a backup.</p>
+            <p>Records are stored in the secured PostgreSQL database and shared only with authorized accounts.</p>
             <div className="workspace-stats">
               <div><strong>{data.students.length}</strong><span>Students</span></div>
               <div><strong>{data.visits.length}</strong><span>Visits</span></div>
               <div><strong>{data.inventory.length}</strong><span>Stock items</span></div>
             </div>
           </div>
+          {isAdmin && <>
           <button
             className="data-action"
             onClick={exportData}
           >
             <Download size={17} />
             <span>
-              <strong>Export Excel report</strong>
-              <small>Download readable record sheets</small>
+              <strong>Export CSV report</strong>
+              <small>Download spreadsheet-compatible records</small>
             </span>
           </button>
           <button className="data-action primary-data-action" onClick={exportWorkspaceBackup}>
@@ -592,8 +587,9 @@ export default function Settings({ data, setData, user }) {
                 ))}
               </div>
             )}
-            <div className="audit-card-footer"><span>Showing latest {auditLogs.length} events</span><span>Local workspace log</span></div>
+            <div className="audit-card-footer"><span>Showing latest {auditLogs.length} events</span><span>Server audit log</span></div>
           </div>
+          </>}
         </aside>
       </div>}
     </div>

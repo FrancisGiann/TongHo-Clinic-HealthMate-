@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Check, ChevronDown, ClipboardPlus, Search } from "lucide-react";
 import { addRecord, saveData } from "../db/database";
+import { api } from "../utils/api";
 
 const complaints = [
   "Headache",
@@ -11,24 +12,95 @@ const complaints = [
   "Dizziness",
   "Nausea",
 ];
+
+const visitDraftKey = 'healthmate-new-visit-draft';
+
+function loadVisitDraft() {
+  try {
+    return JSON.parse(localStorage.getItem(visitDraftKey) || 'null');
+  } catch {
+    localStorage.removeItem(visitDraftKey);
+    return null;
+  }
+}
+
 export default function NewVisit({ data, setData }) {
-  const [selected, setSelected] = useState(null);
-  const [complaint, setComplaint] = useState("");
-  const [visitType, setVisitType] = useState("Illness");
-  const [treatment, setTreatment] = useState("Rest and hydration");
-  const [disposition, setDisposition] = useState("Returned to class");
-  const [medicineId, setMedicineId] = useState("");
-  const [followUp, setFollowUp] = useState(false);
-  const [temperature, setTemperature] = useState("");
-  const [pulse, setPulse] = useState("");
-  const [notes, setNotes] = useState("");
+  const [initialDraft] = useState(loadVisitDraft);
+  const [selected, setSelected] = useState(() => data.students.find((student) => student.id === initialDraft?.studentId) || null);
+  const [complaint, setComplaint] = useState(initialDraft?.complaint || "");
+  const [visitType, setVisitType] = useState(initialDraft?.visitType || "Illness");
+  const [treatment, setTreatment] = useState(initialDraft?.treatment || "Rest and hydration");
+  const [disposition, setDisposition] = useState(initialDraft?.disposition || "Returned to class");
+  const [medicineId, setMedicineId] = useState(initialDraft?.medicineId || "");
+  const [followUp, setFollowUp] = useState(Boolean(initialDraft?.followUp));
+  const [temperature, setTemperature] = useState(initialDraft?.temperature || "");
+  const [pulse, setPulse] = useState(initialDraft?.pulse || "");
+  const [notes, setNotes] = useState(initialDraft?.notes || "");
+  const [painScore, setPainScore] = useState(initialDraft?.painScore || "");
+  const [clinicianRedFlag, setClinicianRedFlag] = useState(Boolean(initialDraft?.clinicianRedFlag));
+  const [riskAcknowledgement, setRiskAcknowledgement] = useState(initialDraft?.riskAcknowledgement || "");
+  const [riskResult, setRiskResult] = useState(null);
+  const [saveError, setSaveError] = useState("");
+  const [summaryDraft, setSummaryDraft] = useState("");
+  const [summaryMeta, setSummaryMeta] = useState(null);
+  const [summaryApproved, setSummaryApproved] = useState(false);
   const [saved, setSaved] = useState(false);
-  const save = () => {
+  const [draftSaved, setDraftSaved] = useState(Boolean(initialDraft));
+
+  const saveDraft = () => {
+    localStorage.setItem(visitDraftKey, JSON.stringify({
+      studentId: selected?.id || null,
+      complaint,
+      visitType,
+      treatment,
+      disposition,
+      medicineId,
+      followUp,
+      temperature,
+      pulse,
+      notes,
+      painScore,
+      clinicianRedFlag,
+      riskAcknowledgement,
+    }));
+    setDraftSaved(true);
+  };
+  const generateSummary = async () => {
+    setSaveError("");
+    try {
+      const result = await api.post('/api/summaries/draft', { type: visitType, chiefComplaint: complaint, treatment, disposition, notes, painScore: painScore ? Number(painScore) : null, temperature, pulse, risk: riskResult });
+      setSummaryDraft(result.draft);
+      setSummaryMeta(result);
+      setSummaryApproved(false);
+    } catch (error) {
+      setSaveError(error.message);
+    }
+  };
+  const save = async () => {
     if (!selected || !complaint) return;
+    setSaveError("");
     const medicine = medicineId
       ? data.inventory.find((item) => item.id === Number(medicineId))
       : null;
-    if (medicine && medicine.quantity < 1) return;
+    if (medicine && medicine.quantity < 1) return setSaveError("The selected medicine is out of stock.");
+    let assessment;
+    try {
+      assessment = await api.post('/api/risk/assess', {
+        painScore: painScore === "" ? null : Number(painScore),
+        clinicianRedFlag,
+        recentVisitCount: data.visits.filter((visit) => visit.studentId === selected.id).length,
+        temperature: temperature === "" ? null : Number(temperature),
+        pulse: pulse === "" ? null : Number(pulse),
+      });
+    } catch (error) {
+      return setSaveError(error.message);
+    }
+    setRiskResult(assessment);
+    if (assessment.status === 'incomplete') return setSaveError(assessment.rationale);
+    if (assessment.category === 'high' && !riskAcknowledgement.trim()) {
+      return setSaveError('Document the nurse acknowledgement before saving a high-risk assessment.');
+    }
+    if (summaryDraft && !summaryApproved) return setSaveError('Review and approve the generated summary, or clear it before saving.');
     const visitData = addRecord(data, "visits", {
         studentId: selected.id,
         date: new Date().toISOString().slice(0, 10),
@@ -44,6 +116,12 @@ export default function NewVisit({ data, setData }) {
         medicineId: medicineId || null,
         temperature,
         pulse,
+        painScore: Number(painScore),
+        riskAssessment: assessment,
+        riskAcknowledgement: riskAcknowledgement.trim(),
+        consultationSummary: summaryApproved ? summaryDraft.trim() : '',
+        summaryProvider: summaryApproved ? summaryMeta?.provider : null,
+        summaryApprovedBy: summaryApproved ? data.settings.nurseName : null,
         notes,
         nurseName: data.settings.nurseName,
       });
@@ -62,6 +140,8 @@ export default function NewVisit({ data, setData }) {
         }
       : visitData;
     setData(saveData(nextData));
+    localStorage.removeItem(visitDraftKey);
+    setDraftSaved(false);
     setSaved(true);
   };
   return (
@@ -72,7 +152,7 @@ export default function NewVisit({ data, setData }) {
           <h2>New visit</h2>
           <p>Capture what happened, clearly and quickly.</p>
         </div>
-        <span className="draft-status">● Auto-saving draft</span>
+        <span className="draft-status">{draftSaved ? 'Draft saved on this computer' : 'Unsaved visit'}</span>
       </div>
       <div className="form-layout">
         <section className="panel form-panel">
@@ -154,14 +234,21 @@ export default function NewVisit({ data, setData }) {
                 </div>
               </label>
             </div>
+            <div className="two-fields">
+              <label>Pain score (1–10)<input type="number" min="1" max="10" step="1" value={painScore} onChange={(event) => setPainScore(event.target.value)} required /></label>
+              <label className="check-label"><input type="checkbox" checked={clinicianRedFlag} onChange={(event) => setClinicianRedFlag(event.target.checked)} /> Clinician-observed urgent warning sign</label>
+            </div>
+            {(clinicianRedFlag || riskResult?.category === 'high') && <label>Nurse acknowledgement / override reason<textarea value={riskAcknowledgement} onChange={(event) => setRiskAcknowledgement(event.target.value)} placeholder="Document the assessment and action taken…" /></label>}
             <label>
               Notes{" "}
               <textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Describe symptoms, observations, and action taken..." />
             </label>
+            <button type="button" className="secondary-btn" onClick={generateSummary} disabled={!complaint}>Generate summary draft</button>
+            {summaryDraft && <div className="risk-result"><strong>Review AI-assisted draft</strong><textarea value={summaryDraft} onChange={(event) => { setSummaryDraft(event.target.value); setSummaryApproved(false); }} /><label className="check-label"><input type="checkbox" checked={summaryApproved} onChange={(event) => setSummaryApproved(event.target.checked)} /> I reviewed and approve this summary for the record</label><small>Provider: {summaryMeta?.provider}. The risk score is calculated separately and is never controlled by AI.</small></div>}
           </FormStep>
           <div className="form-actions">
             <label className="check-label"><input type="checkbox" checked={followUp} onChange={(e) => setFollowUp(e.target.checked)} /> Schedule follow-up</label>
-            <button className="secondary-btn" onClick={() => window.alert("Draft saved locally for this visit.")}>Save as draft</button>
+            <button type="button" className="secondary-btn" onClick={saveDraft}>Save as draft</button>
             <button className="primary-btn" onClick={save}>
               <ClipboardPlus size={16} /> Save visit
             </button>
@@ -169,6 +256,8 @@ export default function NewVisit({ data, setData }) {
           {saved && (
             <p className="success-message">Visit saved to today’s activity.</p>
           )}
+          {saveError && <div className="error-banner" role="alert">{saveError}</div>}
+          {riskResult && <div className={`risk-result risk-${riskResult.category}`}><strong>Decision-support result: {riskResult.category}</strong><p>{riskResult.rationale}</p><small>{riskResult.disclaimer} Rule version: {riskResult.ruleVersion} ({riskResult.ruleStatus}).</small></div>}
         </section>
         <aside className="visit-aside">
           <div className="aside-card">
