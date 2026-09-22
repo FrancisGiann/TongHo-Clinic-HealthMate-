@@ -26,7 +26,7 @@ import {
 } from "lucide-react";
 import { api } from "../utils/api";
 
-const staffNav = [
+const nurseNav = [
   { to: "/", label: "Dashboard", icon: Home },
   { to: "/students", label: "Students", icon: Users },
   { to: "/new-visit", label: "New Visit", icon: Stethoscope },
@@ -37,6 +37,14 @@ const staffNav = [
   { to: "/inventory", label: "Inventory", icon: Package },
   { to: "/reports", label: "Reports", icon: FileBarChart },
   { to: "/appointments", label: "Appointments", icon: CalendarDays },
+];
+
+const adminNav = [
+  { to: "/", label: "Dashboard", icon: Home },
+  { to: "/students", label: "Students", icon: Users },
+  { to: "/incident-reports", label: "Incident Reports", icon: ShieldAlert },
+  { to: "/inventory", label: "Inventory", icon: Package },
+  { to: "/reports", label: "Reports", icon: FileBarChart },
 ];
 
 const portalNav = [
@@ -54,7 +62,8 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
   const location = useLocation();
   const navigate = useNavigate();
   const isStaff = ['school_nurse', 'system_administrator'].includes(user?.role);
-  const nav = isStaff ? staffNav : portalNav;
+  const isAdmin = user?.role === 'system_administrator';
+  const nav = isAdmin ? adminNav : user?.role === 'school_nurse' ? nurseNav : portalNav;
   const title = nav.find((item) => item.to === location.pathname)?.label
     || (location.pathname === "/students/new" ? "New Health Record" : null)
     || (location.pathname.startsWith("/students/") ? "Student Profile" : "Settings");
@@ -162,7 +171,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
           ))}
         </nav>
         <div className="sidebar-bottom">
-          {isStaff && (
+          {isAdmin && (
             <NavLink to="/settings" className="protected-link" title="Settings - requires authentication">
               <Settings size={18} />
               <span>Settings</span>

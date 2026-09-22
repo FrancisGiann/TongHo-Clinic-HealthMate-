@@ -151,8 +151,9 @@ export async function saveClinicData(nextData, user, expectedVersion) {
     throw error;
   }
   return transaction(async (client) => {
-    const locked = await client.query('SELECT version FROM clinic_settings WHERE id=1 FOR UPDATE');
+    const locked = await client.query('SELECT data, version FROM clinic_settings WHERE id=1 FOR UPDATE');
     const currentVersion = locked.rows[0]?.version || 1;
+    const currentSettings = locked.rows[0]?.data || {};
     if (expectedVersion && Number(expectedVersion) !== currentVersion) {
       const error = new Error('Clinic data changed in another session. Reload and try again.');
       error.status = 409;
@@ -161,9 +162,12 @@ export async function saveClinicData(nextData, user, expectedVersion) {
     }
     await syncPatients(client, nextData.students);
     for (const key of Object.keys(collectionMap)) await syncCollection(client, key, Array.isArray(nextData[key]) ? nextData[key] : [], user.id);
+    
+    const settingsToSave = user.role === 'system_administrator' ? (nextData.settings || {}) : currentSettings;
+    
     const result = await client.query(
       'UPDATE clinic_settings SET data=$1::jsonb,version=version+1,updated_at=NOW() WHERE id=1 RETURNING version',
-      [JSON.stringify(nextData.settings || {})],
+      [JSON.stringify(settingsToSave)],
     );
     return result.rows[0].version;
   });

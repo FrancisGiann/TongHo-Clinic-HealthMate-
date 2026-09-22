@@ -13,10 +13,11 @@ import {
   Stethoscope,
   Users,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import TodaysSummary from "../components/TodaysSummary";
 import RecentPatientsWidget from "../components/RecentPatientsWidget";
+import { getPendingRegistrations, getUsersForAdmin } from "../utils/auth";
 
 const day = new Intl.DateTimeFormat("en-US", {
   weekday: "long",
@@ -39,6 +40,16 @@ export default function Dashboard({ data, user }) {
   const [trendRange, setTrendRange] = useState("week");
   const isAdmin = user?.role === "system_administrator";
   const userFirstName = (user?.name || data.settings.nurseName).replace(/^Nurse\s+/i, "").split(" ")[0] || "Admin";
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [pendingInvites, setPendingInvites] = useState([]);
+
+  useEffect(() => {
+    if (isAdmin) {
+      getPendingRegistrations().then(setPendingInvites);
+      getUsersForAdmin().then(setAdminUsers);
+    }
+  }, [isAdmin]);
+
   const getStudent = (id) =>
     data.students.find((student) => student.id === id) || {};
   const todayVisits = data.visits.filter(isToday);
@@ -211,70 +222,111 @@ export default function Dashboard({ data, user }) {
         </button>
       </section>
       
-      {/* Today's Summary Widget */}
-      <TodaysSummary data={data} />
+      {!isAdmin && (
+        <>
+          {/* Today's Summary Widget */}
+          <TodaysSummary data={data} />
+          
+          {/* Recent Patients Widget */}
+          <RecentPatientsWidget data={data} />
+        </>
+      )}
       
-      {/* Recent Patients Widget */}
-      <RecentPatientsWidget data={data} />
-      
-      <section className="stats-grid">
-        <Stat
-          icon={Users}
-          label="Students seen today"
-          value={todayStudentCount}
-          change={todayStudentCount > 0 ? `+${todayStudentCount} today` : "No visits yet"}
-          tone="teal"
-        />
-        <Stat
-          icon={Clock3}
-          label="Pending requests"
-          value={pendingFollowUps}
-          change={pendingFollowUps > 0 ? `${pendingFollowUps} scheduled` : "None pending"}
-          tone="amber"
-        />
-        <Stat
-          icon={Package}
-          label="Low stock alerts"
-          value={lowStock}
-          change={lowStock > 0 ? "Review now" : "All stocked"}
-          tone="rose"
-        />
-        <Stat
-          icon={Users}
-          label="Total students"
-          value={data.students.length}
-          change="Enrolled"
-          tone="violet"
-        />
-        <Stat
-          icon={ShieldAlert}
-          label="Incident reports"
-          value={incidentCount}
-          change={incidentCount > 0 ? "Review records" : "No incidents recorded"}
-          tone="rose"
-        />
-        <Stat
-          icon={ClipboardCheck}
-          label="Health screenings"
-          value={screenedStudents}
-          change={screeningProgress}
-          tone="teal"
-        />
-      </section>
+      {isAdmin ? (
+        <section className="stats-grid">
+          <Stat icon={Users} label="Total Users" value={adminUsers.length} change="System accounts" tone="teal" />
+          <Stat icon={Users} label="Active Users" value={adminUsers.filter(u => u.status === 'active').length} change="Active accounts" tone="teal" />
+          <Stat icon={Users} label="Pending Invites" value={pendingInvites.length} change="Awaiting approval" tone="amber" />
+          <Stat icon={Package} label="Low stock alerts" value={lowStock} change={lowStock > 0 ? "Review now" : "All stocked"} tone="rose" />
+        </section>
+      ) : (
+        <section className="stats-grid">
+          <Stat
+            icon={Users}
+            label="Students seen today"
+            value={todayStudentCount}
+            change={todayStudentCount > 0 ? `+${todayStudentCount} today` : "No visits yet"}
+            tone="teal"
+          />
+          <Stat
+            icon={Clock3}
+            label="Pending requests"
+            value={pendingFollowUps}
+            change={pendingFollowUps > 0 ? `${pendingFollowUps} scheduled` : "None pending"}
+            tone="amber"
+          />
+          <Stat
+            icon={Package}
+            label="Low stock alerts"
+            value={lowStock}
+            change={lowStock > 0 ? "Review now" : "All stocked"}
+            tone="rose"
+          />
+          <Stat
+            icon={Users}
+            label="Total students"
+            value={data.students.length}
+            change="Enrolled"
+            tone="violet"
+          />
+          <Stat
+            icon={ShieldAlert}
+            label="Incident reports"
+            value={incidentCount}
+            change={incidentCount > 0 ? "Review records" : "No incidents recorded"}
+            tone="rose"
+          />
+          <Stat
+            icon={ClipboardCheck}
+            label="Health screenings"
+            value={screenedStudents}
+            change={screeningProgress}
+            tone="teal"
+          />
+        </section>
+      )}
       <div className="content-grid">
         <section className="panel timeline-panel">
           <div className="panel-heading">
             <div>
-              <p className="section-kicker">Live activity</p>
+              <p className="section-kicker">{isAdmin ? "Inventory" : "Live activity"}</p>
               <h3>
-                Today’s visits <span className="live-dot" />
+                {isAdmin ? "Inventory overview" : "Today’s visits"} {!isAdmin && <span className="live-dot" />}
               </h3>
             </div>
-            <button className="text-btn" onClick={() => navigate('/new-visit')}>
+            <button className="text-btn" onClick={() => navigate(isAdmin ? '/inventory' : '/new-visit')}>
               View all <ArrowUpRight size={15} />
             </button>
           </div>
-          {todayVisits.length > 0 ? (
+          {isAdmin ? (
+            <div className="admin-table-wrap">
+              <table className="admin-table" style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ padding: '8px 0', color: 'var(--text-2)', fontWeight: 500 }}>Item</th>
+                    <th style={{ padding: '8px 0', color: 'var(--text-2)', fontWeight: 500 }}>Category</th>
+                    <th style={{ padding: '8px 0', color: 'var(--text-2)', fontWeight: 500 }}>Stock</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.inventory.slice(0, 5).map(item => (
+                    <tr key={item.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                      <td style={{ padding: '12px 0' }}><strong>{item.name}</strong></td>
+                      <td style={{ padding: '12px 0', color: 'var(--text-2)' }}>{item.category}</td>
+                      <td style={{ padding: '12px 0' }}>
+                        <span className={`status-chip ${item.quantity <= item.reorderLevel ? 'warn' : 'success'}`}>
+                          {item.quantity} {item.unit}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <button className="full-btn" onClick={() => navigate('/inventory')} style={{ marginTop: '1rem' }}>
+                Review all stock
+              </button>
+            </div>
+          ) : todayVisits.length > 0 ? (
             <>
               <div className="timeline">
                 {todayVisits.map((visit, index) => {
@@ -356,7 +408,7 @@ export default function Dashboard({ data, user }) {
             />
           </div>
           
-          {recentStudents.length > 0 && (
+          {!isAdmin && recentStudents.length > 0 && (
             <div className="recent-students">
               <h4>Recent students</h4>
               <div className="student-chips">
@@ -378,91 +430,114 @@ export default function Dashboard({ data, user }) {
               </div>
             </div>
           )}
+          
+          {isAdmin && (
+             <div className="recent-students">
+               <h4>Pending invitations</h4>
+               {pendingInvites.length > 0 ? (
+                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '1rem' }}>
+                   {pendingInvites.slice(0, 3).map(entry => (
+                     <div key={entry.username} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', background: 'var(--surface-2)', borderRadius: '8px' }}>
+                       <div>
+                         <strong style={{ fontSize: '0.85rem' }}>{entry.name}</strong><br/>
+                         <small style={{ color: 'var(--text-2)', fontSize: '0.75rem' }}>{entry.email}</small>
+                       </div>
+                       <button className="text-btn" onClick={() => navigate('/settings?tab=users')} style={{ fontSize: '0.8rem' }}>Review</button>
+                     </div>
+                   ))}
+                 </div>
+               ) : (
+                 <p style={{ color: 'var(--text-2)', fontSize: '0.85rem', marginTop: '1rem' }}>No pending invitations.</p>
+               )}
+             </div>
+          )}
         </section>
       </div>
-      <div className="bottom-grid">
-        <section className="panel trend-panel">
-          <div className="panel-heading">
-            <div>
-              <p className="section-kicker">This week</p>
-              <h3>Clinic pulse</h3>
+      {!isAdmin && (
+        <div className="bottom-grid">
+          <section className="panel trend-panel">
+            <div className="panel-heading">
+              <div>
+                <p className="section-kicker">This week</p>
+                <h3>Clinic pulse</h3>
+              </div>
+              <select value={trendRange} onChange={(event) => setTrendRange(event.target.value)}>
+                <option value="week">Last 7 days</option>
+                <option value="month">Last 4 weeks</option>
+              </select>
             </div>
-            <select value={trendRange} onChange={(event) => setTrendRange(event.target.value)}>
-              <option value="week">Last 7 days</option>
-              <option value="month">Last 4 weeks</option>
-            </select>
-          </div>
-          <div className="chart-area" style={{ marginBottom: topComplaints.length > 0 ? '1.5rem' : '0' }}>
-            <div className="chart-y">
-              <span>{Math.ceil(maxDailyVisits)}</span>
-              <span>{Math.ceil(maxDailyVisits * 0.75)}</span>
-              <span>{Math.ceil(maxDailyVisits * 0.5)}</span>
-              <span>{Math.ceil(maxDailyVisits * 0.25)}</span>
-              <span>0</span>
-            </div>
-            <div className="bars">
-              {dailyVisits.map((count, i) => (
-                <div className="bar-column" key={i}>
-                  <div
-                    className={`bar ${i === todayIndex ? "highlight" : ""}`}
-                    style={{ height: `${(count / maxDailyVisits) * 100}%`, minHeight: count > 0 ? '4px' : '0' }}
-                  >
-                    <b>{count}</b>
-                  </div>
-                  <span>
-                    {trendRange === "month" ? `Week ${i + 1}` : new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(chartDays[i])}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-          
-          {topComplaints.length > 0 && (
-            <div style={{ paddingTop: '1.5rem', borderTop: '1px solid var(--border)' }}>
-              <p className="section-kicker" style={{ marginBottom: '1rem' }}>Top complaints</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
-                {topComplaints.map(([complaint, count]) => (
-                  <div key={complaint}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '0.35rem', color: 'var(--text-1)' }}>
-                      <span style={{ fontWeight: 500 }}>{complaint}</span>
-                      <strong>{count}</strong>
+            <div className="chart-area" style={{ marginBottom: topComplaints.length > 0 ? '1.5rem' : '0' }}>
+              <div className="chart-y">
+                <span>{Math.ceil(maxDailyVisits)}</span>
+                <span>{Math.ceil(maxDailyVisits * 0.75)}</span>
+                <span>{Math.ceil(maxDailyVisits * 0.5)}</span>
+                <span>{Math.ceil(maxDailyVisits * 0.25)}</span>
+                <span>0</span>
+              </div>
+              <div className="bars">
+                {dailyVisits.map((count, i) => (
+                  <div className="bar-column" key={i}>
+                    <div
+                      className={`bar ${i === todayIndex ? "highlight" : ""}`}
+                      style={{ height: `${(count / maxDailyVisits) * 100}%`, minHeight: count > 0 ? '4px' : '0' }}
+                    >
+                      <b>{count}</b>
                     </div>
-                    <div style={{ background: 'var(--surface-2)', height: '6px', borderRadius: '3px', overflow: 'hidden' }}>
-                      <div style={{ background: 'var(--brand-teal)', height: '100%', width: `${(count / maxComplaintCount) * 100}%`, borderRadius: '3px', transition: 'width 0.5s ease-out' }} />
-                    </div>
+                    <span>
+                      {trendRange === "month" ? `Week ${i + 1}` : new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(chartDays[i])}
+                    </span>
                   </div>
                 ))}
               </div>
             </div>
-          )}
-        </section>
-        <section className="panel alerts-panel">
-          <div className="panel-heading">
-            <div>
-              <p className="section-kicker">Needs attention</p>
-              <h3>Clinic alerts</h3>
+            
+            {topComplaints.length > 0 && (
+              <div style={{ paddingTop: '1.5rem', borderTop: '1px solid var(--border)' }}>
+                <p className="section-kicker" style={{ marginBottom: '1rem' }}>Top complaints</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+                  {topComplaints.map(([complaint, count]) => (
+                    <div key={complaint}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '0.35rem', color: 'var(--text-1)' }}>
+                        <span style={{ fontWeight: 500 }}>{complaint}</span>
+                        <strong>{count}</strong>
+                      </div>
+                      <div style={{ background: 'var(--surface-2)', height: '6px', borderRadius: '3px', overflow: 'hidden' }}>
+                        <div style={{ background: 'var(--brand-teal)', height: '100%', width: `${(count / maxComplaintCount) * 100}%`, borderRadius: '3px', transition: 'width 0.5s ease-out' }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+          <section className="panel alerts-panel">
+            <div className="panel-heading">
+              <div>
+                <p className="section-kicker">Needs attention</p>
+                <h3>Clinic alerts</h3>
+              </div>
+              <span className="alert-count">{clinicAlerts.length}</span>
             </div>
-            <span className="alert-count">{clinicAlerts.length}</span>
-          </div>
-          {clinicAlerts.length > 0 ? (
-            clinicAlerts.map((alert, index) => (
-              <Alert
-                key={index}
-                icon={alert.icon}
-                title={alert.title}
-                text={alert.text}
-                tone={alert.tone}
-                onClick={alert.onClick}
-              />
-            ))
-          ) : (
-            <div className="empty-state">
-              <p>All clear!</p>
-              <small>No alerts at this time. Everything is running smoothly.</small>
-            </div>
-          )}
-        </section>
-      </div>
+            {clinicAlerts.length > 0 ? (
+              clinicAlerts.map((alert, index) => (
+                <Alert
+                  key={index}
+                  icon={alert.icon}
+                  title={alert.title}
+                  text={alert.text}
+                  tone={alert.tone}
+                  onClick={alert.onClick}
+                />
+              ))
+            ) : (
+              <div className="empty-state">
+                <p>All clear!</p>
+                <small>No alerts at this time. Everything is running smoothly.</small>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
       <footer style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-3)', padding: '2rem 0 1rem' }}>
         {data.settings.schoolYear} · <Heart size={12} aria-hidden="true" /> HealthMate+
       </footer>
