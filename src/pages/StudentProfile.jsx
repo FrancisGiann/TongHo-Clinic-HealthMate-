@@ -14,10 +14,10 @@ import { useState, useRef, useEffect } from "react";
 import { saveData } from "../db/database";
 import { api } from "../utils/api";
 
-export default function StudentProfile({ data, setData, reload }) {
+export default function StudentProfile({ data, commitData, reload }) {
   const { studentId } = useParams();
   const navigate = useNavigate();
-  const student = data.students.find((item) => item.id === Number(studentId));
+  const student = data.students.find((item) => String(item.id) === String(studentId));
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
@@ -25,6 +25,9 @@ export default function StudentProfile({ data, setData, reload }) {
   const [consentDueDate, setConsentDueDate] = useState(student?.consentDueDate || '');
   const [consentSaving, setConsentSaving] = useState(false);
   const [consentMessage, setConsentMessage] = useState('');
+  const [recordSaving, setRecordSaving] = useState(false);
+  const [recordSaveError, setRecordSaveError] = useState('');
+  const [recordSaveMessage, setRecordSaveMessage] = useState('');
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -40,14 +43,18 @@ export default function StudentProfile({ data, setData, reload }) {
       </div>
     );
 
-  const visits = data.visits.filter((visit) => visit.studentId === student.id);
+  const visits = data.visits.filter((visit) => String(visit.studentId || visit.patientId) === String(student.id));
 
   const openEditor = () => {
+    setRecordSaveError('');
     setForm({ ...student });
     setImagePreview(student.profileImage || null);
   };
 
-  const update = (event) => setForm({ ...form, [event.target.name]: event.target.value });
+  const update = (event) => {
+    setRecordSaveError('');
+    setForm((current) => ({ ...current, [event.target.name]: event.target.value }));
+  };
 
   /**
    * Handle image file selection and convert to base64
@@ -58,24 +65,28 @@ export default function StudentProfile({ data, setData, reload }) {
 
     // Validate file type
     if (!file.type.startsWith('image/')) {
-      alert('Please select a valid image file');
+      setRecordSaveError('Please select a valid image file.');
+      event.target.value = '';
       return;
     }
 
     // Validate file size (limit to 2MB)
     const maxSize = 2 * 1024 * 1024;
     if (file.size > maxSize) {
-      alert('Image size must be less than 2MB');
+      setRecordSaveError('Image size must be less than 2MB.');
+      event.target.value = '';
       return;
     }
 
+    setRecordSaveError('');
     // Convert to base64
     const reader = new FileReader();
     reader.onload = (e) => {
       const base64 = e.target?.result;
       setImagePreview(base64);
-      setForm({ ...form, profileImage: base64 });
+      setForm((current) => ({ ...current, profileImage: base64 }));
     };
+    reader.onerror = () => setRecordSaveError('The selected image could not be read. Try another file.');
     reader.readAsDataURL(file);
   };
 
@@ -84,7 +95,7 @@ export default function StudentProfile({ data, setData, reload }) {
    */
   const clearImage = () => {
     setImagePreview(null);
-    setForm({ ...form, profileImage: null });
+    setForm((current) => ({ ...current, profileImage: null }));
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -95,28 +106,28 @@ export default function StudentProfile({ data, setData, reload }) {
    */
   const validateStudentForm = (studentForm) => {
     if (!studentForm.name?.trim()) {
-      alert("Student name is required");
+      setRecordSaveError('Student name is required.');
       return false;
     }
     if (!studentForm.studentId?.trim()) {
-      alert("Student ID is required");
+      setRecordSaveError('Student ID is required.');
       return false;
     }
 
     // Check for duplicate student ID among OTHER students
     const duplicateId = data.students?.some(
-      (s) => s.id !== student.id && s.studentId === studentForm.studentId.trim()
+      (s) => String(s.id) !== String(student.id) && s.studentId === studentForm.studentId.trim()
     );
 
     if (duplicateId) {
-      alert("A student with this ID is already registered.");
+      setRecordSaveError('A student with this ID is already registered.');
       return false;
     }
 
     return true;
   };
 
-  const save = (event) => {
+  const save = async (event) => {
     event.preventDefault();
 
     // Validate form
@@ -124,21 +135,22 @@ export default function StudentProfile({ data, setData, reload }) {
       return;
     }
 
+    setRecordSaving(true);
+    setRecordSaveError('');
     try {
-      setData(
-        saveData({
-          ...data,
-          students: data.students.map((item) =>
-            item.id === student.id ? form : item
-          ),
-        })
-      );
+      await commitData((current) => saveData({
+        ...current,
+        students: current.students.map((item) => String(item.id) === String(student.id) ? form : item),
+      }));
+      setRecordSaveMessage('Student record saved to clinic records.');
       setForm(null);
       setImagePreview(null);
       setEditing(false);
     } catch (error) {
       console.error("Failed to save student record:", error);
-      alert("Failed to save changes. Please try again.");
+      setRecordSaveError(error.message || "Failed to save changes. Please try again.");
+    } finally {
+      setRecordSaving(false);
     }
   };
 
@@ -193,6 +205,7 @@ export default function StudentProfile({ data, setData, reload }) {
         <div>
           <p className="section-kicker">Student profile</p>
           <h2>{student.name}</h2>
+          {recordSaveMessage && <p className="success-message" role="status">{recordSaveMessage}</p>}
           <p>
             {student.studentId} <span>·</span> {student.gradeLevel},{" "}
             {student.section}
@@ -251,7 +264,7 @@ export default function StudentProfile({ data, setData, reload }) {
                 <div className="history-date">
                   <Calendar size={15} />
                   <span>
-                    Today
+                    {visit.date || 'Date unavailable'}
                     <br />
                     <b>{visit.time}</b>
                   </span>
@@ -302,11 +315,12 @@ export default function StudentProfile({ data, setData, reload }) {
         </section>
       </div>
       {form && (
-        <div className="modal-backdrop" role="presentation" onClick={() => setForm(null)}>
+        <div className="modal-backdrop" role="presentation" onClick={() => !recordSaving && setForm(null)}>
           <form
             className="modal-card student-edit-modal"
             onSubmit={save}
             onClick={(event) => event.stopPropagation()}
+            aria-busy={recordSaving}
           >
             <div className="modal-heading">
               <div>
@@ -318,12 +332,15 @@ export default function StudentProfile({ data, setData, reload }) {
                 className="icon-btn"
                 onClick={() => setForm(null)}
                 aria-label="Close editor"
+                disabled={recordSaving}
               >
                 ×
               </button>
             </div>
 
             {/* Profile Image Section */}
+            {recordSaveError && <div className="error-banner" role="alert">{recordSaveError}</div>}
+            <fieldset className="form-fieldset" disabled={recordSaving}>
             <div className="image-upload-section">
               <label className="image-preview-label">Profile Image</label>
               <div className="image-preview-container">
@@ -473,10 +490,11 @@ export default function StudentProfile({ data, setData, reload }) {
               <button type="button" className="secondary-btn" onClick={() => setForm(null)}>
                 Cancel
               </button>
-              <button type="submit" className="primary-btn">
-                <Check size={16} /> Save changes
+              <button type="submit" className="primary-btn" disabled={recordSaving}>
+                <Check size={16} /> {recordSaving ? 'Saving…' : 'Save changes'}
               </button>
             </div>
+            </fieldset>
           </form>
         </div>
       )}

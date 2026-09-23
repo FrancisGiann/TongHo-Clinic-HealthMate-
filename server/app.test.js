@@ -35,3 +35,26 @@ test('every inventory write route applies a nurse-only authorization guard', () 
     assert.deepEqual(result('student'), { statusCode: 403, nextCalled: false }, `${route.path} rejects portal users`);
   }
 });
+
+test('visit creation and clinical snapshot writes are restricted to school nurses', () => {
+  const app = createApp();
+  const routes = app.router.stack
+    .filter((layer) => (layer.route?.path === '/api/visits' && layer.route.methods.post)
+      || (layer.route?.path === '/api/data' && layer.route.methods.put))
+    .map((layer) => ({ path: layer.route.path, guard: layer.route.stack[0].handle }));
+
+  assert.deepEqual(routes.map(({ path }) => path).sort(), ['/api/data', '/api/visits']);
+  for (const route of routes) {
+    const result = (role) => {
+      let statusCode = 200;
+      let nextCalled = false;
+      const response = { status(code) { statusCode = code; return { json: () => response }; } };
+      route.guard({ user: { role } }, response, () => { nextCalled = true; });
+      return { statusCode, nextCalled };
+    };
+    assert.deepEqual(result('school_nurse'), { statusCode: 200, nextCalled: true });
+    assert.deepEqual(result('system_administrator'), { statusCode: 403, nextCalled: false });
+    assert.deepEqual(result('student'), { statusCode: 403, nextCalled: false });
+    assert.deepEqual(result('guardian'), { statusCode: 403, nextCalled: false });
+  }
+});

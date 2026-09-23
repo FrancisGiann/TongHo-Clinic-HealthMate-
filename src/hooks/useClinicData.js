@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { saveData } from '../db/database';
 import { api } from '../utils/api';
+import { enqueueClinicCommit } from '../utils/clinicCommitQueue.js';
 
 const emptyClinicData = () => ({
   schemaVersion: 1,
@@ -199,6 +200,71 @@ export function useClinicData(user) {
     return optimistic;
   }, [applyData, refreshAfterStaleWrite, reload, sessionKey, user?.role]);
 
+  const commitData = useCallback(async (nextData) => {
+    if (!sessionKey || identityRef.current.sessionKey !== sessionKey || user?.role !== 'school_nurse') {
+      throw new Error('This account cannot save clinic changes.');
+    }
+    const enqueuedRefreshEpoch = refreshEpochRef.current;
+    pendingWritesRef.current += 1;
+    setSaving(true);
+    const request = enqueueClinicCommit(saveQueue, async () => {
+      let requestDispatched = false;
+      let requestRefreshEpoch = enqueuedRefreshEpoch;
+      try {
+        if (identityRef.current.sessionKey !== sessionKey) throw new Error('Your session changed before the clinic changes could be saved.');
+        if (requiresReloadRef.current) {
+          const reloadError = new Error(reloadBeforeSavingMessage);
+          reloadError.code = 'RELOAD_REQUIRED';
+          throw reloadError;
+        }
+        if (enqueuedRefreshEpoch !== refreshEpochRef.current) {
+          const staleError = new Error(stalePendingEditMessage);
+          staleError.code = 'STALE_PENDING_EDIT';
+          throw staleError;
+        }
+        const resolved = typeof nextData === 'function' ? nextData(dataRef.current) : nextData;
+        const savePayload = applyData(resolved, sessionKey);
+        const sequence = ++sequenceRef.current;
+        requestRefreshEpoch = refreshEpochRef.current;
+        requestDispatched = true;
+        const saved = await api.put('/api/data', { data: savePayload, version: versionRef.current });
+        if (identityRef.current.sessionKey !== sessionKey) throw new Error('Your session changed before the clinic changes could be confirmed.');
+        if (requestRefreshEpoch !== refreshEpochRef.current) {
+          const staleError = new Error(stalePendingEditMessage);
+          staleError.code = 'STALE_PENDING_EDIT';
+          throw staleError;
+        }
+        versionRef.current = saved.schemaVersion;
+        if (sequence === sequenceRef.current) applyData(saved, sessionKey);
+        else {
+          dataRef.current = { ...dataRef.current, schemaVersion: saved.schemaVersion };
+          setDataState(dataRef.current);
+        }
+        setError('');
+        return saved;
+      } catch (requestError) {
+        if (identityRef.current.sessionKey !== sessionKey) throw requestError;
+        if (requestRefreshEpoch !== refreshEpochRef.current) {
+          if (requestDispatched) await refreshAfterStaleWrite(sessionKey);
+          else setError(stalePendingEditMessage);
+        } else if (requestError.code === 'RELOAD_REQUIRED') {
+          setError(reloadBeforeSavingMessage);
+        } else if (requestError.code === 'STALE_PENDING_EDIT') {
+          setError(stalePendingEditMessage);
+        } else {
+          await reload();
+          setError(requestError.message || 'Clinic changes could not be saved.');
+        }
+        throw requestError;
+      } finally {
+        pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
+        setSaving(pendingWritesRef.current > 0);
+      }
+    });
+
+    return request;
+  }, [applyData, refreshAfterStaleWrite, reload, sessionKey, user?.role]);
+
   const applyServerData = useCallback((patch) => {
     if (!sessionKey || identityRef.current.sessionKey !== sessionKey || pendingWritesRef.current > 0) return false;
     const next = { ...dataRef.current, ...patch };
@@ -213,5 +279,5 @@ export function useClinicData(user) {
   }, [applyData, sessionKey]);
 
   const ready = Boolean(sessionKey && dataOwnerKey === sessionKey && !loading);
-  return [data, setData, { loading, saving, error, reload, applyServerData, ready }];
+  return [data, setData, { loading, saving, error, reload, applyServerData, commitData, ready }];
 }

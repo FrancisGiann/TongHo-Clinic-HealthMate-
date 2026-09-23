@@ -29,13 +29,16 @@ const day = new Intl.DateTimeFormat("en-US", {
 const studentColors = ["coral", "teal", "amber", "violet", "blue"];
 
 const toDateKey = (date) => {
+  const direct = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}/.test(date) ? date.slice(0, 10) : null;
+  if (direct && !Number.isNaN(Date.parse(`${direct}T00:00:00.000Z`))) return direct;
   const value = new Date(date);
   if (Number.isNaN(value.getTime())) return null;
-  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(value).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
 };
 
 const todayKey = toDateKey(new Date());
-const isToday = (visit) => !visit.date || toDateKey(visit.date) === todayKey;
+const isToday = (visit) => toDateKey(visit.date || visit.createdAt) === todayKey;
 
 export default function Dashboard({ data, user }) {
   const navigate = useNavigate();
@@ -55,21 +58,28 @@ export default function Dashboard({ data, user }) {
   }, [isAdmin]);
 
   const getStudent = (id) =>
-    data.students.find((student) => student.id === id) || {};
+    data.students.find((student) => String(student.id) === String(id)) || {};
   const todayVisits = data.visits.filter(isToday);
-  const todayStudentCount = new Set(todayVisits.map((visit) => visit.studentId)).size;
+  const todayStudentCount = new Set(todayVisits.map((visit) => String(visit.studentId || visit.patientId))).size;
   const lowStock = data.inventory.filter(
-    (item) => item.quantity <= item.reorderLevel,
+    (item) => !item.archived && item.quantity <= item.reorderLevel,
   ).length;
   
   // Calculate pending follow-ups from appointments
-  const pendingFollowUps = (data.appointments || []).filter(
-    appointment => appointment.status === 'Scheduled' || appointment.status === 'Pending'
-  ).length;
+  const pendingFollowUps = (data.appointments || []).filter((appointment) => {
+    if (!['Requested', 'Pending', 'Scheduled'].includes(appointment.status)) return false;
+    const startsAt = appointment.startsAt || (appointment.date ? `${appointment.date}T${appointment.time || '00:00'}+08:00` : '');
+    const timestamp = Date.parse(startsAt);
+    return Number.isFinite(timestamp) && timestamp >= Date.now();
+  }).length;
   const incidentCount = (data.incidents || []).length;
-  const screenedStudents = new Set((data.screenings || []).map((record) => record.studentId)).size;
+  const rosterIds = new Set(data.students.map((student) => String(student.id)));
+  const screenedStudents = new Set((data.screenings || [])
+    .filter((record) => String(record.schoolYear || '') === String(data.settings.schoolYear || ''))
+    .map((record) => String(record.studentId || record.patientId))
+    .filter((id) => rosterIds.has(id))).size;
   const screeningProgress = data.students.length > 0
-    ? `${Math.round((screenedStudents / data.students.length) * 100)}% complete`
+    ? `${screenedStudents} of ${data.students.length} students have a record for ${data.settings.schoolYear || 'the current school year'}`
     : "No students yet";
   
   const currentHour = new Date().getHours();
@@ -82,7 +92,7 @@ export default function Dashboard({ data, user }) {
   
   // Low stock alerts
   if (!isAdmin) {
-    const lowStockItems = data.inventory.filter(item => item.quantity <= item.reorderLevel);
+    const lowStockItems = data.inventory.filter(item => !item.archived && item.quantity <= item.reorderLevel);
     lowStockItems.slice(0, 2).forEach(item => {
       clinicAlerts.push({
         icon: Package,
@@ -95,32 +105,32 @@ export default function Dashboard({ data, user }) {
   }
   
   // Upcoming appointments/follow-ups
-  const upcomingAppointments = (data.appointments || []).filter(
-    apt => apt.status === 'Scheduled'
-  ).slice(0, 2);
+  const upcomingAppointments = (data.appointments || []).filter((appointment) => {
+    if (appointment.status !== 'Scheduled') return false;
+    const startsAt = appointment.startsAt || (appointment.date ? `${appointment.date}T${appointment.time || '00:00'}+08:00` : '');
+    const timestamp = Date.parse(startsAt);
+    return Number.isFinite(timestamp) && timestamp >= Date.now();
+  }).sort((first, second) => Date.parse(first.startsAt || `${first.date}T${first.time || '00:00'}+08:00`) - Date.parse(second.startsAt || `${second.date}T${second.time || '00:00'}+08:00`)).slice(0, 2);
   upcomingAppointments.forEach(apt => {
     const student = getStudent(apt.studentId || apt.patientId);
     if (student.name) {
       clinicAlerts.push({
         icon: CalendarDays,
-        title: `${student.name} has a follow-up`,
+        title: `${student.name} has an appointment`,
         text: `${apt.reason} · ${formatManilaDateTime(apt.startsAt || apt.date, apt.time)}`,
         tone: "amber",
-        onClick: () => navigate('/new-visit'),
+        onClick: () => navigate('/appointments'),
       });
     }
   });
   
-  // Health screening reminders (if students exist but few screenings)
-  const screeningRate = data.students.length > 0 
-    ? (screenedStudents / data.students.length) * 100 
-    : 100;
-  if (data.students.length > 0 && screeningRate < 80) {
-    const unscreened = Math.max(0, data.students.length - screenedStudents);
+  // Show the absence of a current-year record without implying a clinical result.
+  const studentsWithoutScreeningRecord = Math.max(0, data.students.length - screenedStudents);
+  if (studentsWithoutScreeningRecord > 0) {
     clinicAlerts.push({
       icon: ClipboardCheck,
-      title: "Health screenings needed",
-      text: `${unscreened} student${unscreened !== 1 ? 's' : ''} pending screening`,
+      title: "Screening records missing",
+      text: `${studentsWithoutScreeningRecord} student${studentsWithoutScreeningRecord !== 1 ? 's' : ''} have no record for ${data.settings.schoolYear || 'the current school year'}`,
       tone: "teal",
       onClick: () => navigate('/health-screening'),
     });
@@ -257,9 +267,9 @@ export default function Dashboard({ data, user }) {
           />
           <Stat
             icon={Clock3}
-            label="Pending requests"
+            label="Upcoming appointments"
             value={pendingFollowUps}
-            change={pendingFollowUps > 0 ? `${pendingFollowUps} scheduled` : "None pending"}
+            change={pendingFollowUps > 0 ? `${pendingFollowUps} upcoming` : "No upcoming appointments"}
             tone="amber"
           />
           <Stat
@@ -335,7 +345,7 @@ export default function Dashboard({ data, user }) {
             <>
               <div className="timeline">
                 {todayVisits.map((visit, index) => {
-                  const student = getStudent(visit.studentId);
+                  const student = getStudent(visit.studentId || visit.patientId);
                   return (
                     <div className="timeline-item" key={visit.id}>
                       <time>{visit.time}</time>

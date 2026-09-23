@@ -1,52 +1,81 @@
-import { Syringe, ArrowUpRight } from "lucide-react";
+import { Syringe } from "lucide-react";
 import { useState } from "react";
 import { addRecord } from "../db/database";
-export default function Immunizations({ data, setData }) {
+import StudentPicker from "../components/StudentPicker";
+import { compareImmunizationLatest, latestImmunizationsByStudentVaccine } from "../../shared/immunizationOrder.js";
+function clinicDate(value = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(value).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+export default function Immunizations({ data, commitData }) {
   const [studentId, setStudentId] = useState("");
   const [vaccineName, setVaccineName] = useState("MMR");
+  const [doseNumber, setDoseNumber] = useState("");
+  const [dateAdministered, setDateAdministered] = useState(clinicDate);
+  const [source, setSource] = useState("clinic");
+  const [clinicName, setClinicName] = useState("");
+  const [nextDueDate, setNextDueDate] = useState("");
   const [saved, setSaved] = useState(false);
-  const [statusFilter, setStatusFilter] = useState("All statuses");
+  const [statusFilter, setStatusFilter] = useState("All due statuses");
   const [error, setError] = useState("");
-  const save = () => {
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    setSaved(false);
     if (!studentId) {
       setError("Please select a student.");
       return;
     }
+    if (!doseNumber.trim()) {
+      setError("Enter the dose number or label.");
+      return;
+    }
+    if (!dateAdministered || (nextDueDate && nextDueDate < dateAdministered)) {
+      setError("Enter a valid administration date and a next due date on or after it.");
+      return;
+    }
+    if (source === 'external' && !clinicName.trim()) {
+      setError("Enter the external clinic name.");
+      return;
+    }
     setError("");
-    setData(addRecord(data, "immunizations", { studentId: Number(studentId), vaccineName, doseNumber: "1st", dateAdministered: new Date().toISOString().slice(0, 10), nextDueDate: "", remarks: "Recorded in clinic" }));
-    setSaved(true);
-    setStudentId("");
+    setSaving(true);
+    try {
+      const immunizationRecord = {
+        studentId,
+        vaccineName,
+        doseNumber: doseNumber.trim(),
+        dateAdministered,
+        source,
+        ...(source === 'external' ? { clinicName: clinicName.trim() } : {}),
+        nextDueDate,
+      };
+      await commitData((current) => addRecord(current, "immunizations", immunizationRecord));
+      setSaved(true);
+      setStudentId("");
+      setDoseNumber("");
+      setDateAdministered(clinicDate());
+      setClinicName("");
+      setNextDueDate("");
+    } catch (requestError) {
+      setError(requestError.message || 'Immunization record could not be saved.');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  // Calculate immunization statistics
-  const totalStudents = data.students.length;
-  const fullyImmunized = new Set((data.immunizations || []).filter(
-    imm => imm.remarks?.toLowerCase().includes('complete') ||
-           imm.remarks?.toLowerCase().includes('up to date') ||
-           imm.nextDueDate === ''
-  ).map((record) => record.studentId)).size;
-  const immunizationRate = totalStudents > 0
-    ? Math.round((fullyImmunized / totalStudents) * 100)
-    : 0;
-
-  // Calculate due this month (students with nextDueDate in current month)
-  const currentMonth = new Date().getMonth();
-  const dueThisMonth = (data.immunizations || []).filter(imm => {
-    if (!imm.nextDueDate) return false;
-    const dueDate = new Date(imm.nextDueDate);
-    return dueDate.getMonth() === currentMonth && dueDate.getFullYear() === new Date().getFullYear();
-  }).length;
-
-  // Calculate overdue (nextDueDate in the past)
-  const today = new Date();
-  const overdue = (data.immunizations || []).filter(imm => {
-    if (!imm.nextDueDate) return false;
-    return new Date(imm.nextDueDate) < today;
-  }).length;
-  const latestImmunization = new Map();
-  (data.immunizations || []).forEach((record) => latestImmunization.set(record.studentId, record));
-  const compliance = (student) => latestImmunization.has(student.id) ? "Fully immunized" : "Not started";
-  const roster = data.students.filter((student) => statusFilter === "All statuses" || compliance(student) === statusFilter);
+  const today = clinicDate();
+  const trackedRecords = latestImmunizationsByStudentVaccine(data.immunizations || [])
+    .sort((first, second) => compareImmunizationLatest(second, first));
+  const dueStatus = (record) => !record.nextDueDate ? 'No due date recorded' : record.nextDueDate < today ? 'Overdue' : record.nextDueDate.slice(0, 7) === today.slice(0, 7) ? 'Due this month' : 'Scheduled';
+  const dueThisMonth = trackedRecords.filter((record) => dueStatus(record) === 'Due this month').length;
+  const overdue = trackedRecords.filter((record) => dueStatus(record) === 'Overdue').length;
+  const roster = trackedRecords.filter((record) => {
+    const status = dueStatus(record);
+    return statusFilter === 'All due statuses'
+      || (statusFilter === 'Overdue' && status === 'Overdue')
+      || (statusFilter === 'Due this month' && status === 'Due this month')
+      || (statusFilter === 'No due date recorded' && status === 'No due date recorded');
+  });
 
   return (
     <div className="form-page">
@@ -56,40 +85,36 @@ export default function Immunizations({ data, setData }) {
           <h2>Immunizations</h2>
           <p>Stay ahead of every dose and due date.</p>
         </div>
-        <button className="primary-btn" onClick={() => document.getElementById("immunization-form")?.scrollIntoView({ behavior: "smooth" })}>
-          <Syringe size={16} /> Record vaccination
-        </button>
       </div>
-      <section id="immunization-form" className="panel inline-entry-form"><div className="panel-heading"><div><p className="section-kicker">Quick entry</p><h3>Record vaccination</h3></div></div><div className="two-fields"><label>Student<select value={studentId} onChange={(event) => setStudentId(event.target.value)}><option value="">Select student...</option>{data.students.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label><label>Vaccine<select value={vaccineName} onChange={(event) => setVaccineName(event.target.value)}>{["BCG", "Hepatitis B", "DPT", "OPV", "Measles", "MMR", "Td", "HPV"].map((vaccine) => <option key={vaccine}>{vaccine}</option>)}</select></label></div><button className="primary-btn" onClick={save}><Syringe size={16}/> Save vaccination</button>{error && <div className="error-banner" role="alert">{error}</div>}{saved && <p className="success-message">Vaccination recorded successfully.</p>}</section>
+      <section id="immunization-form" className="panel inline-entry-form"><div className="panel-heading"><div><p className="section-kicker">Quick entry</p><h3>Record a vaccine dose</h3></div></div><StudentPicker students={data.students} value={studentId} onChange={setStudentId} required disabled={saving}/><div className="two-fields"><label>Vaccine<input list="vaccine-suggestions" value={vaccineName} onChange={(event) => setVaccineName(event.target.value)} maxLength={120} required disabled={saving}/><datalist id="vaccine-suggestions">{["BCG", "Hepatitis B", "DPT", "OPV", "Measles", "MMR", "Td", "HPV"].map((vaccine) => <option key={vaccine} value={vaccine}/>)}</datalist></label><label>Dose number or label<input value={doseNumber} onChange={(event) => setDoseNumber(event.target.value)} maxLength={80} placeholder="e.g. 1st, 2nd, booster" required disabled={saving}/></label></div><div className="two-fields"><label>Date administered<input type="date" value={dateAdministered} max={today} onChange={(event) => setDateAdministered(event.target.value)} required disabled={saving}/></label><label>Source<select value={source} onChange={(event) => setSource(event.target.value)} disabled={saving}><option value="clinic">School clinic</option><option value="external">External clinic</option></select></label></div>{source === 'external' && <label>External clinic name<input value={clinicName} onChange={(event) => setClinicName(event.target.value)} maxLength={160} required disabled={saving}/></label>}<label>Next due date, if known<input type="date" value={nextDueDate} min={dateAdministered} onChange={(event) => setNextDueDate(event.target.value)} disabled={saving}/></label><p className="field-hint">Enter a next due date only when it is provided by the care plan or source record.</p><button className="primary-btn" onClick={save} disabled={saving || !data.students.length}><Syringe size={16}/>{saving ? 'Saving…' : 'Save vaccine dose'}</button>{error && <div className="error-banner" role="alert">{error}</div>}{saved && <p className="success-message" role="status">Immunization record saved to clinic records.</p>}</section>
       <div className="immunization-cards">
         <div>
-          <span>Fully immunized</span>
-          <strong>{immunizationRate}%</strong>
-          <small>
-            {fullyImmunized} of {totalStudents} students
-          </small>
+          <span>Vaccine series tracked</span>
+          <strong>{trackedRecords.length}</strong>
+          <small>Latest record per student and vaccine</small>
         </div>
         <div>
           <span>Due this month</span>
           <strong className="amber-text">{dueThisMonth}</strong>
-          <small>{dueThisMonth > 0 ? 'Requires scheduling' : 'None due'}</small>
+          <small>Based on recorded next due dates</small>
         </div>
         <div>
           <span>Overdue doses</span>
           <strong className="rose-text">{overdue}</strong>
-          <small>{overdue > 0 ? 'Needs follow-up' : 'All current'}</small>
+          <small>Based on recorded next due dates</small>
         </div>
       </div>
       <section className="panel table-panel">
         <div className="panel-heading">
           <div>
             <p className="section-kicker">Vaccine tracker</p>
-            <h3>Student compliance</h3>
+            <h3>Latest recorded dose by student and vaccine</h3>
           </div>
           <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-            <option>All statuses</option>
-            <option>Fully immunized</option>
-            <option>Partially immunized</option>
+            <option>All due statuses</option>
+            <option>Overdue</option>
+            <option>Due this month</option>
+            <option>No due date recorded</option>
           </select>
         </div>
         <table>
@@ -97,26 +122,30 @@ export default function Immunizations({ data, setData }) {
             <tr>
               <th>Student</th>
               <th>Grade</th>
-              <th>Last vaccine</th>
+              <th>Vaccine and dose</th>
+              <th>Date administered</th>
+              <th>Source</th>
               <th>Next due</th>
-              <th>Compliance</th>
+              <th>Due status</th>
             </tr>
           </thead>
           <tbody>
-            {roster.map((student) => {
-              const record = latestImmunization.get(student.id);
-              const status = compliance(student);
+            {roster.map((record) => {
+              const student = data.students.find((item) => String(item.id) === String(record.studentId || record.patientId));
+              const status = dueStatus(record);
               return (
-              <tr key={student.id}>
+              <tr key={record.id}>
                 <td>
-                  <strong>{student.name}</strong>
-                  <small>{student.studentId}</small>
+                  <strong>{student?.name || 'Unknown student'}</strong>
+                  <small>{student?.studentId || 'Student ID unavailable'}</small>
                 </td>
-                <td>{student.gradeLevel}</td>
-                <td>{record ? `${record.vaccineName} · ${record.doseNumber}` : "No records"}</td>
+                <td>{student?.gradeLevel || '—'}</td>
+                <td>{record.vaccineName} · {record.doseNumber}</td>
+                <td>{record.dateAdministered || '—'}</td>
+                <td>{record.source === 'external' ? `External${record.clinicName ? ` · ${record.clinicName}` : ''}` : record.source === 'clinic' ? 'School clinic' : 'Not recorded'}</td>
                 <td>{record?.nextDueDate || "Review needed"}</td>
                 <td>
-                  <span className={`status-chip ${record ? "success" : "neutral"}`}>
+                  <span className={`status-chip ${status === 'Overdue' ? "warn" : status === 'Due this month' ? "neutral" : "success"}`}>
                     {status}
                   </span>
                 </td>

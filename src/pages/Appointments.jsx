@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { CalendarPlus } from 'lucide-react';
 import { api } from '../utils/api';
 import { formatManilaDateTime } from '../utils/dateTime';
+import StudentPicker from '../components/StudentPicker';
 
 function manilaDateTimeNow() {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
@@ -17,11 +18,12 @@ function manilaDateTimeNow() {
 }
 
 export default function Appointments({ data, user, reload }) {
-  const [patientId, setPatientId] = useState(() => String(data.students?.[0]?.id || ''));
+  const [patientId, setPatientId] = useState('');
   const [slotDate, setSlotDate] = useState('');
   const [startsAt, setStartsAt] = useState('');
   const [reason, setReason] = useState('');
   const [message, setMessage] = useState('');
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [slots, setSlots] = useState([]);
   const [traffic, setTraffic] = useState(null);
@@ -61,17 +63,23 @@ export default function Appointments({ data, user, reload }) {
 
   const submit = async (event) => {
     event.preventDefault();
+    if (saving) return;
     setError('');
     setMessage('');
+    if (!patientId) return setError('Choose the student this appointment is for.');
+    setSaving(true);
     try {
       await api.post('/api/appointments', { patientId, startsAt, reason });
-      setMessage('Appointment request submitted.');
+      setMessage(isStaff ? 'Appointment scheduled for the selected student.' : 'Appointment request submitted for the selected student.');
+      setPatientId('');
       setStartsAt('');
       setSlotDate('');
       setReason('');
       await reload();
     } catch (requestError) {
       setError(requestError.message);
+    } finally {
+      setSaving(false);
     }
   };
   const updateStatus = async (appointment, status) => {
@@ -104,15 +112,15 @@ export default function Appointments({ data, user, reload }) {
 
   return (
     <div className="form-page">
-      <div className="page-intro"><div><h2>Clinic scheduling</h2><p>Request a clinic visit and review its status.</p></div></div>
+      <div className="page-intro"><div><h2>{isStaff ? 'Appointments' : 'Clinic scheduling'}</h2><p>{isStaff ? 'Schedule a student appointment and manage requests.' : 'Request an appointment for a student linked to your account.'}</p></div></div>
       <form className="panel form-panel" onSubmit={submit}>
         <div className="two-fields">
-          <label>Patient<select value={patientId} onChange={(event) => setPatientId(event.target.value)} required>{(data.students || []).map((patient) => <option key={patient.id} value={patient.id}>{patient.name}</option>)}</select></label>
-          <label>Appointment date<input type="date" min={clinicToday} value={slotDate} onChange={(event) => { setSlotDate(event.target.value); setStartsAt(''); setSlots([]); setTraffic(null); setSlotError(''); }} required /></label>
+          <StudentPicker students={data.students || []} value={patientId} onChange={setPatientId} label={isStaff ? 'Schedule for student' : 'Student'} required disabled={saving}/>
+          <label>Appointment date<input type="date" min={clinicToday} value={slotDate} onChange={(event) => { setSlotDate(event.target.value); setStartsAt(''); setSlots([]); setTraffic(null); setSlotError(''); }} required disabled={saving}/></label>
         </div>
         {slotDate && <>
           <label>Available time{traffic?.historyAvailable ? ' (suggestions first)' : ''}
-            <select value={startsAt} onChange={(event) => setStartsAt(event.target.value)} disabled={slotsLoading || !slots.length} required>
+            <select value={startsAt} onChange={(event) => setStartsAt(event.target.value)} disabled={saving || slotsLoading || !slots.length} required>
               <option value="">Choose a clinic time</option>
               {slots.map((slot) => <option key={slot.local} value={slot.local}>{slot.suggestionRank && slot.suggestionRank <= 3 ? `Suggested ${slot.suggestionRank} · ` : ''}{slot.local.slice(11)}</option>)}
             </select>
@@ -126,15 +134,15 @@ export default function Appointments({ data, user, reload }) {
               : <span className="field-hint">There is not enough recent same-weekday history to rank times, so available slots are listed in clinic order.</span>)}
           </div>
         </>}
-        <label>Reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} required /></label>
-        <button className="primary-btn" disabled={!data.students?.length || !slotDate || !startsAt}><CalendarPlus size={16} /> Request appointment</button>
+        <label>Reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} required disabled={saving}/></label>
+        <button className="primary-btn" disabled={saving || !data.students?.length || !patientId || !slotDate || !startsAt}><CalendarPlus size={16} /> {saving ? 'Saving…' : isStaff ? 'Schedule appointment' : 'Request appointment'}</button>
         {message && <p className="success-message">{message}</p>}
         {error && <div className="error-banner" role="alert">{error}</div>}
       </form>
       <section className="panel table-panel">
-        <div className="panel-heading"><div><p className="section-kicker">Schedule</p><h3>Your requests</h3></div></div>
-        {appointments.map((appointment) => { const actions = actionsFor(appointment.status); const canReschedule = ['Requested', 'Pending', 'Scheduled'].includes(appointment.status); return <div className="queue-row" key={appointment.id}><strong>{formatManilaDateTime(appointment.startsAt || appointment.date, appointment.time)}</strong><span>{appointment.reason}</span><span className="status-chip neutral">{appointment.status}</span>{isStaff && actions.length > 0 && <div className="appointment-actions">{canReschedule && <input aria-label={`Reschedule appointment for ${appointment.reason || appointment.id}`} type="datetime-local" min={manilaDateTimeNow()} value={reschedule[appointment.id] || ''} onChange={(event) => setReschedule((current) => ({ ...current, [appointment.id]: event.target.value }))} />}{canReschedule && <button type="button" className="table-action" onClick={() => updateTime(appointment)}>Reschedule</button>}{actions.map((action) => <button type="button" className="table-action" key={action} onClick={() => updateStatus(appointment, action === 'Confirm' ? 'Scheduled' : action === 'Complete' ? 'Completed' : 'Cancelled')}>{action}</button>)}</div>}</div>; })}
-        {!appointments.length && <div className="empty-state">No appointments recorded.</div>}
+        <div className="panel-heading"><div><p className="section-kicker">Schedule</p><h3>{isStaff ? 'Student appointments and requests' : 'Your appointment requests'}</h3></div></div>
+        {appointments.map((appointment) => { const actions = actionsFor(appointment.status); const canReschedule = ['Requested', 'Pending', 'Scheduled'].includes(appointment.status); const student = data.students.find((person) => String(person.id) === String(appointment.studentId || appointment.patientId)); return <div className="queue-row" key={appointment.id}><strong>{formatManilaDateTime(appointment.startsAt || appointment.date, appointment.time)}</strong><span><b>{student?.name || 'Unknown student'}</b><small>{student?.studentId || 'Student ID unavailable'} · {appointment.reason}</small></span><span className="status-chip neutral">{appointment.status}</span>{isStaff && actions.length > 0 && <div className="appointment-actions">{canReschedule && <input aria-label={`Reschedule ${student?.name || 'student'} appointment`} type="datetime-local" min={manilaDateTimeNow()} value={reschedule[appointment.id] || ''} onChange={(event) => setReschedule((current) => ({ ...current, [appointment.id]: event.target.value }))} />}{canReschedule && <button type="button" className="table-action" onClick={() => updateTime(appointment)}>Reschedule</button>}{actions.map((action) => <button type="button" className="table-action" key={action} onClick={() => updateStatus(appointment, action === 'Confirm' ? 'Scheduled' : action === 'Complete' ? 'Completed' : 'Cancelled')}>{action}</button>)}</div>}</div>; })}
+        {!appointments.length && <div className="empty-state">{isStaff ? 'No student appointments or requests yet.' : 'No appointments recorded for linked students.'}</div>}
       </section>
       <p className="field-hint">For urgent or emergency concerns, contact the clinic directly. Online scheduling is not an emergency service.</p>
     </div>

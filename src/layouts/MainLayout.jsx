@@ -50,6 +50,14 @@ const portalNav = [
   { to: "/appointments", label: "Appointments", icon: CalendarDays },
 ];
 
+function schoolYearScreeningCount(data) {
+  const rosterIds = new Set((data.students || []).map((student) => String(student.id)));
+  return new Set((data.screenings || [])
+    .filter((record) => String(record.schoolYear || '') === String(data.settings.schoolYear || ''))
+    .map((record) => String(record.studentId || record.patientId))
+    .filter((id) => rosterIds.has(id))).size;
+}
+
 export default function MainLayout({ settings, dark, setDark, user, onLogout, data }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -73,7 +81,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
   
   if (data) {
     // Low stock alerts
-    const lowStockItems = (data.inventory || []).filter(item => item.quantity <= item.reorderLevel);
+    const lowStockItems = (data.inventory || []).filter(item => !item.archived && item.quantity <= item.reorderLevel);
     lowStockItems.slice(0, 2).forEach(item => {
       clinicAlerts.push({
         title: `${item.name} stock is low`,
@@ -82,28 +90,29 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
     });
     
     // Upcoming appointments
-    const upcomingAppointments = (data.appointments || []).filter(
-      apt => apt.status === 'Scheduled'
-    ).slice(0, 2);
+    const upcomingAppointments = (data.appointments || []).filter((appointment) => {
+      if (appointment.status !== 'Scheduled') return false;
+      const startsAt = appointment.startsAt || (appointment.date ? `${appointment.date}T${appointment.time || '00:00'}+08:00` : '');
+      const timestamp = Date.parse(startsAt);
+      return Number.isFinite(timestamp) && timestamp >= Date.now();
+    }).sort((first, second) => Date.parse(first.startsAt || `${first.date}T${first.time || '00:00'}+08:00`) - Date.parse(second.startsAt || `${second.date}T${second.time || '00:00'}+08:00`)).slice(0, 2);
     upcomingAppointments.forEach(apt => {
       const student = data.students.find(s => String(s.id) === String(apt.studentId || apt.patientId));
       if (student) {
         clinicAlerts.push({
-          title: `${student.name} has a follow-up`,
+          title: `${student.name} has an appointment`,
           text: `${apt.reason || 'Appointment'} · ${formatManilaDateTime(apt.startsAt || apt.date, apt.time)}`
         });
       }
     });
     
     // Screening reminder
-    const screeningRate = data.students.length > 0 
-      ? ((data.screenings || []).length / data.students.length) * 100 
-      : 100;
-    if (data.students.length > 0 && screeningRate < 80) {
-      const unscreened = data.students.length - (data.screenings || []).length;
+    const studentsWithRecords = schoolYearScreeningCount(data);
+    const noRecordCount = Math.max(0, data.students.length - studentsWithRecords);
+    if (noRecordCount > 0) {
       clinicAlerts.push({
-        title: "Health screenings needed",
-        text: `${unscreened} student${unscreened !== 1 ? 's' : ''} pending`
+        title: "Screening records missing",
+        text: `${noRecordCount} student${noRecordCount !== 1 ? 's' : ''} have no record for ${data.settings.schoolYear || 'the current school year'}`
       });
     }
   }

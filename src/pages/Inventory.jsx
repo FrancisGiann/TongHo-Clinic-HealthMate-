@@ -32,6 +32,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
   const [formData, setFormData] = useState({
     name: "",
     category: "First Aid",
+    itemType: "",
     quantity: "0",
     unit: "pieces",
     expiryDate: "",
@@ -48,10 +49,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
   
   // Calculate unique categories
   const uniqueCategories = new Set(activeInventory.map(item => item.category)).size || 0;
-  
-  // Calculate inventory value - showing "Not tracked" since we don't have pricing
-  // In a real system, you'd add a 'price' field to inventory items
-  const inventoryValue = activeInventory.length === 0 ? '₱0' : 'Not tracked';
+  const unclassifiedItems = activeInventory.filter((item) => !['medication', 'supply'].includes(item.itemType)).length;
 
   const runInventoryRequest = async (request, onError = setActionError) => {
     if (actionLock.current || saving) return false;
@@ -109,6 +107,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
     setFormData({
       name: "",
       category: "First Aid",
+      itemType: "",
       quantity: "0",
       unit: "pieces",
       expiryDate: "",
@@ -123,6 +122,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
     setFormData({
       name: item.name,
       category: item.category,
+      itemType: item.itemType || "",
       quantity: String(item.quantity),
       unit: item.unit,
       expiryDate: item.expiryDate,
@@ -162,6 +162,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
     const itemData = {
       name: formData.name.trim(),
       category: formData.category,
+      itemType: formData.itemType,
       unit: formData.unit,
       expiryDate: formData.expiryDate,
       reorderLevel,
@@ -215,9 +216,9 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
           <small>{low.length === 0 ? 'All stocked' : 'Needs attention'}</small>
         </div>
         <div>
-          <span>Inventory value</span>
-          <strong>{inventoryValue}</strong>
-          <small>Current estimate</small>
+          <span>Unclassified</span>
+          <strong>{unclassifiedItems}</strong>
+          <small>{unclassifiedItems ? 'Review item type before dispensing' : 'All items have a type'}</small>
         </div>
       </div>
       {actionError && <div className="error-banner" role="alert">{actionError}</div>}
@@ -235,7 +236,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
         <div className="panel-heading">
           <div>
             <p className="section-kicker">Current stock</p>
-            <h3>Medicine & supplies</h3>
+            <h3>Medications & supplies</h3>
           </div>
           <div className="toolbar-inline">
             <div className="search-box compact">
@@ -257,6 +258,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
           <thead>
             <tr>
               <th>Item</th>
+              <th>Type</th>
               <th>Category</th>
               <th>On hand</th>
               <th>Expiry</th>
@@ -267,7 +269,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
           <tbody>
             {items.length === 0 ? (
               <tr>
-                <td colSpan="6" className="empty-state">
+                <td colSpan="7" className="empty-state">
                   {query ? "No inventory items match your search." : showArchived ? "No archived items match this view." : "No active inventory items yet. Add an item to begin tracking stock."}
                 </td>
               </tr>
@@ -279,6 +281,9 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
                     Reorder at {item.reorderLevel} {item.unit}
                   </small>
                 </td>
+                <td>{item.itemType
+                  ? <span className="status-chip neutral">{item.itemType === 'medication' ? 'Medication' : 'Supply'}</span>
+                  : <span className="status-chip warn">Unclassified</span>}</td>
                 <td>{item.category}</td>
                 <td>
                   <strong>{item.quantity}</strong> {item.unit}
@@ -348,6 +353,21 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
                   required 
                   disabled={pendingAction}
                 />
+              </label>
+
+              <label>
+                Item type *
+                <select
+                  value={formData.itemType}
+                  onChange={(e) => handleFormChange('itemType', e.target.value)}
+                  required
+                  disabled={pendingAction}
+                >
+                  <option value="">Select item type</option>
+                  <option value="medication">Medication</option>
+                  <option value="supply">Supply</option>
+                </select>
+                {!formData.itemType && editingItem && <small className="field-hint">This legacy item remains unclassified until a nurse reviews it.</small>}
               </label>
 
               <label>

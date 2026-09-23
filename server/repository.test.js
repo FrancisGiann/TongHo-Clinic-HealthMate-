@@ -45,6 +45,23 @@ test('repository hydration keeps inventory quantity authoritative and carries ar
   assert.deepEqual(result, { id: 'medicine-1', quantity: 3, name: 'Bandages', archived: true });
 });
 
+test('immunization hydration adds authoritative patient and creation timestamps', () => {
+  const result = hydrateAuthoritativeRecord('immunizations', {
+    id: 'immunization-1',
+    patient_id: 'student-1',
+    created_at: new Date('2026-09-23T02:00:00.000Z'),
+    data: { id: 'legacy-id', studentId: 99, vaccineName: 'MMR', dateAdministered: '2026-09-01' },
+  });
+  assert.deepEqual(result, {
+    id: 'immunization-1',
+    patientId: 'student-1',
+    createdAt: '2026-09-23T02:00:00.000Z',
+    studentId: 99,
+    vaccineName: 'MMR',
+    dateAdministered: '2026-09-01',
+  });
+});
+
 test('bulk sync validation is complete and upsert-only writes preserve omitted records', async () => {
   const complete = { settings: {}, students: [], visits: [], screenings: [], immunizations: [], incidents: [], appointments: [], queue: [], inventory: [], dispenseLogs: [], stockAdjustments: [] };
   assert.equal(validateClinicDataPayload(complete, 3).valid, true);

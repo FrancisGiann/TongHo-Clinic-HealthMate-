@@ -30,11 +30,13 @@ import {
 } from './auth.js';
 import { emailConfigured, escapeHtml, sendEmail } from './email.js';
 import { approveDraftRiskRule, assessRisk, getDemonstrationRules, validateRiskRules } from './domain/risk.js';
-import { buildClinicReport, reportForRole } from './domain/reporting.js';
-import { applyStockAdjustment, validateDispenseAvailability, validateInventoryArchive, validateInventoryItem, validateStockAdjustment } from './domain/inventory.js';
+import { buildClinicReport, reportForRole, reportSnapshotForStorage } from './domain/reporting.js';
+import { applyStockAdjustment, validateInventoryArchive, validateInventoryItem, validateStockAdjustment } from './domain/inventory.js';
+import { persistVisitAndDispensations, resolveInventoryDispensations } from './domain/dispensing.js';
+import { validateChangedClinicalRecords } from './domain/clinical-records.js';
 import { sanitizeAuditLogs } from './domain/audit.js';
 import { summarizeEncounter } from './ai.js';
-import { queueStatusConflict, riskPriority, validateQueueTriage, validateVisitPayload, visitRiskInput } from './domain/visit.js';
+import { clinicCalendarDate, queueStatusConflict, riskPriority, validateQueueTriage, validateVisitPayload, visitRiskInput } from './domain/visit.js';
 import { appointmentSettings, clinicDateTime, generateAppointmentSlots, isAppointmentTransitionAllowed, isValidAppointmentDate, normalizeAppointmentStatus, rankAppointmentSlots } from './domain/scheduling.js';
 import { clinicalWriteRoles, reportReadRoles } from './domain/authorization.js';
 import { broadcastBatchId, validateBroadcastPayload, validateConsentUpdate } from './domain/communications.js';
@@ -443,6 +445,8 @@ export function createApp() {
 
   app.put('/api/data', requireRoles(...clinicalWriteRoles), async (req, res) => {
     const before = await loadClinicData(req.user);
+    const clinicalValidation = validateChangedClinicalRecords(before, req.body?.data || {});
+    if (!clinicalValidation.valid) return errorResponse(res, 400, 'VALIDATION_ERROR', clinicalValidation.message);
     const version = await saveClinicData(req.body?.data, req.user, req.body?.version);
     const after = await loadClinicData(req.user);
     for (const visit of newRecords(before.visits, after.visits)) {
@@ -699,24 +703,14 @@ export function createApp() {
           error.code = 'PATIENT_NOT_FOUND';
           throw error;
         }
-        let medicine = null;
-        if (input.medicineId) {
-          const medicineResult = await client.query('SELECT id,quantity,data FROM inventory_items WHERE id=$1 FOR UPDATE', [input.medicineId]);
-          const availability = validateDispenseAvailability(medicineResult.rows[0] || null, input.medicineQuantity);
-          if (!availability.valid) {
-            const error = new Error(availability.message);
-            error.status = availability.status;
-            error.code = availability.code;
-            throw error;
-          }
-          medicine = medicineResult.rows[0];
-        }
         const createdAt = new Date();
+        const { resolved: resolvedDispensations, lockOrder } = await resolveInventoryDispensations(client, input.dispensations);
+        const legacyMedicine = input.medicineId ? resolvedDispensations.find((entry) => entry.itemId === input.medicineId) : null;
         visit = {
           id: visitId,
           patientId: input.patientId,
           studentId: input.patientId,
-          date: createdAt.toISOString().slice(0, 10),
+          date: clinicCalendarDate(createdAt),
           time: createdAt.toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' }),
           createdAt: createdAt.toISOString(),
           type: input.visitType,
@@ -725,9 +719,10 @@ export function createApp() {
           disposition: input.disposition,
           followUp: input.followUp,
           ...(input.followUpDate ? { followUpDate: input.followUpDate } : {}),
-          medicineId: input.medicineId,
+          medicineId: input.medicineId || null,
           medicineQuantity: input.medicineId ? input.medicineQuantity : 0,
-          medicineName: medicine?.data?.name || null,
+          medicineName: legacyMedicine?.itemName || null,
+          dispensations: resolvedDispensations.map(({ itemId, itemName, itemType, quantity }) => ({ itemId, itemName, itemType, quantity })),
           temperature: input.temperature,
           pulse: input.pulse,
           painScore: input.painScore,
@@ -739,22 +734,24 @@ export function createApp() {
           summaryApprovedBy: input.summaryApproved ? req.user.id : null,
           nurseName: req.user.name,
         };
-        await client.query(
-          'INSERT INTO visits(id,patient_id,data,created_by) VALUES($1,$2,$3::jsonb,$4)',
-          [visitId, input.patientId, JSON.stringify(visit), req.user.id],
-        );
-        await client.query(
-          'INSERT INTO risk_assessments(id,visit_id,rule_version,result,acknowledged_by,acknowledged_at,override_reason) VALUES($1,$2,$3,$4::jsonb,$5,CASE WHEN $6 THEN NOW() ELSE NULL END,$7)',
-          [crypto.randomUUID(), visitId, Number(assessment.ruleVersion || 0), JSON.stringify(assessment), assessment.category === 'high' ? req.user.id : null, assessment.category === 'high' && Boolean(input.riskAcknowledgement), assessment.category === 'high' ? (input.riskAcknowledgement || null) : null],
-        );
-        if (medicine) {
-          await client.query("UPDATE inventory_items SET quantity=quantity-$1,data=jsonb_set(data,'{quantity}',to_jsonb(quantity-$1),true),updated_at=NOW() WHERE id=$2 AND quantity >= $1", [input.medicineQuantity, input.medicineId]);
-          await client.query(
-            'INSERT INTO dispense_logs(id,visit_id,inventory_item_id,quantity,data,created_by) VALUES($1,$2,$3,$4,$5::jsonb,$6)',
-            [crypto.randomUUID(), visitId, input.medicineId, input.medicineQuantity, JSON.stringify({ visitId, medicineId: input.medicineId, medicineName: medicine.data?.name || '', quantity: input.medicineQuantity, date: createdAt.toISOString() }), req.user.id],
-          );
-        }
-        await audit(req, 'CLINIC_VISIT_CREATED', { category: assessment.category, ruleVersion: assessment.ruleVersion, medicineDispensed: Boolean(medicine) }, 'visit', visitId, client);
+        await persistVisitAndDispensations(client, {
+          persistVisit: async () => {
+            await client.query(
+              'INSERT INTO visits(id,patient_id,data,created_by) VALUES($1,$2,$3::jsonb,$4)',
+              [visitId, input.patientId, JSON.stringify(visit), req.user.id],
+            );
+            await client.query(
+              'INSERT INTO risk_assessments(id,visit_id,rule_version,result,acknowledged_by,acknowledged_at,override_reason) VALUES($1,$2,$3,$4::jsonb,$5,CASE WHEN $6 THEN NOW() ELSE NULL END,$7)',
+              [crypto.randomUUID(), visitId, Number(assessment.ruleVersion || 0), JSON.stringify(assessment), assessment.category === 'high' ? req.user.id : null, assessment.category === 'high' && Boolean(input.riskAcknowledgement), assessment.category === 'high' ? (input.riskAcknowledgement || null) : null],
+            );
+          },
+          resolved: resolvedDispensations,
+          lockOrder,
+          visitId,
+          createdAt,
+          userId: req.user.id,
+        });
+        await audit(req, 'CLINIC_VISIT_CREATED', { category: assessment.category, ruleVersion: assessment.ruleVersion, inventoryItemsDispensed: resolvedDispensations.length }, 'visit', visitId, client);
       });
     } catch (error) {
       if (error.status) return errorResponse(res, error.status, error.code || 'VISIT_SAVE_FAILED', error.message);
@@ -1062,7 +1059,7 @@ export function createApp() {
     const id = crypto.randomUUID();
     await query(
       'INSERT INTO report_snapshots(id,report_type,period_start,period_end,data,created_by) VALUES($1,$2,$3,$4,$5::jsonb,$6)',
-      [id, type, start, end, JSON.stringify(report), req.user.id],
+      [id, type, start, end, JSON.stringify(reportSnapshotForStorage(report)), req.user.id],
     );
     await audit(req, 'REPORT_SNAPSHOT_CREATED', { type, start, end }, 'report', id);
     return res.status(201).json({ data: { id, ...visibleReport(report, req.user) } });
@@ -1070,7 +1067,7 @@ export function createApp() {
 
   app.get('/api/reports/snapshots', requireRoles(...reportReadRoles), async (req, res) => {
     const result = await query('SELECT id,report_type,period_start,period_end,data,created_at FROM report_snapshots ORDER BY created_at DESC LIMIT 100');
-    return res.json({ data: { snapshots: result.rows.map((snapshot) => ({ ...snapshot, data: visibleReport(snapshot.data || {}, req.user) })) } });
+    return res.json({ data: { snapshots: result.rows.map((snapshot) => ({ ...snapshot, data: visibleReport(reportSnapshotForStorage(snapshot.data || {}), req.user) })) } });
   });
 
   app.get('/api/notifications', requireAuth, async (req, res) => {

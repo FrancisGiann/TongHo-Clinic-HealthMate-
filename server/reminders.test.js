@@ -63,10 +63,18 @@ test('reminder sweep skips missing or invalid follow-up dates and deduplicates r
   });
   assert.ok(queryTexts[0].includes("data->>'followUpDate'"));
   assert.ok(!queryTexts[0].includes('COALESCE'));
+  assert.ok(queryTexts[1].includes('ROW_NUMBER() OVER'));
+  assert.ok(queryTexts[1].includes('PARTITION BY patient_id'));
+  assert.ok(queryTexts[1].includes('SUBSTRING(data->>\'dateAdministered\',9,2)::int'));
+  assert.ok(queryTexts[1].includes('valid_administered_date DESC NULLS LAST'));
+  assert.ok(queryTexts[1].includes('% 400=0'));
+  assert.ok(queryTexts[1].includes('NULLS LAST'));
   assert.equal(notices.length, 6);
   assert.equal(notices[0].body.includes('2026-08-25'), true);
   assert.equal(notices[0].dedupeKey, 'follow-up:visit-due:2026-08-25');
   assert.equal(notices[1].dedupeKey, 'follow-up:visit-string-true:2026-08-16');
+  assert.equal(notices[2].body, 'A vaccine dose has a recorded due date of 2026-09-01. Sign in to view the authorized details.');
+  assert.doesNotMatch(notices[2].body, /vaccine-6|patient-6|diagnosis/i);
   assert.equal(notices[3].dedupeKey, 'recurring-visits:patient-8:2026-08');
   assert.equal(notices[4].patientId, 'patient-consent-due');
   assert.equal(notices[4].dedupeKey, 'consent-reminder:patient-consent-due:2026-08-19');
@@ -77,6 +85,33 @@ test('reminder sweep skips missing or invalid follow-up dates and deduplicates r
   assert.ok(queryTexts[3].includes("data->>'consentStatus'='pending'"));
   assert.ok(queryTexts[3].includes("data->>'consentDueDate'"));
   assert.deepEqual(logs, [['Follow-up reminder failed.', { code: 'SMTP_ERROR' }]]);
+});
+
+test('immunization reminders use valid latest dates and created-at tie breakers', async () => {
+  const results = [
+    { rows: [] },
+    { rows: [
+      { id: 'invalid-later', patient_id: 'patient-1', created_at: '2026-09-02T02:00:00Z', data: { vaccineName: 'MMR', dateAdministered: '2026-02-30', nextDueDate: '2026-09-10' } },
+      { id: 'valid-earlier', patient_id: 'patient-1', created_at: '2026-09-01T02:00:00Z', data: { vaccineName: 'MMR', dateAdministered: '2026-02-28', nextDueDate: '2026-09-20' } },
+      { id: 'correction-old', patient_id: 'patient-2', created_at: '2026-08-25T01:00:00Z', data: { vaccineName: 'Td', dateAdministered: '2026-08-25', nextDueDate: '2026-09-02' } },
+      { id: 'correction-new', patient_id: 'patient-2', created_at: '2026-08-25T02:00:00Z', data: { vaccineName: 'Td', dateAdministered: '2026-08-25', nextDueDate: '2026-09-30' } },
+    ] },
+    { rows: [] },
+    { rows: [] },
+  ];
+  const notices = [];
+  let queryIndex = 0;
+  const result = await runClinicReminderSweep({
+    now: new Date('2026-09-01T02:00:00Z'),
+    queryFn: async () => results[queryIndex++],
+    notifyPatient: async (patientId, notice) => notices.push({ patientId, ...notice }),
+  });
+
+  assert.equal(result.immunizations, 2);
+  assert.deepEqual(notices.map(({ patientId, body }) => [patientId, body]), [
+    ['patient-1', 'A vaccine dose has a recorded due date of 2026-09-20. Sign in to view the authorized details.'],
+    ['patient-2', 'A vaccine dose has a recorded due date of 2026-09-30. Sign in to view the authorized details.'],
+  ]);
 });
 
 test('manual reminder sweeps in the same month reuse the recurring-review dedupe key', async () => {

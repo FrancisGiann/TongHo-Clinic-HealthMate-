@@ -5,7 +5,6 @@ import {
   Plus,
   Search,
   ShieldAlert,
-  SlidersHorizontal,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { downloadCsv } from "../utils/csv";
@@ -19,6 +18,12 @@ export default function Students({ data, setData }) {
       .toLowerCase()
       .includes(query.toLowerCase()),
   ).sort((first, second) => sortAscending ? first.name.localeCompare(second.name) : second.name.localeCompare(first.name));
+  const latestVisits = new Map();
+  data.visits.forEach((visit) => {
+    const studentId = String(visit.studentId || visit.patientId || '');
+    const current = latestVisits.get(studentId);
+    if (!current || String(visit.date || visit.createdAt || '') > String(current.date || current.createdAt || '')) latestVisits.set(studentId, visit);
+  });
   const exportStudents = () => {
     const studentRows = data.students.map((student) => ({
       "Record Type": "Student",
@@ -105,11 +110,8 @@ export default function Students({ data, setData }) {
             placeholder="Search by name, ID, grade or section..."
           />
         </div>
-        <button className="filter-btn" onClick={() => setQuery("")}>
-          <SlidersHorizontal size={16} /> Filters <span>0</span>
-        </button>
-        <button className="filter-btn" onClick={() => setSortAscending((value) => !value)}>
-          <ArrowUpDown size={16} /> Sort: Name
+        <button type="button" className="filter-btn" onClick={() => setSortAscending((value) => !value)} aria-label={`Sort names ${sortAscending ? 'descending' : 'ascending'}`}>
+          <ArrowUpDown size={16} /> Sort: Name {sortAscending ? 'A–Z' : 'Z–A'}
         </button>
       </div>
       <div className="student-grid">
@@ -147,7 +149,7 @@ export default function Students({ data, setData }) {
             </div>
             <div className="card-footer">
               <span>
-                Last visit <b>Today, {index === 0 ? "08:42" : "—"}</b>
+                Last visit <b>{latestVisits.has(String(student.id)) ? `${latestVisits.get(String(student.id)).date || 'Date unavailable'}${latestVisits.get(String(student.id)).time ? `, ${latestVisits.get(String(student.id)).time}` : ''}` : 'No visits recorded'}</b>
               </span>
               <span className="card-arrow">↗</span>
             </div>

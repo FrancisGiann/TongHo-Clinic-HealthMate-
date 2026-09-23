@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildClinicReport, reportForRole, suppressSmallCellAggregates } from './reporting.js';
+import { buildClinicReport, reportForRole, reportSnapshotForStorage, suppressSmallCellAggregates } from './reporting.js';
 
 test('report includes only records inside the requested period', () => {
   const report = buildClinicReport({
@@ -100,4 +100,43 @@ test('role-specific report views keep nurse detail and suppress administrator sn
   assert.deepEqual(nurseView.complaints, { Headache: 1, Cough: 5 });
   assert.deepEqual(adminView.complaints, {});
   assert.ok(adminView.suppressedAggregates.includes('complaints'));
+});
+
+test('vaccine reporting shows only each student vaccine latest applicable due date', () => {
+  const report = buildClinicReport({
+    students: [{ id: 'p1', name: 'Ari Santos' }, { id: 'p2', name: 'Bea Cruz' }],
+    immunizations: [
+      { id: 'old-a', patientId: 'p1', vaccineName: 'Vaccine A', dateAdministered: '2026-01-01', nextDueDate: '2026-09-15' },
+      { id: 'new-a', patientId: 'p1', vaccineName: 'Vaccine A', dateAdministered: '2026-08-01', nextDueDate: '2027-08-01' },
+      { id: 'latest-b', patientId: 'p1', vaccineName: 'Vaccine B', dateAdministered: '2026-08-15', nextDueDate: '2026-09-20' },
+      { id: 'old-c', patientId: 'p2', vaccineName: 'Vaccine C', dateAdministered: '2026-07-01', nextDueDate: '2026-09-10' },
+      { id: 'new-c', patientId: 'p2', vaccineName: 'Vaccine C', dateAdministered: '2026-08-20' },
+      { id: 'unknown-a', patientId: 'p2', nextDueDate: '2026-09-12' },
+      { id: 'unknown-b', patientId: 'p2', nextDueDate: '2026-02-30' },
+      { id: 'correction-old', patientId: 'p1', vaccineName: 'Td', dateAdministered: '2026-08-25', createdAt: '2026-08-25T01:00:00Z', nextDueDate: '2026-09-05' },
+      { id: 'correction-new', patientId: 'p1', vaccineName: 'Td', dateAdministered: '2026-08-25', createdAt: '2026-08-25T02:00:00Z', nextDueDate: '2026-09-25' },
+      { id: 'invalid-later', patientId: 'p2', vaccineName: 'Vaccine D', dateAdministered: '2026-02-30', createdAt: '2026-08-30T02:00:00Z', nextDueDate: '2026-09-01' },
+      { id: 'valid-earlier', patientId: 'p2', vaccineName: 'Vaccine D', dateAdministered: '2026-02-28', createdAt: '2026-08-29T02:00:00Z', nextDueDate: '2026-09-26' },
+    ],
+  }, '2026-09-01', '2026-09-30');
+
+  assert.deepEqual(report.vaccineTracking.map(({ studentId, vaccineName, nextDueDate }) => [studentId, vaccineName, nextDueDate]), [
+    ['p2', 'Unknown vaccine', '2026-09-12'],
+    ['p1', 'Vaccine B', '2026-09-20'],
+    ['p1', 'Td', '2026-09-25'],
+    ['p2', 'Vaccine D', '2026-09-26'],
+    ['p1', 'Vaccine A', '2027-08-01'],
+  ]);
+  assert.equal(report.totals.vaccineDueRecords, 4);
+});
+
+test('stored report snapshots omit patient-level vaccine tracking detail', () => {
+  const report = {
+    totals: { vaccineDueRecords: 3 },
+    vaccineTracking: [{ studentId: 'patient-1', studentName: 'Fictional Student', vaccineName: 'Vaccine A', nextDueDate: '2026-09-30' }],
+  };
+  const stored = reportSnapshotForStorage(report);
+  assert.deepEqual(stored, { totals: { vaccineDueRecords: 3 } });
+  assert.equal(Object.hasOwn(reportForRole(stored, 'system_administrator'), 'vaccineTracking'), false);
+  assert.equal(reportForRole(report, 'school_nurse').vaccineTracking[0].studentId, 'patient-1', 'the on-demand nurse report retains authorized detail');
 });

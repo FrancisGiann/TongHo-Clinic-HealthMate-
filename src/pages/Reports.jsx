@@ -58,16 +58,8 @@ export default function Reports({ data, user }) {
   const totalStudents = data.students.length;
   const screenedStudents = serverReport?.totals?.screenedPatients || 0;
   const screeningSuppressed = serverReport?.suppressedTotals?.includes('screenedPatients');
-  const screeningPercentage = totalStudents > 0 
-    ? Math.round((screenedStudents / totalStudents) * 100) 
-    : 0;
-  
-  // Calculate immunization statistics
-  const immunizedStudents = serverReport?.totals?.completeImmunizationPatients || 0;
-  const immunizationSuppressed = serverReport?.suppressedTotals?.includes('completeImmunizationPatients');
-  const immunizationPercentage = totalStudents > 0 
-    ? Math.round((immunizedStudents / totalStudents) * 100) 
-    : 0;
+  const vaccineDueSuppressed = serverReport?.suppressedTotals?.includes('vaccineDueRecords');
+  const vaccineDueRecords = serverReport?.totals?.vaccineDueRecords || 0;
   const incidents = (data.incidents || []).filter((incident) => {
     const value = new Date(incident.date || incident.createdAt || '');
     const key = Number.isNaN(value.getTime()) ? '' : value.toISOString().slice(0, 10);
@@ -98,14 +90,14 @@ export default function Reports({ data, user }) {
           <small>{complaintSuppressed ? 'Small categories are suppressed' : 'Most recorded concern'}</small>
         </div>
         <div>
-          <span>Students screened</span>
-          <strong>{screeningSuppressed ? 'Withheld' : `${screeningPercentage}%`}</strong>
-          <small>{screeningSuppressed ? 'Small counts are suppressed' : `${screenedStudents} of ${totalStudents} students`}</small>
+          <span>Students with screening records</span>
+          <strong>{screeningSuppressed ? 'Withheld' : screenedStudents}</strong>
+          <small>{screeningSuppressed ? 'Small counts are suppressed' : `Unique students in this period · roster size ${totalStudents}`}</small>
         </div>
         <div>
-          <span>Immunization rate</span>
-          <strong>{immunizationSuppressed ? 'Withheld' : `${immunizationPercentage}%`}</strong>
-          <small>{immunizationSuppressed ? 'Small counts are suppressed' : `${immunizedStudents} of ${totalStudents} complete`}</small>
+          <span>Recorded vaccine due dates</span>
+          <strong>{vaccineDueSuppressed ? 'Withheld' : vaccineDueRecords}</strong>
+          <small>{vaccineDueSuppressed ? 'Small counts are suppressed' : `Latest student and vaccine records due by ${end}`}</small>
         </div>
       </div>
       <div className="reports-grid">
@@ -158,12 +150,16 @@ export default function Reports({ data, user }) {
         {!snapshots.length && <p className="empty-state">No saved snapshots yet.</p>}
       </section>
       <div className="reports-grid">
-        {[["Consultation types", "consultationTypes", serverReport?.consultationTypes], ["Treatments", "treatments", serverReport?.treatments], ["Medication use", "medicines", serverReport?.medicines]].map(([title, key, values]) => {
+        {[["Consultation types", "consultationTypes", serverReport?.consultationTypes], ["Treatments", "treatments", serverReport?.treatments], ["Medication use", "medications", serverReport?.medications], ["Supply use", "supplies", serverReport?.supplies], ["Unclassified historical items", "unclassifiedItems", serverReport?.unclassifiedItems], ["Vision findings recorded", "screeningVisionFindings", serverReport?.screeningVisionFindings], ["Hearing findings recorded", "screeningHearingFindings", serverReport?.screeningHearingFindings]].map(([title, key, values]) => {
           const entries = Object.entries(values || {});
           const suppressed = serverReport?.suppressedAggregates?.includes(key);
           return <section className="panel table-panel" key={key}><div className="panel-heading"><h3>{title}</h3></div>{entries.map(([label, count]) => <div className="queue-row" key={label}><span>{label}</span><strong>{count}</strong></div>)}{suppressed && <p className="field-hint" role="note">Small categories are suppressed to protect privacy.</p>}{!suppressed && !entries.length && <p className="empty-state">No records in this period.</p>}</section>;
         })}
       </div>
+      {canViewClinicalDetails && <section className="panel table-panel">
+        <div className="panel-heading"><div><p className="section-kicker">Preventive care</p><h3>Latest recorded vaccine due dates</h3><p className="field-hint">One latest record per student and vaccine. Due labels use only the next due date recorded by the clinic.</p></div></div>
+        {serverReport?.vaccineTracking?.length ? <table><thead><tr><th>Student</th><th>Vaccine</th><th>Dose</th><th>Administered</th><th>Source</th><th>Next due</th><th>Status at period end</th></tr></thead><tbody>{serverReport.vaccineTracking.map((record) => <tr key={`${record.studentId}-${record.vaccineName}`}><td><strong>{record.studentName}</strong></td><td>{record.vaccineName}</td><td>{record.doseNumber}</td><td>{record.dateAdministered || '—'}</td><td>{record.source === 'external' ? `External${record.clinicName ? ` · ${record.clinicName}` : ''}` : record.source === 'clinic' ? 'School clinic' : 'Not recorded'}</td><td>{record.nextDueDate}</td><td>{record.dueStatus}</td></tr>)}</tbody></table> : <p className="empty-state">No current vaccine records have a next due date recorded.</p>}
+      </section>}
       <section className="panel table-panel">
         <div className="panel-heading">
           <div>

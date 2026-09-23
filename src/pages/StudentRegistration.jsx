@@ -196,7 +196,7 @@ const validateForm = (form) => {
  * StudentRegistration component
  * Allows nurses to create new student health records with complete information
  */
-export default function StudentRegistration({ data, setData }) {
+export default function StudentRegistration({ data, commitData }) {
   const navigate = useNavigate();
   const [form, setForm] = useState(initialForm);
   const [saved, setSaved] = useState(false);
@@ -256,13 +256,13 @@ export default function StudentRegistration({ data, setData }) {
 
     try {
       const recordToSave = { ...form };
-      setData(addRecord(data, "students", recordToSave));
+      await commitData((current) => addRecord(current, "students", recordToSave));
 
       try {
         await submitToGoogleSheets(recordToSave);
       } catch (syncError) {
-        console.warn("Student record saved locally but failed to sync to Google Sheets.", syncError);
-        setErrors(["Student record saved locally, but Google Sheets sync failed."]);
+        console.warn("Student record was saved to clinic records but failed to sync to Google Sheets.", syncError);
+        setErrors(["Student record was saved to clinic records, but Google Sheets sync failed."]);
       }
 
       setSaved(true);
@@ -270,7 +270,7 @@ export default function StudentRegistration({ data, setData }) {
       setTimeout(() => navigate("/students"), 700);
     } catch (error) {
       console.error("Failed to save student record:", error);
-      setErrors(["Failed to save student record. Please try again."]);
+      setErrors([error.message || "Failed to save student record. Please try again."]);
       setLoading(false);
     }
   };

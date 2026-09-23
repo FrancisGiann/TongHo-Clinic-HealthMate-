@@ -74,12 +74,12 @@ export default function App() {
             <>
               <Route path="/" element={<Dashboard data={data} user={user} />} />
               <Route path="/students" element={<Students data={data} setData={setData} />} />
-              <Route path="/students/new" element={<StudentRegistration data={data} setData={setData} />} />
-              <Route path="/students/:studentId" element={<StudentProfile data={data} setData={setData} reload={clinic.reload} />} />
+              <Route path="/students/new" element={<StudentRegistration data={data} commitData={clinic.commitData} />} />
+              <Route path="/students/:studentId" element={<StudentProfile data={data} commitData={clinic.commitData} reload={clinic.reload} />} />
               <Route path="/new-visit" element={<NewVisit data={data} user={user} reload={clinic.reload} />} />
-              <Route path="/health-screening" element={<HealthScreening data={data} setData={setData} />} />
-              <Route path="/immunizations" element={<Immunizations data={data} setData={setData} />} />
-              <Route path="/incident-reports" element={<IncidentReport data={data} setData={setData} />} />
+              <Route path="/health-screening" element={<HealthScreening data={data} commitData={clinic.commitData} />} />
+              <Route path="/immunizations" element={<Immunizations data={data} commitData={clinic.commitData} />} />
+              <Route path="/incident-reports" element={<IncidentReport data={data} commitData={clinic.commitData} />} />
               <Route path="/queue" element={<Queue data={data} reload={clinic.reload} />} />
               <Route path="/inventory" element={<Inventory data={data} applyServerData={clinic.applyServerData} reload={clinic.reload} saving={clinic.saving} />} />
               <Route path="/reports" element={<Reports data={data} user={user} />} />

@@ -70,6 +70,20 @@ const collectionKeys = [
   'stockAdjustments',
 ];
 
+let localRecordSequence = 0;
+function nextRecordId(records = []) {
+  const existing = new Set(records.map((record) => String(record.id)));
+  let candidate;
+  do {
+    if (typeof globalThis.crypto?.randomUUID === 'function') candidate = globalThis.crypto.randomUUID();
+    else {
+      localRecordSequence += 1;
+      candidate = `${Date.now()}-${localRecordSequence}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+  } while (existing.has(String(candidate)));
+  return candidate;
+}
+
 const createInitialData = () => ({
   ...seed,
   settings: { ...seed.settings },
@@ -125,10 +139,10 @@ export function resetData() {
  * @param {Object} record - The record data to add
  * @returns {Object} Updated application data with new record
  */
-export function addRecord(data, table, record) { 
-  const next = { 
-    ...data, 
-    [table]: [...(data[table] || []), { ...record, id: Date.now() }] 
-  }; 
-  return saveData(next); 
+export function addRecord(data, table, record) {
+  const next = {
+    ...data,
+    [table]: [...(data[table] || []), { ...record, id: nextRecordId(data[table] || []) }]
+  };
+  return saveData(next);
 }

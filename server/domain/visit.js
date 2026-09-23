@@ -6,14 +6,18 @@ function isCalendarDate(value) {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
-function clinicToday(now) {
+export function clinicCalendarDate(value) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Manila',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).formatToParts(now).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  }).formatToParts(value).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
   return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function clinicToday(now) {
+  return clinicCalendarDate(now);
 }
 
 function boundedText(value, maxLength, { required = false } = {}) {
@@ -52,6 +56,10 @@ export function validateVisitPayload(payload = {}, { now = new Date() } = {}) {
   const medicineQuantity = medicineId
     ? optionalNumber(payload.medicineQuantity ?? 1, { min: 1, max: 100, integer: true })
     : 0;
+  const hasDispensations = Object.prototype.hasOwnProperty.call(payload, 'dispensations');
+  const dispensations = hasDispensations
+    ? payload.dispensations
+    : medicineId ? [{ itemId: medicineId, quantity: medicineQuantity }] : [];
 
   if (!patientId) fields.patientId = 'Select a valid patient.';
   if (!visitType || !visitTypes.has(visitType)) fields.visitType = 'Select a supported visit type.';
@@ -65,6 +73,24 @@ export function validateVisitPayload(payload = {}, { now = new Date() } = {}) {
   if (pulse === undefined) fields.pulse = 'Pulse must be an integer from 20 to 250 bpm.';
   if (medicineId === null && payload.medicineId !== undefined && payload.medicineId !== null && payload.medicineId !== '') fields.medicineId = 'Medicine identifier is invalid.';
   if (medicineQuantity === undefined) fields.medicineQuantity = 'Dispensed quantity must be an integer from 1 to 100.';
+  if (hasDispensations && medicineId) fields.dispensations = 'Use either the item list or the legacy medicine fields, not both.';
+  if (!Array.isArray(dispensations) || dispensations.length > 20) fields.dispensations = 'Choose up to 20 inventory items to dispense.';
+  else {
+    const itemIds = new Set();
+    for (const entry of dispensations) {
+      const itemId = boundedText(String(entry?.itemId ?? entry?.inventoryItemId ?? ''), 120, { required: true });
+      const quantity = optionalNumber(entry?.quantity, { min: 1, max: 100, integer: true });
+      if (!itemId || quantity === undefined || quantity === null) {
+        fields.dispensations = 'Each dispensed item needs a valid inventory item and a whole-number quantity from 1 to 100.';
+        break;
+      }
+      if (itemIds.has(itemId)) {
+        fields.dispensations = 'Each inventory item can appear only once in the dispense list.';
+        break;
+      }
+      itemIds.add(itemId);
+    }
+  }
   if (payload.followUp !== undefined && typeof payload.followUp !== 'boolean') fields.followUp = 'Follow-up must be true or false.';
   if (followUp && (!followUpDate || !isCalendarDate(followUpDate))) fields.followUpDate = 'Choose a valid follow-up date.';
   else if (followUp && followUpDate < clinicToday(now)) fields.followUpDate = 'Follow-up date must be today or later.';
@@ -95,6 +121,10 @@ export function validateVisitPayload(payload = {}, { now = new Date() } = {}) {
       riskAcknowledgement: acknowledgement,
       medicineId,
       medicineQuantity,
+      dispensations: hasDispensations ? dispensations.map((entry) => ({
+        itemId: String(entry.itemId ?? entry.inventoryItemId).trim(),
+        quantity: Number(entry.quantity),
+      })) : (medicineId ? [{ itemId: medicineId, quantity: medicineQuantity }] : []),
       notes,
       summaryDraft,
       summaryApproved: Boolean(payload.summaryApproved),

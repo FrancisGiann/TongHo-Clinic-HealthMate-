@@ -7,11 +7,10 @@ import { Clock, Stethoscope } from 'lucide-react';
 export default function RecentPatientsWidget({ data }) {
   const navigate = useNavigate();
 
-  // Get unique students from recent visits (last 10)
-  const recentPatients = data.visits
-    .slice(0, 10)
+  const recentPatients = [...data.visits]
+    .sort((first, second) => new Date(second.createdAt || second.date || 0).getTime() - new Date(first.createdAt || first.date || 0).getTime())
     .map(visit => {
-      const student = data.students.find(s => s.id === visit.studentId);
+      const student = data.students.find(s => String(s.id) === String(visit.studentId || visit.patientId));
       if (!student) return null;
       return {
         ...student,

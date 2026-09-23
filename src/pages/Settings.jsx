@@ -442,7 +442,7 @@ export default function Settings({ data, user, reload }) {
         <section className="panel settings-tab-panel">
           <div className="settings-panel-heading"><div><p className="section-kicker">{isAdmin ? 'Administrator identity' : 'Staff identity'}</p><h3>{isAdmin ? 'Account settings' : 'My account'}</h3></div><span className="settings-badge">{isAdmin ? 'Full access' : 'Clinic staff'}</span></div>
           <div className="profile-settings-grid">
-            <div className="profile-photo-placeholder">{(user?.name || 'User').split(' ').map((part) => part[0]).join('').slice(0, 2)}<button type="button" className="secondary-btn" disabled>Profile photo unavailable</button></div>
+            <div className="profile-photo-placeholder"><span>{(user?.name || 'User').split(' ').map((part) => part[0]).join('').slice(0, 2)}</span><small>Profile photos aren't available in account settings.</small></div>
             <div className="two-fields">
               <label>Full name<input defaultValue={user?.name || ''} disabled /></label>
               <label>Email<input type="email" defaultValue={user?.email || ''} disabled /></label>
@@ -693,13 +693,9 @@ export default function Settings({ data, user, reload }) {
             <Database size={17} />
             <span><strong>Download oversight snapshot</strong><small>Visible settings and roster JSON</small></span>
           </button>
-          <button className="data-action" disabled title="Sample reset is disabled for server-backed records">
-            <RotateCcw size={17} />
-            <span>
-              <strong>Reset workspace unavailable</strong>
-              <small>Sample data cannot replace server-backed records</small>
-            </span>
-          </button>
+          <p className="disabled-note" title="Sample reset is unavailable for server-backed records">
+            <RotateCcw size={17} /> Sample data cannot replace server-backed records.
+          </p>
           <div className="audit-card">
             <div className="audit-card-heading">
               <div>

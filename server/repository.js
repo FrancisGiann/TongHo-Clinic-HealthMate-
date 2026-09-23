@@ -66,6 +66,14 @@ export function hydrateAuthoritativeRecord(key, row) {
       updatedAt: timestampValue(row.updated_at),
     };
   }
+  if (key === 'immunizations') {
+    return {
+      ...record,
+      id: row.id,
+      patientId: row.patient_id,
+      createdAt: timestampValue(row.created_at),
+    };
+  }
   if (key === 'inventory') {
     return { ...record, id: row.id, quantity: row.quantity };
   }
@@ -111,6 +119,12 @@ export async function loadClinicData(user, { includeClinical = false } = {}) {
         : 'id,patient_id,status,starts_at,created_at,updated_at,data';
       const scope = ids !== null ? ' WHERE patient_id=ANY($1::text[])' : '';
       const result = await query(`SELECT ${columns} FROM ${table}${scope} ORDER BY created_at`, ids !== null ? [ids] : []);
+      data[key] = result.rows.map((row) => hydrateAuthoritativeRecord(key, row));
+      continue;
+    }
+    if (key === 'immunizations') {
+      const scope = ids !== null ? ' WHERE patient_id=ANY($1::text[])' : '';
+      const result = await query(`SELECT id,patient_id,created_at,data FROM immunizations${scope} ORDER BY created_at`, ids !== null ? [ids] : []);
       data[key] = result.rows.map((row) => hydrateAuthoritativeRecord(key, row));
       continue;
     }

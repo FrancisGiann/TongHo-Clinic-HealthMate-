@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { Check, ChevronDown, ClipboardPlus, Search } from "lucide-react";
+import { useLocation } from "react-router-dom";
+import { Check, ChevronDown, ClipboardPlus, Plus, Trash2 } from "lucide-react";
 import { api } from "../utils/api";
+import StudentPicker from "../components/StudentPicker";
 
-const complaints = [
+  const complaints = [
   "Headache",
   "Stomachache",
   "Fever",
@@ -11,6 +13,7 @@ const complaints = [
   "Dizziness",
   "Nausea",
 ];
+const treatmentPrompts = ['Rest and hydration', 'Cold pack applied', 'Wound cleaned and dressed', 'Medication given'];
 
 function clinicDate(value) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
@@ -20,12 +23,13 @@ function clinicDate(value) {
 }
 
 export default function NewVisit({ data, user, reload }) {
-  const [selected, setSelected] = useState(null);
+  const location = useLocation();
+  const [selectedId, setSelectedId] = useState(() => String(location.state?.selectedStudent?.id || ""));
   const [complaint, setComplaint] = useState("");
   const [visitType, setVisitType] = useState("Illness");
-  const [treatment, setTreatment] = useState("Rest and hydration");
+  const [treatment, setTreatment] = useState("");
   const [disposition, setDisposition] = useState("Returned to class");
-  const [medicineId, setMedicineId] = useState("");
+  const [dispensations, setDispensations] = useState([{ itemId: "", quantity: "1" }]);
   const [followUp, setFollowUp] = useState(false);
   const [followUpDate, setFollowUpDate] = useState("");
   const [temperature, setTemperature] = useState("");
@@ -40,7 +44,10 @@ export default function NewVisit({ data, user, reload }) {
   const [summaryMeta, setSummaryMeta] = useState(null);
   const [summaryApproved, setSummaryApproved] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
   const clinicToday = clinicDate(new Date());
+  const selected = data.students.find((student) => String(student.id) === selectedId);
+  const inventoryItems = (data.inventory || []).filter((item) => !item.archived);
   const generateSummary = async () => {
     setSaveError("");
     try {
@@ -53,11 +60,23 @@ export default function NewVisit({ data, user, reload }) {
     }
   };
   const save = async () => {
+    if (saving) return;
+    setSaved(false);
     if (!selected) return setSaveError('Select a student before saving the visit.');
     if (!complaint.trim()) return setSaveError('Enter a chief complaint before saving the visit.');
+    if (!treatment.trim()) return setSaveError('Enter the treatment or care provided before saving the visit.');
+    const chosenDispensations = dispensations.filter((entry) => entry.itemId || entry.quantity !== '1');
+    const dispensedIds = new Set();
+    for (const entry of chosenDispensations) {
+      const quantity = Number(entry.quantity);
+      if (!entry.itemId || !Number.isInteger(quantity) || quantity < 1 || quantity > 100) return setSaveError('Choose an inventory item and enter a whole-number quantity from 1 to 100.');
+      if (dispensedIds.has(entry.itemId)) return setSaveError('Choose each inventory item only once.');
+      dispensedIds.add(entry.itemId);
+    }
     if (followUp && !followUpDate) return setSaveError('Choose a follow-up date before saving the visit.');
     if (followUp && followUpDate < clinicToday) return setSaveError('Follow-up date must be today or later.');
     setSaveError("");
+    setSaving(true);
     try {
       const preview = await api.post('/api/risk/assess', {
         painScore: painScore === "" ? null : Number(painScore),
@@ -67,10 +86,20 @@ export default function NewVisit({ data, user, reload }) {
         pulse: pulse === "" ? null : Number(pulse),
       });
       setRiskResult(preview);
-      if (preview.status === 'incomplete') return setSaveError(preview.rationale);
-      if (preview.category === 'high' && !riskAcknowledgement.trim()) return setSaveError('Document the nurse acknowledgement before saving a high-risk assessment.');
+      if (preview.status === 'incomplete') {
+        setSaveError(preview.rationale);
+        setSaving(false);
+        return;
+      }
+      if (preview.category === 'high' && !riskAcknowledgement.trim()) {
+        setSaveError('Document the nurse acknowledgement before saving a high-risk assessment.');
+        setSaving(false);
+        return;
+      }
     } catch (error) {
-      return setSaveError(error.message);
+      setSaveError(error.message);
+      setSaving(false);
+      return;
     }
     let result;
     try {
@@ -82,8 +111,7 @@ export default function NewVisit({ data, user, reload }) {
         disposition,
         followUp,
         ...(followUp ? { followUpDate } : {}),
-        medicineId: medicineId || null,
-        medicineQuantity: medicineId ? 1 : 0,
+        dispensations: chosenDispensations.map((entry) => ({ itemId: entry.itemId, quantity: Number(entry.quantity) })),
         temperature: temperature === "" ? null : Number(temperature),
         pulse: pulse === "" ? null : Number(pulse),
         painScore: painScore === "" ? null : Number(painScore),
@@ -95,6 +123,8 @@ export default function NewVisit({ data, user, reload }) {
       });
     } catch (error) {
       return setSaveError(error.message);
+    } finally {
+      setSaving(false);
     }
     setRiskResult(result.assessment);
     await reload?.();
@@ -111,21 +141,7 @@ export default function NewVisit({ data, user, reload }) {
       <div className="form-layout">
         <section className="panel form-panel">
           <FormStep number="01" title="Select student">
-            <div className="search-box">
-              <Search size={17} />
-              <input
-                placeholder="Search student name or ID..."
-                onChange={(e) =>
-                  setSelected(
-                    data.students.find((s) =>
-                      `${s.name} ${s.studentId}`
-                        .toLowerCase()
-                        .includes(e.target.value.toLowerCase()),
-                    ) || null,
-                  )
-                }
-              />
-            </div>
+            <StudentPicker students={data.students} value={selectedId} onChange={setSelectedId} required disabled={saving} />
             {selected && (
               <div className="selected-student">
                 <div className="avatar small teal">
@@ -141,9 +157,10 @@ export default function NewVisit({ data, user, reload }) {
                     {selected.studentId} · {selected.gradeLevel}
                   </span>
                 </div>
-                <Check size={18} />
+                <Check size={18} aria-hidden="true" />
               </div>
             )}
+            {selected && <div className="selected-allergies"><strong>Allergies</strong><span>{selected.allergies?.trim() || 'None recorded'}</span></div>}
           </FormStep>
           <FormStep number="02" title="Visit details">
             <label>
@@ -153,13 +170,16 @@ export default function NewVisit({ data, user, reload }) {
               </select>
               <ChevronDown size={15} />
             </label>
-            <span className="field-label">Chief complaint</span>
+            <label>Chief complaint *<textarea value={complaint} onChange={(event) => setComplaint(event.target.value)} maxLength={300} placeholder="Describe the student’s concern in their own words or your observation." required disabled={saving} /></label>
+            <span className="field-label">Optional complaint suggestions</span>
             <div className="chip-row">
               {complaints.map((item) => (
                 <button
+                  type="button"
                   className={complaint === item ? "selected" : ""}
                   key={item}
                   onClick={() => setComplaint(item)}
+                  disabled={saving}
                 >
                   {item}
                 </button>
@@ -168,10 +188,27 @@ export default function NewVisit({ data, user, reload }) {
           </FormStep>
           <FormStep number="03" title="Assessment & action">
             <div className="two-fields">
-              <label>Treatment <select value={treatment} onChange={(e) => setTreatment(e.target.value)}>{['Rest and hydration', 'Ice pack', 'Bandage', 'Medication given', 'Sent home', 'Referred to hospital'].map((item) => <option key={item}>{item}</option>)}</select></label>
-              <label>Disposition <select value={disposition} onChange={(e) => setDisposition(e.target.value)}>{['Returned to class', 'Sent home', 'Referred to physician', 'Sent to hospital'].map((item) => <option key={item}>{item}</option>)}</select></label>
+              <label>Disposition <select value={disposition} onChange={(e) => setDisposition(e.target.value)} disabled={saving}>{['Returned to class', 'Sent home', 'Referred to physician', 'Sent to hospital'].map((item) => <option key={item}>{item}</option>)}</select></label>
             </div>
-            <label>Medicine dispensed <select value={medicineId} onChange={(e) => setMedicineId(e.target.value)}><option value="">None</option>{data.inventory.filter((item) => !item.archived && item.quantity > 0).map((item) => <option key={item.id} value={item.id}>{item.name} · {item.quantity} {item.unit} left</option>)}</select></label>
+            <label>Treatment and care provided *<textarea value={treatment} onChange={(event) => setTreatment(event.target.value)} maxLength={300} placeholder="Record the care provided." required disabled={saving} /></label>
+            <div className="dispensation-list">
+              <div className="panel-heading"><div><p className="section-kicker">Inventory</p><h4>Items dispensed</h4></div><button type="button" className="secondary-btn" onClick={() => setDispensations((items) => [...items, { itemId: '', quantity: '1' }])} disabled={saving || dispensations.length >= 20}><Plus size={15}/> Add item</button></div>
+              {dispensations.map((entry, index) => (
+                <div className="two-fields dispensation-row" key={index}>
+                  <label>Medication or supply<select value={entry.itemId} onChange={(event) => setDispensations((items) => items.map((item, row) => row === index ? { ...item, itemId: event.target.value } : item))} disabled={saving}>
+                    <option value="">None</option>
+                    {inventoryItems.map((item) => <option key={item.id} value={item.id} disabled={!['medication', 'supply'].includes(item.itemType) || item.quantity < 1 || Boolean(item.expiryDate && item.expiryDate < clinicToday)}>{item.name} · {item.itemType ? (item.itemType === 'medication' ? 'Medication' : 'Supply') : 'Unclassified'} · {item.quantity} {item.unit} left</option>)}
+                  </select></label>
+                  <label>Quantity<input type="number" min="1" max="100" step="1" value={entry.quantity} onChange={(event) => setDispensations((items) => items.map((item, row) => row === index ? { ...item, quantity: event.target.value } : item))} disabled={saving || !entry.itemId} /></label>
+                  {dispensations.length > 1 && <button type="button" className="icon-btn-small danger" aria-label={`Remove item row ${index + 1}`} onClick={() => setDispensations((items) => items.filter((_, row) => row !== index))} disabled={saving}><Trash2 size={14}/></button>}
+                </div>
+              ))}
+              <p className="field-hint">Unclassified, expired, archived, and out-of-stock items are unavailable until corrected.</p>
+            </div>
+            <span className="field-label">Optional treatment prompts</span>
+            <div className="chip-row">
+              {treatmentPrompts.map((item) => <button type="button" key={item} onClick={() => setTreatment((current) => current ? `${current}${current.endsWith('.') ? '' : '.'} ${item}` : item)} disabled={saving}>{item}</button>)}
+            </div>
             <div className="two-fields">
               <label>
                 Temperature{" "}
@@ -197,7 +234,7 @@ export default function NewVisit({ data, user, reload }) {
               Notes{" "}
               <textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Describe symptoms, observations, and action taken..." />
             </label>
-            <button type="button" className="secondary-btn" onClick={generateSummary} disabled={!complaint}>Generate summary draft</button>
+            <button type="button" className="secondary-btn" onClick={generateSummary} disabled={!complaint || saving}>Generate summary draft</button>
             {summaryDraft && <div className="risk-result"><strong>Review AI-assisted draft</strong><textarea value={summaryDraft} onChange={(event) => { setSummaryDraft(event.target.value); setSummaryApproved(false); }} />{user?.role === 'school_nurse' ? <label className="check-label"><input type="checkbox" checked={summaryApproved} onChange={(event) => setSummaryApproved(event.target.checked)} /> I reviewed and approve this summary for the record</label> : <small>A school nurse must approve this draft before it can be saved to the record.</small>}<small>Provider: {summaryMeta?.provider}. The risk score is calculated separately and is never controlled by AI.</small></div>}
           </FormStep>
           <div className="form-actions">
@@ -207,8 +244,8 @@ export default function NewVisit({ data, user, reload }) {
                 <input type="date" value={followUpDate} min={clinicToday} onChange={(e) => setFollowUpDate(e.target.value)} required />
               </label>}
             </div>
-            <button className="primary-btn" onClick={save}>
-              <ClipboardPlus size={16} /> Save visit
+            <button className="primary-btn" onClick={save} disabled={saving}>
+              <ClipboardPlus size={16} /> {saving ? 'Saving visit…' : 'Save visit'}
             </button>
           </div>
           {saved && (

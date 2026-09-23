@@ -1,3 +1,5 @@
+import { isValidCalendarDate, latestImmunizationsByStudentVaccine } from '../../shared/immunizationOrder.js';
+
 function dateKey(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
@@ -9,8 +11,8 @@ function increment(target, key) {
 }
 
 const smallCellThreshold = 5;
-const aggregateMaps = ['complaints', 'consultationTypes', 'treatments', 'medicines', 'riskCategories', 'grades', 'incidentSeverities'];
-const aggregateTotals = ['visits', 'uniquePatients', 'incidents', 'appointments', 'medicinesDispensed', 'followUps', 'screenedPatients', 'completeImmunizationPatients'];
+const aggregateMaps = ['complaints', 'consultationTypes', 'treatments', 'medicines', 'medications', 'supplies', 'unclassifiedItems', 'screeningVisionFindings', 'screeningHearingFindings', 'riskCategories', 'grades', 'incidentSeverities'];
+const aggregateTotals = ['visits', 'uniquePatients', 'incidents', 'appointments', 'medicinesDispensed', 'medicationUnitsDispensed', 'supplyUnitsDispensed', 'unclassifiedUnitsDispensed', 'followUps', 'screenedPatients', 'vaccineDueRecords'];
 
 export function suppressSmallCellAggregates(report, threshold = smallCellThreshold) {
   const suppressed = { ...report, totals: { ...report.totals }, timeSeries: { ...report.timeSeries } };
@@ -60,6 +62,9 @@ export function suppressSmallCellAggregates(report, threshold = smallCellThresho
   };
   if (visitCategoriesSuppressed || hiddenDates.size > 0) addSuppressedTotal('visits');
   if (suppressedAggregates.includes('medicines')) addSuppressedTotal('medicinesDispensed');
+  if (suppressedAggregates.includes('medications')) addSuppressedTotal('medicationUnitsDispensed');
+  if (suppressedAggregates.includes('supplies')) addSuppressedTotal('supplyUnitsDispensed');
+  if (suppressedAggregates.includes('unclassifiedItems')) addSuppressedTotal('unclassifiedUnitsDispensed');
   if (suppressedAggregates.includes('incidentSeverities')) addSuppressedTotal('incidents');
   suppressed.suppressedAggregates = suppressedAggregates;
   suppressed.suppressedTotals = suppressedTotals;
@@ -69,7 +74,16 @@ export function suppressSmallCellAggregates(report, threshold = smallCellThresho
 }
 
 export function reportForRole(report, role) {
-  return role === 'system_administrator' ? suppressSmallCellAggregates(report) : report;
+  if (role !== 'system_administrator') return report;
+  const safeReport = { ...report };
+  delete safeReport.vaccineTracking;
+  return suppressSmallCellAggregates(safeReport);
+}
+
+export function reportSnapshotForStorage(report) {
+  const aggregateSnapshot = { ...report };
+  delete aggregateSnapshot.vaccineTracking;
+  return aggregateSnapshot;
 }
 
 export function buildClinicReport(data, startDate, endDate) {
@@ -89,13 +103,17 @@ export function buildClinicReport(data, startDate, endDate) {
   const consultationTypes = {};
   const treatments = {};
   const medicines = {};
+  const medications = {};
+  const supplies = {};
+  const unclassifiedItems = {};
+  const screeningVisionFindings = {};
+  const screeningHearingFindings = {};
   const riskCategories = {};
   const grades = {};
   const incidentSeverities = {};
   const timeSeries = {};
   const uniquePatients = new Set();
   const screenedPatients = new Set(screenings.map((record) => String(record.studentId || record.patientId || record.id)));
-  const completeImmunizationPatients = new Set(immunizations.filter((record) => /complete|up to date/i.test(String(record.remarks || record.status || ''))).map((record) => String(record.studentId || record.patientId || record.id)));
   const students = new Map((data.students || []).map((student) => [String(student.id), student]));
 
   visits.forEach((visit) => {
@@ -109,10 +127,51 @@ export function buildClinicReport(data, startDate, endDate) {
     if (key) timeSeries[key] = (timeSeries[key] || 0) + 1;
   });
   incidents.forEach((incident) => increment(incidentSeverities, incident.severity || 'Not recorded'));
-  dispenseLogs.forEach((entry) => {
-    const key = entry.medicineName || entry.inventoryItemName || 'Unknown item';
-    medicines[key] = (medicines[key] || 0) + (Number(entry.quantity) || 0);
+  screenings.forEach((record) => {
+    const vision = String(record.visionFinding ?? record.vision ?? '').trim();
+    const hearing = String(record.hearingFinding ?? record.hearing ?? '').trim();
+    if (vision) increment(screeningVisionFindings, vision);
+    if (hearing) increment(screeningHearingFindings, hearing);
   });
+  let medicationUnitsDispensed = 0;
+  let supplyUnitsDispensed = 0;
+  let unclassifiedUnitsDispensed = 0;
+  dispenseLogs.forEach((entry) => {
+    const key = entry.itemName || entry.inventoryItemName || entry.medicineName || 'Unknown item';
+    const quantity = Number(entry.quantity) || 0;
+    medicines[key] = (medicines[key] || 0) + quantity;
+    if (entry.itemType === 'medication') {
+      medicationUnitsDispensed += quantity;
+      medications[key] = (medications[key] || 0) + quantity;
+    } else if (entry.itemType === 'supply') {
+      supplyUnitsDispensed += quantity;
+      supplies[key] = (supplies[key] || 0) + quantity;
+    } else {
+      unclassifiedUnitsDispensed += quantity;
+      unclassifiedItems[key] = (unclassifiedItems[key] || 0) + quantity;
+    }
+  });
+
+  const latestByStudentVaccine = latestImmunizationsByStudentVaccine(data.immunizations || []);
+  const vaccineTracking = latestByStudentVaccine
+    .filter((record) => isValidCalendarDate(record.nextDueDate))
+    .map((record) => {
+      const studentId = String(record.studentId || record.patientId || '');
+      const nextDueDate = String(record.nextDueDate || '');
+      return {
+        studentId,
+        studentName: students.get(studentId)?.name || 'Unknown student',
+        vaccineName: record.vaccineName || 'Unknown vaccine',
+        doseNumber: record.doseNumber || 'Not recorded',
+        dateAdministered: record.dateAdministered || null,
+        source: record.source || 'not_recorded',
+        ...(record.clinicName ? { clinicName: record.clinicName } : {}),
+        nextDueDate,
+        dueStatus: nextDueDate <= end ? (nextDueDate < start ? 'Overdue before period' : 'Due within period') : 'Due after period',
+      };
+    })
+    .sort((first, second) => first.nextDueDate.localeCompare(second.nextDueDate) || first.studentName.localeCompare(second.studentName));
+  const vaccineDueRecords = vaccineTracking.filter((record) => record.nextDueDate <= end).length;
 
   return {
     period: { start, end },
@@ -122,14 +181,23 @@ export function buildClinicReport(data, startDate, endDate) {
       incidents: incidents.length,
       appointments: appointments.length,
       medicinesDispensed: dispenseLogs.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0),
+      medicationUnitsDispensed,
+      supplyUnitsDispensed,
+      unclassifiedUnitsDispensed,
       followUps: visits.filter((visit) => visit.followUp).length,
       screenedPatients: screenedPatients.size,
-      completeImmunizationPatients: completeImmunizationPatients.size,
+      vaccineDueRecords,
     },
     complaints,
     consultationTypes,
     treatments,
     medicines,
+    medications,
+    supplies,
+    unclassifiedItems,
+    screeningVisionFindings,
+    screeningHearingFindings,
+    vaccineTracking,
     riskCategories,
     grades,
     incidentSeverities,

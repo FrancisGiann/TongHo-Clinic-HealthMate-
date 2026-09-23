@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { queueStatusConflict, riskPriority, sortQueueEntries, validateQueueTriage, validateVisitPayload, visitRiskInput } from './visit.js';
+import { clinicCalendarDate, queueStatusConflict, riskPriority, sortQueueEntries, validateQueueTriage, validateVisitPayload, visitRiskInput } from './visit.js';
 
 const validVisit = {
   patientId: 'student-17',
@@ -10,6 +10,11 @@ const validVisit = {
   disposition: 'Returned to class',
   painScore: 5,
 };
+
+test('visit calendar dates follow the Asia/Manila day across UTC midnight boundaries', () => {
+  assert.equal(clinicCalendarDate(new Date('2026-09-22T15:59:59.000Z')), '2026-09-22');
+  assert.equal(clinicCalendarDate(new Date('2026-09-22T16:00:00.000Z')), '2026-09-23');
+});
 
 test('visit validation normalizes valid inputs without trusting client risk metadata', () => {
   const result = validateVisitPayload({ ...validVisit, recentVisitCount: 999, riskAssessment: { category: 'high' }, followUp: true, followUpDate: '2026-09-01' }, { now: new Date('2026-08-15T00:00:00.000Z') });
@@ -33,6 +38,32 @@ test('visit validation rejects missing patient, invalid pain and unsafe dispense
   assert.ok(result.fields.patientId);
   assert.ok(result.fields.painScore);
   assert.ok(result.fields.medicineQuantity);
+});
+
+test('visit dispense validation supports multiple distinct typed items and preserves legacy medicine fields', () => {
+  const multi = validateVisitPayload({
+    ...validVisit,
+    dispensations: [{ itemId: 'supply-1', quantity: 2 }, { itemId: 'med-2', quantity: '1' }],
+  });
+  assert.equal(multi.valid, true);
+  assert.deepEqual(multi.value.dispensations, [{ itemId: 'supply-1', quantity: 2 }, { itemId: 'med-2', quantity: 1 }]);
+  assert.equal(multi.value.medicineId, null);
+
+  const legacy = validateVisitPayload({ ...validVisit, medicineId: 'med-legacy', medicineQuantity: 3 });
+  assert.equal(legacy.valid, true);
+  assert.deepEqual(legacy.value.dispensations, [{ itemId: 'med-legacy', quantity: 3 }]);
+  assert.equal(legacy.value.medicineId, 'med-legacy');
+
+  for (const dispensations of [
+    [{ itemId: 'med-1', quantity: 0 }],
+    [{ itemId: 'med-1', quantity: 101 }],
+    [{ itemId: 'med-1', quantity: 1.5 }],
+    [{ itemId: 'med-1', quantity: 1 }, { itemId: 'med-1', quantity: 2 }],
+  ]) {
+    const invalid = validateVisitPayload({ ...validVisit, dispensations });
+    assert.equal(invalid.valid, false);
+    assert.ok(invalid.fields.dispensations);
+  }
 });
 
 test('scheduled follow-up requires a real clinic date today or later and no date is stored otherwise', () => {
