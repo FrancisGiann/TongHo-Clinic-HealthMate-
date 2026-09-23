@@ -27,7 +27,13 @@ Add the PostgreSQL, SMTP, and optional AI variables from `.env.example` in hPane
 
 Configure a Hostinger mailbox or another SMTP provider. Account invitations, OTP login, and password reset require working SMTP. Test `/api/health`; it reports database and email configuration without exposing secrets.
 
-## 4. Deployment verification
+## 4. Automatic clinic reminders
+
+Automatic reminders are disabled by default. To enable them, set `CLINIC_REMINDER_SCHEDULER_ENABLED=true` only with `NODE_ENV=production`, a configured database, and working SMTP. The persistent `npm start` process runs the first sweep after `CLINIC_REMINDER_INITIAL_DELAY_MS` (30 seconds by default), then every `CLINIC_REMINDER_INTERVAL_HOURS` (24 hours by default). Development never starts the scheduler; administrators can still use the explicit manual trigger.
+
+The new-visit form requires an explicit follow-up date when follow-up is selected; the server accepts only a valid calendar date that is today or later in Asia/Manila. Legacy follow-up records without a valid `followUpDate` are skipped rather than treated as due on their visit date. Follow-up reminders include the saved date; recurring-visit review reminders are deduplicated monthly. Reminder notification keys are unique in PostgreSQL, preventing duplicate sends for the same patient and reminder across overlapping jobs or app instances. Each instance still scans and audits the sweep; SMTP failures after acceptance can have ambiguous delivery and are not automatically retried.
+
+## 5. Deployment verification
 
 1. Run migrations before starting a new schema version.
 2. Confirm `/api/health` returns `database: connected`.

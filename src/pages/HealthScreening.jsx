@@ -6,15 +6,25 @@ export default function HealthScreening({ data, setData }) {
   const [vision, setVision] = useState("20/20");
   const [search, setSearch] = useState("");
   const [saved, setSaved] = useState(false);
-  const save = () => { if (!studentId) return; setData(addRecord(data, "screenings", { studentId: Number(studentId), schoolYear: data.settings.schoolYear, date: new Date().toISOString().slice(0, 10), vision, hearing: "Pass", bmi: "Normal", nutritionalStatus: "Normal" })); setSaved(true); setStudentId(""); };
-  
+  const [error, setError] = useState("");
+  const save = () => {
+    if (!studentId) {
+      setError("Please select a student.");
+      return;
+    }
+    setError("");
+    setData(addRecord(data, "screenings", { studentId: Number(studentId), schoolYear: data.settings.schoolYear, date: new Date().toISOString().slice(0, 10), vision, hearing: "Pass", bmi: "Normal", nutritionalStatus: "Normal" }));
+    setSaved(true);
+    setStudentId("");
+  };
+
   // Calculate screening statistics
   const totalStudents = data.students.length;
   const screenedStudents = (data.screenings || []).length;
-  const screeningPercentage = totalStudents > 0 
-    ? Math.round((screenedStudents / totalStudents) * 100) 
+  const screeningPercentage = totalStudents > 0
+    ? Math.round((screenedStudents / totalStudents) * 100)
     : 0;
-  
+
   // Calculate students needing follow-up (example: vision not 20/20)
   const needsFollowUp = (data.screenings || []).filter(
     s => s.vision !== '20/20' || s.hearing !== 'Pass' || s.bmi !== 'Normal'
@@ -24,7 +34,7 @@ export default function HealthScreening({ data, setData }) {
   const roster = data.students.filter((student) =>
     `${student.name} ${student.studentId}`.toLowerCase().includes(search.toLowerCase()),
   );
-  
+
   return (
     <div className="form-page">
       <div className="page-intro">
@@ -57,7 +67,7 @@ export default function HealthScreening({ data, setData }) {
           <small>{totalStudents > screenedStudents ? 'Schedule next batch' : 'All students screened'}</small>
         </div>
       </section>
-      <section id="screening-form" className="panel inline-entry-form"><div className="panel-heading"><div><p className="section-kicker">Quick entry</p><h3>Record screening</h3></div></div><div className="two-fields"><label>Student<select value={studentId} onChange={(event) => setStudentId(event.target.value)}><option value="">Select student...</option>{data.students.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label><label>Vision result<select value={vision} onChange={(event) => setVision(event.target.value)}><option>20/20</option><option>20/30</option><option>20/40</option><option>Needs referral</option></select></label></div><button className="primary-btn" onClick={save}><ClipboardCheck size={16}/> Save screening</button>{saved && <p className="success-message">Screening saved successfully.</p>}</section>
+      <section id="screening-form" className="panel inline-entry-form"><div className="panel-heading"><div><p className="section-kicker">Quick entry</p><h3>Record screening</h3></div></div><div className="two-fields"><label>Student<select value={studentId} onChange={(event) => setStudentId(event.target.value)}><option value="">Select student...</option>{data.students.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label><label>Vision result<select value={vision} onChange={(event) => setVision(event.target.value)}><option>20/20</option><option>20/30</option><option>20/40</option><option>Needs referral</option></select></label></div><button className="primary-btn" onClick={save}><ClipboardCheck size={16}/> Save screening</button>{error && <div className="error-banner" role="alert">{error}</div>}{saved && <p className="success-message">Screening saved successfully.</p>}</section>
       <section className="panel table-panel">
         <div className="panel-heading">
           <div>

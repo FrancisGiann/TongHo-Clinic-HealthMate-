@@ -96,6 +96,9 @@ export async function getUsersForAdmin() {
       ...user,
       mfaEnabled: Boolean(user.mfa_enabled),
       schoolId: user.school_id || '',
+      prcLicenseNumber: user.prc_license_number || '',
+      schoolName: user.school_name || '',
+      contactNumber: user.contact_number || '',
       lastLogin: user.last_login_at || null,
     }));
   } catch {

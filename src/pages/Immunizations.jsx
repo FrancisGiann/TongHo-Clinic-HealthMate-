@@ -2,23 +2,33 @@ import { Syringe, ArrowUpRight } from "lucide-react";
 import { useState } from "react";
 import { addRecord } from "../db/database";
 export default function Immunizations({ data, setData }) {
-  const [studentId, setStudentId] = useState(""); 
-  const [vaccineName, setVaccineName] = useState("MMR"); 
+  const [studentId, setStudentId] = useState("");
+  const [vaccineName, setVaccineName] = useState("MMR");
   const [saved, setSaved] = useState(false);
   const [statusFilter, setStatusFilter] = useState("All statuses");
-  const save = () => { if (!studentId) return; setData(addRecord(data, "immunizations", { studentId: Number(studentId), vaccineName, doseNumber: "1st", dateAdministered: new Date().toISOString().slice(0, 10), nextDueDate: "", remarks: "Recorded in clinic" })); setSaved(true); setStudentId(""); };
-  
+  const [error, setError] = useState("");
+  const save = () => {
+    if (!studentId) {
+      setError("Please select a student.");
+      return;
+    }
+    setError("");
+    setData(addRecord(data, "immunizations", { studentId: Number(studentId), vaccineName, doseNumber: "1st", dateAdministered: new Date().toISOString().slice(0, 10), nextDueDate: "", remarks: "Recorded in clinic" }));
+    setSaved(true);
+    setStudentId("");
+  };
+
   // Calculate immunization statistics
   const totalStudents = data.students.length;
   const fullyImmunized = new Set((data.immunizations || []).filter(
-    imm => imm.remarks?.toLowerCase().includes('complete') || 
+    imm => imm.remarks?.toLowerCase().includes('complete') ||
            imm.remarks?.toLowerCase().includes('up to date') ||
            imm.nextDueDate === ''
   ).map((record) => record.studentId)).size;
-  const immunizationRate = totalStudents > 0 
-    ? Math.round((fullyImmunized / totalStudents) * 100) 
+  const immunizationRate = totalStudents > 0
+    ? Math.round((fullyImmunized / totalStudents) * 100)
     : 0;
-  
+
   // Calculate due this month (students with nextDueDate in current month)
   const currentMonth = new Date().getMonth();
   const dueThisMonth = (data.immunizations || []).filter(imm => {
@@ -26,7 +36,7 @@ export default function Immunizations({ data, setData }) {
     const dueDate = new Date(imm.nextDueDate);
     return dueDate.getMonth() === currentMonth && dueDate.getFullYear() === new Date().getFullYear();
   }).length;
-  
+
   // Calculate overdue (nextDueDate in the past)
   const today = new Date();
   const overdue = (data.immunizations || []).filter(imm => {
@@ -37,7 +47,7 @@ export default function Immunizations({ data, setData }) {
   (data.immunizations || []).forEach((record) => latestImmunization.set(record.studentId, record));
   const compliance = (student) => latestImmunization.has(student.id) ? "Fully immunized" : "Not started";
   const roster = data.students.filter((student) => statusFilter === "All statuses" || compliance(student) === statusFilter);
-  
+
   return (
     <div className="form-page">
       <div className="page-intro">
@@ -50,7 +60,7 @@ export default function Immunizations({ data, setData }) {
           <Syringe size={16} /> Record vaccination
         </button>
       </div>
-      <section id="immunization-form" className="panel inline-entry-form"><div className="panel-heading"><div><p className="section-kicker">Quick entry</p><h3>Record vaccination</h3></div></div><div className="two-fields"><label>Student<select value={studentId} onChange={(event) => setStudentId(event.target.value)}><option value="">Select student...</option>{data.students.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label><label>Vaccine<select value={vaccineName} onChange={(event) => setVaccineName(event.target.value)}>{["BCG", "Hepatitis B", "DPT", "OPV", "Measles", "MMR", "Td", "HPV"].map((vaccine) => <option key={vaccine}>{vaccine}</option>)}</select></label></div><button className="primary-btn" onClick={save}><Syringe size={16}/> Save vaccination</button>{saved && <p className="success-message">Vaccination recorded successfully.</p>}</section>
+      <section id="immunization-form" className="panel inline-entry-form"><div className="panel-heading"><div><p className="section-kicker">Quick entry</p><h3>Record vaccination</h3></div></div><div className="two-fields"><label>Student<select value={studentId} onChange={(event) => setStudentId(event.target.value)}><option value="">Select student...</option>{data.students.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label><label>Vaccine<select value={vaccineName} onChange={(event) => setVaccineName(event.target.value)}>{["BCG", "Hepatitis B", "DPT", "OPV", "Measles", "MMR", "Td", "HPV"].map((vaccine) => <option key={vaccine}>{vaccine}</option>)}</select></label></div><button className="primary-btn" onClick={save}><Syringe size={16}/> Save vaccination</button>{error && <div className="error-banner" role="alert">{error}</div>}{saved && <p className="success-message">Vaccination recorded successfully.</p>}</section>
       <div className="immunization-cards">
         <div>
           <span>Fully immunized</span>

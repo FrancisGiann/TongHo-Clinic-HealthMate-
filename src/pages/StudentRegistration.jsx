@@ -247,6 +247,13 @@ export default function StudentRegistration({ data, setData }) {
       return;
     }
 
+    // Check for duplicate student ID
+    if (data.students?.some((student) => student.studentId === form.studentId.trim())) {
+      setErrors(["A student with this ID is already registered."]);
+      setLoading(false);
+      return;
+    }
+
     try {
       const recordToSave = { ...form };
       setData(addRecord(data, "students", recordToSave));
@@ -307,11 +314,11 @@ export default function StudentRegistration({ data, setData }) {
 
       {/* Registration Form */}
       <form className="panel form-panel registration-form" onSubmit={save}>
-        
+
         {/* Student & Family Information */}
         <div className="form-section">
           <h3 className="section-title">Student & Family Information</h3>
-          
+
           <div className="two-fields">
             <label>
               Student ID <span className="required">*</span>
@@ -431,7 +438,7 @@ export default function StudentRegistration({ data, setData }) {
         {/* School Information */}
         <div className="form-section">
           <h3 className="section-title">School Information</h3>
-          
+
           <div className="three-fields">
             <label>
               Grade Level <span className="required">*</span>
@@ -473,7 +480,7 @@ export default function StudentRegistration({ data, setData }) {
         {/* Health & Medical Information */}
         <div className="form-section">
           <h3 className="section-title">Medical & Health Information</h3>
-          
+
           <div className="two-fields">
             <label>
               Blood Type <span className="required">*</span>
@@ -545,7 +552,7 @@ export default function StudentRegistration({ data, setData }) {
             <h3 className="section-title">Medical & Illness History</h3>
             <span className="toggle-icon">+</span>
           </summary>
-          
+
           <div className="section-content">
             <div className="health-subsection">
               <h4>Past Illnesses</h4>
@@ -872,7 +879,7 @@ export default function StudentRegistration({ data, setData }) {
             <h3 className="section-title">Behavioral & Concerns</h3>
             <span className="toggle-icon">+</span>
           </summary>
-          
+
           <div className="section-content">
             <label className="checkbox-label">
               <input

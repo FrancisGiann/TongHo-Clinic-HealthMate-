@@ -14,6 +14,9 @@ const collectionMap = {
 };
 
 const staffRoles = new Set(['school_nurse', 'system_administrator']);
+const clinicalCollections = new Set(['visits', 'screenings', 'immunizations', 'incidents', 'appointments', 'queue', 'dispenseLogs', 'stockAdjustments']);
+const adminRestrictedCollections = new Set([...clinicalCollections, 'inventory']);
+const snapshotWritableCollections = ['screenings', 'immunizations', 'incidents'];
 
 function recordId(record) {
   const value = record?.id;
@@ -29,6 +32,46 @@ function patientId(record) {
   return String(record?.patientId ?? record?.studentId ?? record?.student?.id ?? '');
 }
 
+function timestampValue(value) {
+  return value instanceof Date ? value.toISOString() : value || null;
+}
+
+export function studentRecordForUser(record, user) {
+  if (user.role !== 'system_administrator') return { ...record, id: record.id };
+  const fields = ['studentId', 'name', 'gradeLevel', 'section', 'adviser', 'birthDate', 'gender', 'guardianName', 'guardianPhone', 'guardianRelation'];
+  return { id: record.id, ...Object.fromEntries(fields.filter((field) => record[field] !== undefined).map((field) => [field, record[field]])) };
+}
+
+export function hydrateAuthoritativeRecord(key, row) {
+  const record = row.data || {};
+  if (key === 'queue') {
+    return {
+      ...record,
+      id: row.id,
+      patientId: row.patient_id,
+      status: row.status,
+      priority: row.priority,
+      arrivalAt: timestampValue(row.created_at),
+      updatedAt: timestampValue(row.updated_at),
+    };
+  }
+  if (key === 'appointments') {
+    return {
+      ...record,
+      id: row.id,
+      patientId: row.patient_id,
+      startsAt: timestampValue(row.starts_at),
+      status: row.status,
+      createdAt: timestampValue(row.created_at),
+      updatedAt: timestampValue(row.updated_at),
+    };
+  }
+  if (key === 'inventory') {
+    return { ...record, id: row.id, quantity: row.quantity };
+  }
+  return record;
+}
+
 async function accessiblePatientIds(user, client = { query }) {
   if (staffRoles.has(user.role)) return null;
   if (user.role === 'student') {
@@ -39,22 +82,41 @@ async function accessiblePatientIds(user, client = { query }) {
   return result.rows.map((row) => String(row.id));
 }
 
-export async function loadClinicData(user) {
+export async function loadClinicData(user, { includeClinical = false } = {}) {
   const settingsResult = await query('SELECT data,version FROM clinic_settings WHERE id=1');
   const ids = await accessiblePatientIds(user);
   const staff = staffRoles.has(user.role);
   const patientResult = ids === null
-    ? await query('SELECT data FROM patients ORDER BY created_at')
-    : await query('SELECT data FROM patients WHERE id=ANY($1::text[]) ORDER BY created_at', [ids]);
+    ? await query('SELECT id,data FROM patients ORDER BY created_at')
+    : await query('SELECT id,data FROM patients WHERE id=ANY($1::text[]) ORDER BY created_at', [ids]);
   const data = {
     schemaVersion: settingsResult.rows[0]?.version || 1,
     settings: settingsResult.rows[0]?.data || {},
-    students: patientResult.rows.map((row) => row.data),
+    students: patientResult.rows.map((row) => studentRecordForUser({ ...row.data, id: row.id }, user)),
   };
 
   for (const [key, config] of Object.entries(collectionMap)) {
+    if (user.role === 'system_administrator' && adminRestrictedCollections.has(key) && !includeClinical) {
+      data[key] = [];
+      continue;
+    }
     if (config.staffOnly && !staff) {
       data[key] = [];
+      continue;
+    }
+    if (key === 'queue' || key === 'appointments') {
+      const table = key === 'queue' ? 'queue_entries' : 'appointments';
+      const columns = key === 'queue'
+        ? 'id,patient_id,status,priority,created_at,updated_at,data'
+        : 'id,patient_id,status,starts_at,created_at,updated_at,data';
+      const scope = ids !== null ? ' WHERE patient_id=ANY($1::text[])' : '';
+      const result = await query(`SELECT ${columns} FROM ${table}${scope} ORDER BY created_at`, ids !== null ? [ids] : []);
+      data[key] = result.rows.map((row) => hydrateAuthoritativeRecord(key, row));
+      continue;
+    }
+    if (key === 'inventory') {
+      const result = await query('SELECT id,quantity,data FROM inventory_items ORDER BY created_at');
+      data[key] = result.rows.map((row) => hydrateAuthoritativeRecord(key, row));
       continue;
     }
     const result = config.patient && ids !== null
@@ -65,33 +127,89 @@ export async function loadClinicData(user) {
   return data;
 }
 
-async function removeMissing(client, table, ids) {
-  if (!ids.length) return client.query(`DELETE FROM ${table}`);
-  return client.query(`DELETE FROM ${table} WHERE NOT (id=ANY($1::text[]))`, [ids]);
+export function validateClinicDataPayload(nextData, expectedVersion, { internal = false } = {}) {
+  if (!nextData || typeof nextData !== 'object' || !Array.isArray(nextData.students) || !nextData.settings || typeof nextData.settings !== 'object') {
+    return { valid: false, message: 'Clinic data must include settings and a student collection.' };
+  }
+  if (!Number.isInteger(Number(expectedVersion)) || Number(expectedVersion) < 1) {
+    return { valid: false, message: 'A current clinic data version is required.' };
+  }
+  const requiredCollections = internal ? Object.keys(collectionMap) : snapshotWritableCollections;
+  const missing = requiredCollections.filter((key) => !Array.isArray(nextData[key]));
+  if (missing.length) return { valid: false, message: `Clinic data is missing required collections: ${missing.join(', ')}.` };
+  return { valid: true };
 }
 
-async function syncPatients(client, records) {
-  const ids = [];
+export async function advanceClinicDataVersion(client) {
+  const result = await client.query(
+    'UPDATE clinic_settings SET version=version+1,updated_at=NOW() WHERE id=1 RETURNING version',
+  );
+  if (!result.rowCount) throw new Error('Clinic data version row is missing.');
+  return result.rows[0].version;
+}
+
+export async function validateVersionAfterAdvance(client, expectedVersion) {
+  const expected = Number(expectedVersion);
+  if (!Number.isInteger(expected) || expected < 1) {
+    const error = new Error('A current clinic data version is required. Reload and try again.');
+    error.status = 400;
+    error.code = 'VERSION_REQUIRED';
+    throw error;
+  }
+  const result = await client.query('SELECT version FROM clinic_settings WHERE id=1');
+  const currentVersion = Number(result.rows[0]?.version || 1);
+  if (currentVersion !== expected + 1) {
+    const error = new Error('Clinic data changed in another session. Reload and try again.');
+    error.status = 409;
+    error.code = 'VERSION_CONFLICT';
+    throw error;
+  }
+  return currentVersion;
+}
+
+export function clinicDataTransaction(work) {
+  return transaction(async (client) => {
+    // Acquire the snapshot lock before any table or advisory locks; rollback also rolls back this version bump.
+    await advanceClinicDataVersion(client);
+    return work(client);
+  });
+}
+
+function validateSaveClinicData(nextData, user, expectedVersion, internal) {
+  if (!internal && user.role !== 'school_nurse') {
+    const error = new Error('Only school nurses can update clinical data.');
+    error.status = 403;
+    throw error;
+  }
+  const validation = validateClinicDataPayload(nextData, expectedVersion, { internal });
+  if (!validation.valid) {
+    const error = new Error(validation.message);
+    error.status = 400;
+    throw error;
+  }
+}
+
+export async function syncPatients(client, records) {
   for (const record of records) {
     const id = recordId(record);
-    ids.push(id);
     await client.query(
-      `INSERT INTO patients(id,patient_type,data) VALUES($1,$2,$3::jsonb)
-       ON CONFLICT(id) DO UPDATE SET patient_type=EXCLUDED.patient_type,data=EXCLUDED.data,updated_at=NOW()`,
+      `INSERT INTO patients(id,patient_type,data) VALUES($1,$2,$3::jsonb - 'consentStatus' - 'consentDueDate')
+       ON CONFLICT(id) DO UPDATE SET patient_type=EXCLUDED.patient_type,
+         data=(EXCLUDED.data - 'consentStatus' - 'consentDueDate') || jsonb_strip_nulls(jsonb_build_object(
+           'consentStatus',patients.data->'consentStatus',
+           'consentDueDate',patients.data->'consentDueDate'
+         )),updated_at=NOW()`,
       [id, record.patientType === 'faculty' ? 'faculty' : 'student', JSON.stringify(record)],
     );
   }
-  await removeMissing(client, 'patients', ids);
 }
 
-async function syncCollection(client, key, records, actorId) {
-  const { table } = collectionMap[key];
-  const ids = [];
+export async function syncCollection(client, key, records, actorId) {
   for (const record of records) {
     const id = recordId(record);
-    ids.push(id);
     const json = JSON.stringify(record);
     if (['visits', 'screenings', 'immunizations', 'incidents'].includes(key)) {
+      const table = collectionMap[key].table;
       const pid = patientId(record);
       if (!pid) throw new Error(`${key} record ${id} is missing a patient id.`);
       await client.query(
@@ -101,6 +219,7 @@ async function syncCollection(client, key, records, actorId) {
       );
     } else if (key === 'appointments') {
       const pid = patientId(record);
+      if (!pid) throw new Error(`appointments record ${id} is missing a patient id.`);
       const startsAt = record.startsAt || (record.date ? `${record.date} ${record.time || '00:00'}` : null);
       await client.query(
         `INSERT INTO appointments(id,patient_id,starts_at,status,data,created_by) VALUES($1,$2,$3,$4,$5::jsonb,$6)
@@ -109,6 +228,7 @@ async function syncCollection(client, key, records, actorId) {
       );
     } else if (key === 'queue') {
       const pid = patientId(record);
+      if (!pid) throw new Error(`queue record ${id} is missing a patient id.`);
       await client.query(
         `INSERT INTO queue_entries(id,patient_id,status,priority,data) VALUES($1,$2,$3,$4,$5::jsonb)
          ON CONFLICT(id) DO UPDATE SET patient_id=EXCLUDED.patient_id,status=EXCLUDED.status,priority=EXCLUDED.priority,data=EXCLUDED.data,updated_at=NOW()`,
@@ -136,41 +256,35 @@ async function syncCollection(client, key, records, actorId) {
       );
     }
   }
-  await removeMissing(client, table, ids);
 }
 
-export async function saveClinicData(nextData, user, expectedVersion) {
-  if (!staffRoles.has(user.role)) {
-    const error = new Error('Only clinic staff can update clinical data.');
-    error.status = 403;
+export async function saveClinicDataInTransaction(client, nextData, user, expectedVersion, { internal = false } = {}) {
+  validateSaveClinicData(nextData, user, expectedVersion, internal);
+  const locked = await client.query('SELECT data, version FROM clinic_settings WHERE id=1 FOR UPDATE');
+  const currentVersion = locked.rows[0]?.version || 1;
+  const currentSettings = locked.rows[0]?.data || {};
+  if (expectedVersion && Number(expectedVersion) !== currentVersion) {
+    const error = new Error('Clinic data changed in another session. Reload and try again.');
+    error.status = 409;
+    error.code = 'VERSION_CONFLICT';
     throw error;
   }
-  if (!nextData || typeof nextData !== 'object' || !Array.isArray(nextData.students)) {
-    const error = new Error('Invalid clinic data payload.');
-    error.status = 400;
-    throw error;
-  }
-  return transaction(async (client) => {
-    const locked = await client.query('SELECT data, version FROM clinic_settings WHERE id=1 FOR UPDATE');
-    const currentVersion = locked.rows[0]?.version || 1;
-    const currentSettings = locked.rows[0]?.data || {};
-    if (expectedVersion && Number(expectedVersion) !== currentVersion) {
-      const error = new Error('Clinic data changed in another session. Reload and try again.');
-      error.status = 409;
-      error.code = 'VERSION_CONFLICT';
-      throw error;
-    }
-    await syncPatients(client, nextData.students);
-    for (const key of Object.keys(collectionMap)) await syncCollection(client, key, Array.isArray(nextData[key]) ? nextData[key] : [], user.id);
-    
-    const settingsToSave = user.role === 'system_administrator' ? (nextData.settings || {}) : currentSettings;
-    
-    const result = await client.query(
-      'UPDATE clinic_settings SET data=$1::jsonb,version=version+1,updated_at=NOW() WHERE id=1 RETURNING version',
-      [JSON.stringify(settingsToSave)],
-    );
-    return result.rows[0].version;
-  });
+  await syncPatients(client, nextData.students);
+  const writableCollections = internal ? Object.keys(collectionMap) : snapshotWritableCollections;
+  for (const key of writableCollections) await syncCollection(client, key, nextData[key], user.id);
+
+  const settingsToSave = currentSettings;
+
+  const result = await client.query(
+    'UPDATE clinic_settings SET data=$1::jsonb,version=version+1,updated_at=NOW() WHERE id=1 RETURNING version',
+    [JSON.stringify(settingsToSave)],
+  );
+  return result.rows[0].version;
+}
+
+export async function saveClinicData(nextData, user, expectedVersion, options = {}) {
+  validateSaveClinicData(nextData, user, expectedVersion, options.internal || false);
+  return transaction((client) => saveClinicDataInTransaction(client, nextData, user, expectedVersion, options));
 }
 
 export async function linkUserToPatient(userId, patientId, role, relationship = 'Guardian') {

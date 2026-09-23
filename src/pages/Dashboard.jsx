@@ -5,6 +5,7 @@ import {
   ClipboardCheck,
   Clock3,
   Heart,
+  LockKeyhole,
   MoreHorizontal,
   Package,
   Plus,
@@ -17,7 +18,8 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import TodaysSummary from "../components/TodaysSummary";
 import RecentPatientsWidget from "../components/RecentPatientsWidget";
-import { getPendingRegistrations, getUsersForAdmin } from "../utils/auth";
+import { getUsersForAdmin } from "../utils/auth";
+import { formatManilaDateTime } from "../utils/dateTime";
 
 const day = new Intl.DateTimeFormat("en-US", {
   weekday: "long",
@@ -45,8 +47,10 @@ export default function Dashboard({ data, user }) {
 
   useEffect(() => {
     if (isAdmin) {
-      getPendingRegistrations().then(setPendingInvites);
-      getUsersForAdmin().then(setAdminUsers);
+      getUsersForAdmin().then((accounts) => {
+        setAdminUsers(accounts);
+        setPendingInvites(accounts.filter((account) => account.status === 'invited'));
+      });
     }
   }, [isAdmin]);
 
@@ -77,28 +81,30 @@ export default function Dashboard({ data, user }) {
   const clinicAlerts = [];
   
   // Low stock alerts
-  const lowStockItems = data.inventory.filter(item => item.quantity <= item.reorderLevel);
-  lowStockItems.slice(0, 2).forEach(item => {
-    clinicAlerts.push({
-      icon: Package,
-      title: `${item.name} stock is low`,
-      text: `${item.quantity} ${item.unit} remaining · reorder at ${item.reorderLevel}`,
-      tone: "rose",
-      onClick: () => navigate('/inventory'),
+  if (!isAdmin) {
+    const lowStockItems = data.inventory.filter(item => item.quantity <= item.reorderLevel);
+    lowStockItems.slice(0, 2).forEach(item => {
+      clinicAlerts.push({
+        icon: Package,
+        title: `${item.name} stock is low`,
+        text: `${item.quantity} ${item.unit} remaining · reorder at ${item.reorderLevel}`,
+        tone: "rose",
+        onClick: () => navigate('/inventory'),
+      });
     });
-  });
+  }
   
   // Upcoming appointments/follow-ups
   const upcomingAppointments = (data.appointments || []).filter(
     apt => apt.status === 'Scheduled'
   ).slice(0, 2);
   upcomingAppointments.forEach(apt => {
-    const student = getStudent(apt.studentId);
+    const student = getStudent(apt.studentId || apt.patientId);
     if (student.name) {
       clinicAlerts.push({
         icon: CalendarDays,
         title: `${student.name} has a follow-up`,
-        text: `${apt.reason} · ${apt.date} at ${apt.time}`,
+        text: `${apt.reason} · ${formatManilaDateTime(apt.startsAt || apt.date, apt.time)}`,
         tone: "amber",
         onClick: () => navigate('/new-visit'),
       });
@@ -154,8 +160,8 @@ export default function Dashboard({ data, user }) {
           <p style={{ color: 'var(--muted)', maxWidth: '400px', margin: '0 auto 20px', lineHeight: '1.5', fontSize: '13px' }}>
             Your school clinic management system is ready. Let's start by adding your first student to the records.
           </p>
-          <button className="full-btn" onClick={() => navigate('/students')} style={{ width: 'auto', display: 'inline-flex', padding: '11px 24px' }}>
-            <Plus size={17} /> Add a Student
+          <button className="full-btn" onClick={() => navigate(isAdmin ? '/settings?tab=data' : '/students')} style={{ width: 'auto', display: 'inline-flex', padding: '11px 24px' }}>
+            <Plus size={17} /> {isAdmin ? 'Import student roster' : 'Add a Student'}
           </button>
         </div>
         <div className="dashboard-footer">
@@ -214,7 +220,7 @@ export default function Dashboard({ data, user }) {
           </p>
           <h2>{greeting}, {userFirstName}</h2>
           <p className="welcome-copy">
-            {isAdmin ? "Monitor care delivery, records, stock, and staff access from one place." : "A clear view of today’s clinic activity."}
+            {isAdmin ? "Manage accounts, clinic settings, reports, and system activity from one place." : "A clear view of today’s clinic activity."}
           </p>
         </div>
         <button className="date-pill" onClick={() => navigate('/reports')}>
@@ -237,7 +243,8 @@ export default function Dashboard({ data, user }) {
           <Stat icon={Users} label="Total Users" value={adminUsers.length} change="System accounts" tone="teal" />
           <Stat icon={Users} label="Active Users" value={adminUsers.filter(u => u.status === 'active').length} change="Active accounts" tone="teal" />
           <Stat icon={Users} label="Pending Invites" value={pendingInvites.length} change="Awaiting approval" tone="amber" />
-          <Stat icon={Package} label="Low stock alerts" value={lowStock} change={lowStock > 0 ? "Review now" : "All stocked"} tone="rose" />
+          <Stat icon={ShieldAlert} label="Nurse accounts" value={adminUsers.filter(u => u.role === 'school_nurse').length} change="Clinical access holders" tone="violet" />
+          <Stat icon={LockKeyhole} label="Restricted accounts" value={adminUsers.filter(u => u.status !== 'active').length} change="Review access status" tone="rose" />
         </section>
       ) : (
         <section className="stats-grid">
@@ -289,12 +296,12 @@ export default function Dashboard({ data, user }) {
         <section className="panel timeline-panel">
           <div className="panel-heading">
             <div>
-              <p className="section-kicker">{isAdmin ? "Inventory" : "Live activity"}</p>
+              <p className="section-kicker">{isAdmin ? "System access" : "Live activity"}</p>
               <h3>
-                {isAdmin ? "Inventory overview" : "Today’s visits"} {!isAdmin && <span className="live-dot" />}
+                {isAdmin ? "User access overview" : "Today’s visits"} {!isAdmin && <span className="live-dot" />}
               </h3>
             </div>
-            <button className="text-btn" onClick={() => navigate(isAdmin ? '/inventory' : '/new-visit')}>
+            <button className="text-btn" onClick={() => navigate(isAdmin ? '/settings?tab=users' : '/new-visit')}>
               View all <ArrowUpRight size={15} />
             </button>
           </div>
@@ -303,27 +310,25 @@ export default function Dashboard({ data, user }) {
               <table className="admin-table" style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                    <th style={{ padding: '8px 0', color: 'var(--text-2)', fontWeight: 500 }}>Item</th>
-                    <th style={{ padding: '8px 0', color: 'var(--text-2)', fontWeight: 500 }}>Category</th>
-                    <th style={{ padding: '8px 0', color: 'var(--text-2)', fontWeight: 500 }}>Stock</th>
+                    <th style={{ padding: '8px 0', color: 'var(--text-2)', fontWeight: 500 }}>Account</th>
+                    <th style={{ padding: '8px 0', color: 'var(--text-2)', fontWeight: 500 }}>Role</th>
+                    <th style={{ padding: '8px 0', color: 'var(--text-2)', fontWeight: 500 }}>Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.inventory.slice(0, 5).map(item => (
-                    <tr key={item.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
-                      <td style={{ padding: '12px 0' }}><strong>{item.name}</strong></td>
-                      <td style={{ padding: '12px 0', color: 'var(--text-2)' }}>{item.category}</td>
-                      <td style={{ padding: '12px 0' }}>
-                        <span className={`status-chip ${item.quantity <= item.reorderLevel ? 'warn' : 'success'}`}>
-                          {item.quantity} {item.unit}
-                        </span>
+                  {adminUsers.slice(0, 5).map(account => (
+                    <tr key={account.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                      <td style={{ padding: '12px 0' }}><strong>{account.name}</strong><small>{account.email}</small></td>
+                      <td style={{ padding: '12px 0', color: 'var(--text-2)' }}>{account.role === 'school_nurse' ? 'School nurse' : account.role === 'system_administrator' ? 'Administrator' : account.role}</td>
+                      <td style={{ padding: '12px 0' }}><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <button className="full-btn" onClick={() => navigate('/inventory')} style={{ marginTop: '1rem' }}>
-                Review all stock
+              {!adminUsers.length && <div className="empty-state">No system accounts are available yet.</div>}
+              <button className="full-btn" onClick={() => navigate('/settings?tab=users')} style={{ marginTop: '1rem' }}>
+                Review user access
               </button>
             </div>
           ) : todayVisits.length > 0 ? (
@@ -380,10 +385,10 @@ export default function Dashboard({ data, user }) {
           <div className="action-list">
             <Action
               icon={Plus}
-              label={isAdmin ? "Register student" : "New visit"}
-              text={isAdmin ? "Add a new health record" : "Log a student visit"}
+              label={isAdmin ? "Manage settings" : "New visit"}
+              text={isAdmin ? "Update school and clinic details" : "Log a student visit"}
               tone="teal"
-              onClick={() => navigate(isAdmin ? '/students/new' : '/new-visit')}
+              onClick={() => navigate(isAdmin ? '/settings?tab=school' : '/new-visit')}
             />
             <Action
               icon={Siren}
@@ -400,11 +405,11 @@ export default function Dashboard({ data, user }) {
               onClick={() => navigate(isAdmin ? '/reports' : '/health-screening')}
             />
             <Action
-              icon={Package}
-              label={isAdmin ? "Review inventory" : "Check inventory"}
-              text={isAdmin ? "Check stock and expiry dates" : "Review clinic supplies"}
+              icon={isAdmin ? LockKeyhole : Package}
+              label={isAdmin ? "Security controls" : "Check inventory"}
+              text={isAdmin ? "Review MFA and account protection" : "Review clinic supplies"}
               tone="violet"
-              onClick={() => navigate('/inventory')}
+              onClick={() => navigate(isAdmin ? '/settings?tab=security' : '/inventory')}
             />
           </div>
           
@@ -502,7 +507,7 @@ export default function Dashboard({ data, user }) {
                         <strong>{count}</strong>
                       </div>
                       <div style={{ background: 'var(--surface-2)', height: '6px', borderRadius: '3px', overflow: 'hidden' }}>
-                        <div style={{ background: 'var(--brand-teal)', height: '100%', width: `${(count / maxComplaintCount) * 100}%`, borderRadius: '3px', transition: 'width 0.5s ease-out' }} />
+                        <div style={{ background: 'var(--brand-teal)', height: '100%', width: `${(count / maxComplaintCount) * 100}%`, borderRadius: '3px' }} />
                       </div>
                     </div>
                   ))}

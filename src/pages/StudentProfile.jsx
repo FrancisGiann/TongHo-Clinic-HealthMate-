@@ -10,17 +10,27 @@ import {
   X,
 } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { saveData } from "../db/database";
+import { api } from "../utils/api";
 
-export default function StudentProfile({ data, setData }) {
+export default function StudentProfile({ data, setData, reload }) {
   const { studentId } = useParams();
   const navigate = useNavigate();
   const student = data.students.find((item) => item.id === Number(studentId));
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
+  const [consentStatus, setConsentStatus] = useState(student?.consentStatus || 'unrecorded');
+  const [consentDueDate, setConsentDueDate] = useState(student?.consentDueDate || '');
+  const [consentSaving, setConsentSaving] = useState(false);
+  const [consentMessage, setConsentMessage] = useState('');
   const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    setConsentStatus(student?.consentStatus || 'unrecorded');
+    setConsentDueDate(student?.consentDueDate || '');
+  }, [student?.id, student?.consentStatus, student?.consentDueDate]);
 
   if (!student)
     return (
@@ -92,12 +102,23 @@ export default function StudentProfile({ data, setData }) {
       alert("Student ID is required");
       return false;
     }
+
+    // Check for duplicate student ID among OTHER students
+    const duplicateId = data.students?.some(
+      (s) => s.id !== student.id && s.studentId === studentForm.studentId.trim()
+    );
+
+    if (duplicateId) {
+      alert("A student with this ID is already registered.");
+      return false;
+    }
+
     return true;
   };
 
   const save = (event) => {
     event.preventDefault();
-    
+
     // Validate form
     if (!validateStudentForm(form)) {
       return;
@@ -118,6 +139,24 @@ export default function StudentProfile({ data, setData }) {
     } catch (error) {
       console.error("Failed to save student record:", error);
       alert("Failed to save changes. Please try again.");
+    }
+  };
+
+  const saveConsentTracking = async (event) => {
+    event.preventDefault();
+    setConsentSaving(true);
+    setConsentMessage('');
+    try {
+      await api.patch(`/api/patients/${encodeURIComponent(student.id)}/consent`, {
+        consentStatus,
+        consentDueDate: consentStatus === 'pending' ? consentDueDate : null,
+      });
+      await reload();
+      setConsentMessage('Consent tracking saved.');
+    } catch (error) {
+      setConsentMessage(error.message || 'Consent tracking could not be saved.');
+    } finally {
+      setConsentSaving(false);
     }
   };
   return (
@@ -232,6 +271,34 @@ export default function StudentProfile({ data, setData }) {
               <small>Visit history will appear here once you log a visit for this student.</small>
             </div>
           )}
+        </section>
+        <section className="panel consent-tracking-panel">
+          <div className="panel-heading">
+            <div>
+              <h3>Consent tracking</h3>
+              <p className="field-hint">Status and reminder date only—signed forms are not uploaded or stored here.</p>
+            </div>
+          </div>
+          <form className="consent-tracking-form" onSubmit={saveConsentTracking}>
+            <label>Consent status
+              <select value={consentStatus} onChange={(event) => setConsentStatus(event.target.value)}>
+                <option value="unrecorded">Not recorded</option>
+                <option value="pending">Pending</option>
+                <option value="received">Received</option>
+                <option value="not_required">Not required</option>
+              </select>
+            </label>
+            {consentStatus === 'pending' && <label>Due date
+              <input type="date" value={consentDueDate} onChange={(event) => setConsentDueDate(event.target.value)} required />
+            </label>}
+            <p className="field-hint consent-reminder-note">Linked accounts receive one reminder when a pending date is due within 30 days or overdue.</p>
+            <div className="form-actions">
+              <button type="submit" className="primary-btn" disabled={consentSaving || (consentStatus === 'pending' && !consentDueDate)}>
+                {consentSaving ? 'Saving…' : 'Save consent status'}
+              </button>
+              {consentMessage && <span className="field-hint" role="status">{consentMessage}</span>}
+            </div>
+          </form>
         </section>
       </div>
       {form && (

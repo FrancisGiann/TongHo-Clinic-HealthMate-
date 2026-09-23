@@ -79,9 +79,9 @@ const createInitialData = () => ({
 function normalizeData(value) {
   const source = value && typeof value === 'object' ? value : {};
   const normalized = {
-    ...createInitialData(),
+    schemaVersion: 1,
     ...source,
-    settings: { ...seed.settings, ...(source.settings || {}) },
+    settings: { ...(source.settings || {}) },
   };
 
   collectionKeys.forEach((key) => {

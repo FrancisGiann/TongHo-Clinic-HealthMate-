@@ -45,9 +45,15 @@ export default function App() {
 
   if (authLoading) return <div className="loading-screen">Checking secure session…</div>;
   if (!user) return <><Login onLogin={setUser} />{authError && <div className="connection-banner" role="alert">{authError}</div>}</>;
-  if (clinic.loading) return <div className="loading-screen">Loading clinic records…</div>;
+  if (!['student', 'guardian', 'school_nurse', 'system_administrator'].includes(user.role)) return <div className="loading-screen"><p role="alert">This account has no supported HealthMate+ role.</p><button className="primary-btn" onClick={handleLogout}>Sign out</button></div>;
+  if (!clinic.ready) return (
+    <div className="loading-screen">
+      {clinic.error ? <><p role="alert">Authorized clinic records could not be loaded. {clinic.error}</p><button className="primary-btn" onClick={clinic.reload}>Try again</button></> : 'Loading authorized clinic records…'}
+    </div>
+  );
 
-  const staff = ['school_nurse', 'system_administrator'].includes(user.role);
+  const isNurse = user.role === 'school_nurse';
+  const isAdmin = user.role === 'system_administrator';
   const layout = (
     <MainLayout
       settings={data.settings}
@@ -64,21 +70,27 @@ export default function App() {
       {(clinic.error || clinic.saving) && <div className={`connection-banner ${clinic.error ? 'error' : ''}`} role="status">{clinic.error || 'Saving changes…'}</div>}
       <Routes>
         <Route element={layout}>
-          {staff ? (
+          {isNurse ? (
             <>
               <Route path="/" element={<Dashboard data={data} user={user} />} />
               <Route path="/students" element={<Students data={data} setData={setData} />} />
               <Route path="/students/new" element={<StudentRegistration data={data} setData={setData} />} />
-              <Route path="/students/:studentId" element={<StudentProfile data={data} setData={setData} />} />
-              <Route path="/new-visit" element={<NewVisit data={data} setData={setData} />} />
+              <Route path="/students/:studentId" element={<StudentProfile data={data} setData={setData} reload={clinic.reload} />} />
+              <Route path="/new-visit" element={<NewVisit data={data} user={user} reload={clinic.reload} />} />
               <Route path="/health-screening" element={<HealthScreening data={data} setData={setData} />} />
               <Route path="/immunizations" element={<Immunizations data={data} setData={setData} />} />
               <Route path="/incident-reports" element={<IncidentReport data={data} setData={setData} />} />
-              <Route path="/queue" element={<Queue data={data} setData={setData} />} />
-              <Route path="/inventory" element={<Inventory data={data} setData={setData} />} />
-              <Route path="/reports" element={<Reports data={data} />} />
+              <Route path="/queue" element={<Queue data={data} reload={clinic.reload} />} />
+              <Route path="/inventory" element={<Inventory data={data} applyServerData={clinic.applyServerData} reload={clinic.reload} saving={clinic.saving} />} />
+              <Route path="/reports" element={<Reports data={data} user={user} />} />
               <Route path="/appointments" element={<Appointments data={data} user={user} reload={clinic.reload} />} />
-              <Route path="/settings" element={<Settings data={data} setData={setData} user={user} />} />
+              <Route path="/settings" element={<Settings data={data} user={user} reload={clinic.reload} />} />
+            </>
+          ) : isAdmin ? (
+            <>
+              <Route path="/" element={<Dashboard data={data} user={user} />} />
+              <Route path="/reports" element={<Reports data={data} user={user} />} />
+              <Route path="/settings" element={<Settings data={data} user={user} reload={clinic.reload} />} />
             </>
           ) : (
             <>

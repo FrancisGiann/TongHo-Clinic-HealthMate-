@@ -25,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../utils/api";
+import { formatManilaDateTime } from "../utils/dateTime";
 
 const nurseNav = [
   { to: "/", label: "Dashboard", icon: Home },
@@ -41,9 +42,6 @@ const nurseNav = [
 
 const adminNav = [
   { to: "/", label: "Dashboard", icon: Home },
-  { to: "/students", label: "Students", icon: Users },
-  { to: "/incident-reports", label: "Incident Reports", icon: ShieldAlert },
-  { to: "/inventory", label: "Inventory", icon: Package },
   { to: "/reports", label: "Reports", icon: FileBarChart },
 ];
 
@@ -88,11 +86,11 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
       apt => apt.status === 'Scheduled'
     ).slice(0, 2);
     upcomingAppointments.forEach(apt => {
-      const student = data.students.find(s => s.id === apt.studentId);
+      const student = data.students.find(s => String(s.id) === String(apt.studentId || apt.patientId));
       if (student) {
         clinicAlerts.push({
           title: `${student.name} has a follow-up`,
-          text: `${apt.reason || 'Appointment'} · ${apt.date}`
+          text: `${apt.reason || 'Appointment'} · ${formatManilaDateTime(apt.startsAt || apt.date, apt.time)}`
         });
       }
     });
@@ -121,6 +119,14 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
   useEffect(() => {
     api.get('/api/notifications').then((result) => setServerNotifications(result.notifications || [])).catch(() => {});
   }, [user?.id]);
+  const markNotificationRead = async (id) => {
+    try {
+      await api.patch(`/api/notifications/${encodeURIComponent(id)}/read`, {});
+      setServerNotifications((current) => current.map((item) => item.id === id ? { ...item, status: 'read' } : item));
+    } catch {
+      // Keep the notification visible when the server could not confirm the update.
+    }
+  };
   return (
     <div className={`app-shell ${dark ? "dark" : ""}`}>
       <aside
@@ -171,7 +177,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
           ))}
         </nav>
         <div className="sidebar-bottom">
-          {isAdmin && (
+          {isStaff && (
             <NavLink to="/settings" className="protected-link" title="Settings - requires authentication">
               <Settings size={18} />
               <span>Settings</span>
@@ -202,15 +208,10 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
           >
             <Menu size={21} />
           </button>
-          <div>
-            <p className="eyebrow">
-              {settings.schoolName} / {settings.schoolYear}
-            </p>
-            <h1>{title}</h1>
-          </div>
+          <div><h1>{title}</h1></div>
           <div className="top-actions">
             <span className="live-clock">{clock.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-            {isStaff && (
+            {user?.role === 'school_nurse' && (
               <button
                 className="icon-btn"
                 onClick={() => navigate("/students")}
@@ -247,9 +248,10 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
                 </div>
                 {clinicAlerts.length > 0 ? (
                   clinicAlerts.map((alert, index) => (
-                    <div key={index}>
+                    <div key={alert.id || `local-${index}`}>
                       <b>{alert.title}</b>
                       <span>{alert.text}</span>
+                      {alert.id && <button type="button" className="table-action" onClick={() => markNotificationRead(alert.id)}>Mark read</button>}
                     </div>
                   ))
                 ) : (

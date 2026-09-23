@@ -1,15 +1,12 @@
 import { useRef, useState, useEffect } from "react";
 import { useLocation } from "react-router-dom";
 import { Check, Database, Download, Lock, RotateCcw, Save, ShieldCheck, Upload, X, UserCog, Bell, SlidersHorizontal, FileBarChart, Building2, KeyRound } from "lucide-react";
-import { resetData, saveData } from "../db/database";
-import { downloadCsv } from "../utils/csv";
+import { downloadCsv, parseCsv, validateStudentImport } from "../utils/csv";
+import { api } from "../utils/api";
 import {
-  approveNurseAccount,
   getAuditLogs,
-  getPendingRegistrations,
   getUsersForAdmin,
   createManagedUser,
-  rejectNurseAccount,
   resendInvitation,
   updateUserStatus,
   updateMfaPreference,
@@ -27,6 +24,8 @@ const auditEventMeta = {
   ACCOUNT_APPROVED: { label: "Staff account approved", tone: "positive", group: "People" },
   ACCOUNT_REJECTED: { label: "Staff account rejected", tone: "critical", group: "People" },
   NURSE_ACCOUNT_CREATED: { label: "Staff account created", tone: "security", group: "People" },
+  NOTIFICATION_BROADCAST_STARTED: { label: "Clinic notice started", tone: "neutral", group: "Notifications" },
+  NOTIFICATION_BROADCAST_COMPLETED: { label: "Clinic notice completed", tone: "positive", group: "Notifications" },
 };
 
 const getAuditMeta = (event) => auditEventMeta[event] || { label: event.replaceAll('_', ' '), tone: 'neutral', group: 'System' };
@@ -36,7 +35,23 @@ const getAuditSubject = (entry) => {
   return details.username || details.email || details.approvedBy || 'System activity';
 };
 
-export default function Settings({ data, setData, user }) {
+const broadcastRoleOptions = [
+  ['school_nurse', 'Nurses'],
+  ['student', 'Students'],
+  ['guardian', 'Guardians'],
+  ['system_administrator', 'Administrators'],
+];
+const newBroadcastRequestId = () => {
+  const cryptoApi = window.crypto;
+  if (cryptoApi.randomUUID) return cryptoApi.randomUUID();
+  const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
+
+export default function Settings({ data, user, reload }) {
   const location = useLocation();
   const [form, setForm] = useState(data.settings);
   const [saved, setSaved] = useState(false);
@@ -49,33 +64,48 @@ export default function Settings({ data, setData, user }) {
   const [auditLogs, setAuditLogs] = useState([]);
   const [mfaEnabled, setMfaEnabled] = useState(Boolean(user?.mfaEnabled));
   const [reviewMessage, setReviewMessage] = useState("");
+  const [reminderMessage, setReminderMessage] = useState("");
+  const [broadcastForm, setBroadcastForm] = useState({ type: 'announcement', subject: '', body: '', roles: [] });
+  const [broadcastRequestId, setBroadcastRequestId] = useState(newBroadcastRequestId);
+  const [broadcastConfirmed, setBroadcastConfirmed] = useState(false);
+  const [broadcastBusy, setBroadcastBusy] = useState(false);
+  const [broadcastMessage, setBroadcastMessage] = useState(null);
+  const [riskRules, setRiskRules] = useState([]);
+  const [demonstrationRules, setDemonstrationRules] = useState(null);
+  const [riskRuleForm, setRiskRuleForm] = useState({ version: '', name: '', rules: '' });
+  const [riskMessage, setRiskMessage] = useState('');
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPasswordValue, setNewPasswordValue] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const isAdmin = user?.role === 'system_administrator';
   const [activeTab, setActiveTab] = useState(isAdmin ? 'account' : 'account');
   const [users, setUsers] = useState([]);
-  const [notifications, setNotifications] = useState({ lowStock: true, visits: true, immunizations: true, email: false, sms: false, inApp: true });
-  const [securitySettings, setSecuritySettings] = useState({ retention: '5 years', passwordReset: false, sessionTimeout: '30 minutes' });
   const [showUserForm, setShowUserForm] = useState(false);
   const [newUser, setNewUser] = useState({ name: '', email: '', role: 'Nurse', patientId: '', relationship: 'Guardian' });
-  const fileInput = useRef(null);
   const studentFileInput = useRef(null);
 
   useEffect(() => {
     setMfaEnabled(Boolean(user?.mfaEnabled));
-    Promise.all([getPendingRegistrations(), getAuditLogs(), getUsersForAdmin()]).then(([pending, logs, accounts]) => {
-      setPendingRegistrations(pending);
+    api.get('/api/risk/rules').then((ruleData) => {
+      setRiskRules(ruleData.rules || []);
+      setDemonstrationRules(ruleData.demonstrationRules || null);
+    }).catch(() => {
+      setRiskRules([]);
+      setDemonstrationRules(null);
+    });
+    if (!isAdmin) return;
+    Promise.all([getAuditLogs(), getUsersForAdmin()]).then(([logs, accounts]) => {
+      setPendingRegistrations(accounts.filter((account) => account.status === 'invited' && account.role === 'school_nurse'));
       setAuditLogs(logs.slice(0, 8));
       setUsers(accounts);
     });
-  }, [user]);
+  }, [user, isAdmin]);
 
   useEffect(() => {
     const requestedTab = new URLSearchParams(location.search).get('tab');
     const allowedTabs = user?.role === 'system_administrator'
-      ? ['account', 'users', 'school', 'inventory', 'data', 'notifications', 'security']
-      : ['account', 'schedule', 'notifications', 'inventory', 'reports'];
+      ? ['account', 'users', 'school', 'data', 'notifications', 'security', 'risk']
+      : ['account', 'schedule', 'notifications', 'inventory', 'reports', 'risk'];
     if (requestedTab && allowedTabs.includes(requestedTab)) setActiveTab(requestedTab);
   }, [location.search, user?.role]);
 
@@ -141,44 +171,50 @@ export default function Settings({ data, setData, user }) {
   };
 
   const refreshReviewData = async () => {
-    const [pending, logs, accounts] = await Promise.all([getPendingRegistrations(), getAuditLogs(), getUsersForAdmin()]);
-    setPendingRegistrations(pending);
+    const [logs, accounts] = await Promise.all([getAuditLogs(), getUsersForAdmin()]);
+    setPendingRegistrations(accounts.filter((account) => account.status === 'invited' && account.role === 'school_nurse'));
     setAuditLogs(logs.slice(0, 8));
     setUsers(accounts);
   };
 
   const handleApprove = async (username) => {
-    const result = await approveNurseAccount(username, user?.username || 'system_administrator');
-    setReviewMessage(result.message);
+    const account = users.find((entry) => entry.username === username);
+    const result = account ? await updateUserStatus(account.id, 'active') : { success: false, error: 'Invitation not found.' };
+    setReviewMessage(result.success ? `${account.name} is now active.` : result.error);
     await refreshReviewData();
   };
 
   const handleReject = async (username) => {
-    const result = await rejectNurseAccount(username, 'Admin rejected the submitted nurse account.', user?.username || 'system_administrator');
-    setReviewMessage(result.message);
+    const account = users.find((entry) => entry.username === username);
+    const result = account ? await updateUserStatus(account.id, 'deactivated') : { success: false, error: 'Invitation not found.' };
+    setReviewMessage(result.success ? `${account.name} was deactivated.` : result.error);
     await refreshReviewData();
   };
   const update = (event) =>
     setForm({ ...form, [event.target.name]: event.target.value });
-  const save = () => {
-    setData(saveData({ ...data, settings: form }));
-    setSaved(true);
+  const save = async () => {
+    setReviewMessage('');
+    try {
+      const result = await api.patch('/api/admin/settings/clinic', form);
+      setForm(result.settings);
+      await reload?.();
+      setSaved(true);
+    } catch (error) {
+      setReviewMessage(error.message);
+    }
     setTimeout(() => setSaved(false), 1800);
   };
-  const restore = () => {
-    if (window.confirm("Restore the sample data?")) setData(resetData());
-  };
-  const exportWorkspaceBackup = () => {
-    const backup = {
+  const exportOversightSnapshot = () => {
+    const snapshot = {
       ...data,
       exportedAt: new Date().toISOString(),
-      backupVersion: 1,
+      snapshotVersion: 1,
     };
-    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `healthmate-workspace-${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `healthmate-oversight-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -189,36 +225,18 @@ export default function Settings({ data, setData, user }) {
     });
     downloadCsv(`healthmate-records-${new Date().toISOString().slice(0, 10)}.csv`, rows);
   };
-  const importData = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    try {
-      const imported = JSON.parse(await file.text());
-      if (!imported.settings || !Array.isArray(imported.students) || !Array.isArray(imported.visits)) throw new Error("Invalid backup");
-      setData(saveData(imported));
-      setForm(imported.settings);
-      window.alert("Backup restored successfully.");
-    } catch {
-      window.alert("This file is not a valid HealthMate+ backup.");
-    } finally {
-      event.target.value = "";
-    }
-  };
+  const downloadStudentTemplate = () => downloadCsv('healthmate-student-template.csv', [{ 'Student ID': 'PTHI-2026-0001', Name: 'Fictional Student', Grade: 'Grade 4', Section: 'Rizal', Guardian: 'Fictional Guardian', Phone: '' }]);
   const importStudentsCsv = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
-      const lines = (await file.text()).split(/\r?\n/).filter(Boolean);
-      const headers = lines.shift().split(',').map((header) => header.trim().toLowerCase());
-      const importedStudents = lines.map((line, index) => {
-        const values = line.split(',').map((value) => value.trim());
-        const row = Object.fromEntries(headers.map((header, column) => [header, values[column] || '']));
-        return { id: Date.now() + index, studentId: row['student id'] || row.studentid || `IMPORTED-${Date.now()}-${index}`, name: row.name || row['full name'] || '', gradeLevel: row.grade || row.gradelevel || '', section: row.section || '', guardianName: row.guardian || row.guardianname || '', guardianPhone: row.phone || row.guardianphone || '', allergies: row.allergies || '', conditions: row.conditions || '', medications: row.medications || '' };
-      }).filter((student) => student.name);
-      setData(saveData({ ...data, students: [...data.students, ...importedStudents] }));
-      setReviewMessage(`${importedStudents.length} student records imported.`);
-    } catch {
-      setReviewMessage('Unable to read that CSV file. Check the header row and try again.');
+      const imported = validateStudentImport(parseCsv(await file.text()), data.students);
+      if (!imported.valid) throw new Error(imported.errors.join(' '));
+      const result = await api.post('/api/import/students', { rows: imported.records });
+      setReviewMessage(`${result.imported} student records imported.`);
+      await reload?.();
+    } catch (error) {
+      setReviewMessage(error.message || 'Unable to read that CSV file. Check the header row and try again.');
     } finally {
       event.target.value = '';
     }
@@ -229,10 +247,10 @@ export default function Settings({ data, setData, user }) {
       ['account', 'Account settings', UserCog],
       ['users', 'User management', UserCog],
       ['school', 'School & clinic', Building2],
-      ['inventory', 'Inventory settings', SlidersHorizontal],
       ['data', 'Data & reports', FileBarChart],
       ['notifications', 'Notifications', Bell],
       ['security', 'Privacy & security', KeyRound],
+      ['risk', 'Risk rules', ShieldCheck],
     ]
     : [
       ['account', 'My account', UserCog],
@@ -240,9 +258,77 @@ export default function Settings({ data, setData, user }) {
       ['notifications', 'My notifications', Bell],
       ['inventory', 'Inventory requests', SlidersHorizontal],
       ['reports', 'My reports', FileBarChart],
+      ['risk', 'Risk rules', ShieldCheck],
     ];
 
-  const toggleNotification = (key) => setNotifications((current) => ({ ...current, [key]: !current[key] }));
+  const triggerReminders = async () => {
+    setReminderMessage('');
+    try {
+      const result = await api.post('/api/admin/notifications/reminders', {});
+      setReminderMessage(`${result.triggered} due item${result.triggered === 1 ? '' : 's'} processed, including ${result.consents || 0} consent reminder${result.consents === 1 ? '' : 's'}; ${result.notificationFailures || 0} delivery failures. Repeated runs are deduplicated.`);
+    } catch (error) {
+      setReminderMessage(error.message);
+    }
+  };
+  const updateBroadcastForm = (updates) => {
+    setBroadcastForm((current) => ({ ...current, ...updates }));
+    setBroadcastRequestId(newBroadcastRequestId());
+    setBroadcastConfirmed(false);
+    setBroadcastMessage(null);
+  };
+  const toggleBroadcastRole = (role) => {
+    const roles = broadcastForm.roles.includes(role)
+      ? broadcastForm.roles.filter((selected) => selected !== role)
+      : [...broadcastForm.roles, role];
+    updateBroadcastForm({ roles });
+  };
+  const submitBroadcast = async (event) => {
+    event.preventDefault();
+    if (broadcastBusy || !broadcastConfirmed || !broadcastForm.subject.trim() || !broadcastForm.body.trim() || !broadcastForm.roles.length) return;
+    setBroadcastBusy(true);
+    setBroadcastMessage(null);
+    try {
+      const result = await api.post('/api/admin/notifications/broadcast', { ...broadcastForm, requestId: broadcastRequestId });
+      setBroadcastMessage({
+        tone: result.emailFailures ? 'error' : 'success',
+        text: `Recorded for ${result.recipientCount} active account${result.recipientCount === 1 ? '' : 's'}: ${result.inAppCreated} in-app notices, ${result.emailsSent} emails sent, ${result.emailFailures} email failures, ${result.duplicateEmailNoticesSkipped} duplicate email attempts skipped.${result.emailFailures ? ' No automatic email retry was attempted; check delivery configuration and follow up through the approved clinic channel.' : ''}`,
+      });
+      setBroadcastForm({ type: 'announcement', subject: '', body: '', roles: [] });
+      setBroadcastRequestId(newBroadcastRequestId());
+      setBroadcastConfirmed(false);
+    } catch (error) {
+      setBroadcastMessage({ tone: 'error', text: `${error.message} The same submission key is retained to prevent duplicate delivery; review the result before creating a new notice.` });
+    } finally {
+      setBroadcastBusy(false);
+    }
+  };
+  const loadRiskRules = async () => {
+    const result = await api.get('/api/risk/rules');
+    setRiskRules(result.rules || []);
+    setDemonstrationRules(result.demonstrationRules || null);
+  };
+  const createRiskRule = async (event) => {
+    event.preventDefault();
+    setRiskMessage('');
+    try {
+      await api.post('/api/risk/rules', { version: Number(riskRuleForm.version), name: riskRuleForm.name, rules: JSON.parse(riskRuleForm.rules) });
+      setRiskMessage('Draft risk rules saved. A licensed school nurse must approve the version before use.');
+      setRiskRuleForm({ version: '', name: '', rules: '' });
+      await loadRiskRules();
+    } catch (error) {
+      setRiskMessage(error.message.includes('JSON') ? 'Rules must be valid JSON.' : error.message);
+    }
+  };
+  const approveRiskRule = async (rule) => {
+    setRiskMessage('');
+    try {
+      await api.patch(`/api/risk/rules/${encodeURIComponent(rule.id)}/approve`, {});
+      setRiskMessage(`Version ${rule.version} approved by your nurse account.`);
+      await loadRiskRules();
+    } catch (error) {
+      setRiskMessage(error.message);
+    }
+  };
   const handleCreateUser = async (event) => {
     event.preventDefault();
     const result = await createManagedUser(newUser);
@@ -350,16 +436,18 @@ export default function Settings({ data, setData, user }) {
           </button>
         ))}
       </nav>
+      {reviewMessage && <p className="success-message" role="status">{reviewMessage}</p>}
 
       {activeTab === 'account' && (
         <section className="panel settings-tab-panel">
           <div className="settings-panel-heading"><div><p className="section-kicker">{isAdmin ? 'Administrator identity' : 'Staff identity'}</p><h3>{isAdmin ? 'Account settings' : 'My account'}</h3></div><span className="settings-badge">{isAdmin ? 'Full access' : 'Clinic staff'}</span></div>
           <div className="profile-settings-grid">
-            <div className="profile-photo-placeholder">{(user?.name || 'User').split(' ').map((part) => part[0]).join('').slice(0, 2)}<button type="button" className="secondary-btn">Upload photo</button></div>
+            <div className="profile-photo-placeholder">{(user?.name || 'User').split(' ').map((part) => part[0]).join('').slice(0, 2)}<button type="button" className="secondary-btn" disabled>Profile photo unavailable</button></div>
             <div className="two-fields">
-              <label>Full name<input defaultValue={user?.name || ''} disabled={!isAdmin} /></label>
-              <label>Email<input type="email" defaultValue={user?.email || ''} disabled={!isAdmin} /></label>
-              <label>{isAdmin ? 'Contact number' : 'Email / contact number'}<input defaultValue={user?.contactNumber || ''} /></label>
+              <label>Full name<input defaultValue={user?.name || ''} disabled /></label>
+              <label>Email<input type="email" defaultValue={user?.email || ''} disabled /></label>
+              <label>Contact number<input defaultValue={user?.contactNumber || ''} disabled /></label>
+              <p className="disabled-note">Profile identity fields are read-only here; use administrator account management for changes.</p>
               <div className="disabled-note"><KeyRound size={14} /> Password changes are protected and require confirmation.</div>
             </div>
           </div>
@@ -379,27 +467,84 @@ export default function Settings({ data, setData, user }) {
       )}
 
       {activeTab === 'notifications' && (
-        <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><p className="section-kicker">Preferences</p><h3>{isAdmin ? 'Notifications' : 'My notifications'}</h3></div></div><div className="preference-list">{(isAdmin ? [['lowStock','Low stock alerts','Notify when supplies reach their reorder threshold'],['visits','New visit logged alerts','Keep administrators aware of clinic activity'],['immunizations','Immunization due reminders','Surface upcoming and overdue doses']] : [['lowStock','Assigned student allergy flags','Highlight allergy alerts for your assigned students'],['visits','Follow-up reminders','Remind me about scheduled follow-ups']]).map(([key,label,description]) => <div className="preference-row" key={key}><div><strong>{label}</strong><span>{description}</span></div><button type="button" className={`setting-switch ${notifications[key] ? 'on' : ''}`} onClick={() => toggleNotification(key)}><span />{notifications[key] ? 'On' : 'Off'}</button></div>)}</div><h4 className="preference-title">Notification methods</h4><div className="method-grid">{[['email','Email'],['inApp','In-app']].map(([key,label]) => <label key={key}><input type="checkbox" checked={notifications[key]} onChange={() => toggleNotification(key)} /> {label}</label>)}</div></section>
-      )}
-
-      {activeTab === 'security' && isAdmin && (
-        <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><p className="section-kicker">Governance</p><h3>Privacy & security</h3></div></div><div className="preference-list"><label>Data retention period<select value={securitySettings.retention} onChange={(event) => setSecuritySettings({ ...securitySettings, retention: event.target.value })}><option>1 year</option><option>3 years</option><option>5 years</option><option>Indefinite</option></select></label><div className="preference-row"><div><strong>Require password reset</strong><span>Ask users to change passwords on a regular schedule.</span></div><button type="button" className={`setting-switch ${securitySettings.passwordReset ? 'on' : ''}`} onClick={() => setSecuritySettings({ ...securitySettings, passwordReset: !securitySettings.passwordReset })}><span />{securitySettings.passwordReset ? 'On' : 'Off'}</button></div><label>Session timeout<select value={securitySettings.sessionTimeout} onChange={(event) => setSecuritySettings({ ...securitySettings, sessionTimeout: event.target.value })}><option>15 minutes</option><option>30 minutes</option><option>1 hour</option><option>4 hours</option></select></label></div></section>
-      )}
-
-      {activeTab === 'inventory' && isAdmin && (
-        <section className="panel settings-tab-panel">
-          <div className="settings-panel-heading"><div><p className="section-kicker">Stock governance</p><h3>Inventory settings</h3></div><button className="primary-btn"><SlidersHorizontal size={15} /> Add category</button></div>
-          <p className="tab-description">Set reorder points and review stock requests before they affect clinic readiness.</p>
-          <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Item</th><th>Category</th><th>Current stock</th><th>Low-stock threshold</th><th>Action</th></tr></thead><tbody>{data.inventory.map((item) => <tr key={item.id}><td><strong>{item.name}</strong><small>Expires {item.expiryDate || 'not recorded'}</small></td><td>{item.category}</td><td>{item.quantity} {item.unit}</td><td><input className="table-number-input" type="number" min="0" defaultValue={item.reorderLevel} onBlur={(event) => { const next = data.inventory.map((entry) => entry.id === item.id ? { ...entry, reorderLevel: Number(event.target.value) } : entry); setData(saveData({ ...data, inventory: next })); }} /></td><td><button type="button" className="table-action" onClick={() => window.alert('Restock request workflow is ready for staff submissions.')}>Review request</button></td></tr>)}</tbody></table></div>
+        <section className="panel settings-tab-panel narrow-panel">
+          <div className="settings-panel-heading">
+            <div>
+              <h3>{isAdmin ? 'Clinic communications' : 'My notifications'}</h3>
+              <p className="field-hint">{isAdmin ? 'Send an announcement or notice to selected active account roles.' : 'Delivery is controlled by saved clinical events and account links.'}</p>
+            </div>
+          </div>
+          <p className="disabled-note">Visit, appointment, follow-up, immunization, recurring-visit, and dated pending-consent reminders are deduplicated by the server. Signed consent forms are not stored here.</p>
+          {isAdmin && <>
+            <div className="form-actions notification-reminder-action">
+              <button type="button" className="secondary-btn" onClick={triggerReminders}><Bell size={15} /> Run due reminders</button>
+              <span className="field-hint">Manual trigger for review; automatic reminders use the same rules.</span>
+            </div>
+            {reminderMessage && <p className="success-message" role="status">{reminderMessage}</p>}
+            <form className="inline-entry-form broadcast-form" onSubmit={submitBroadcast}>
+              <h4>Compose a clinic notice</h4>
+              <div className="two-fields">
+                <label>Notice type
+                  <select value={broadcastForm.type} onChange={(event) => updateBroadcastForm({ type: event.target.value })}>
+                    <option value="announcement">Announcement</option>
+                    <option value="emergency">Emergency notice</option>
+                    <option value="consent_reminder">Consent reminder</option>
+                  </select>
+                </label>
+                <label>Subject
+                  <input value={broadcastForm.subject} maxLength={160} onChange={(event) => updateBroadcastForm({ subject: event.target.value })} required />
+                </label>
+              </div>
+              <label>Message
+                <textarea value={broadcastForm.body} maxLength={2000} rows={4} onChange={(event) => updateBroadcastForm({ body: event.target.value })} required />
+              </label>
+              <fieldset className="broadcast-role-fieldset">
+                <legend>Send to active accounts</legend>
+                <div className="checkbox-group">
+                  {broadcastRoleOptions.map(([role, label]) => (
+                    <label className="checkbox-label" key={role}>
+                      <input type="checkbox" checked={broadcastForm.roles.includes(role)} onChange={() => toggleBroadcastRole(role)} />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <label className="checkbox-label broadcast-confirmation">
+                <input type="checkbox" checked={broadcastConfirmed} onChange={(event) => setBroadcastConfirmed(event.target.checked)} />
+                I’ve checked the message and selected recipient roles.
+              </label>
+              <div className="form-actions">
+                <button className="primary-btn" type="submit" disabled={broadcastBusy || !broadcastForm.subject.trim() || !broadcastForm.body.trim() || !broadcastForm.roles.length || !broadcastConfirmed}>
+                  <Bell size={15} /> {broadcastBusy ? 'Sending…' : 'Send clinic notice'}
+                </button>
+              </div>
+              {broadcastMessage && <p className={broadcastMessage.tone === 'error' ? 'broadcast-error' : 'success-message'} role={broadcastMessage.tone === 'error' ? 'alert' : 'status'}>{broadcastMessage.text}</p>}
+            </form>
+          </>}
         </section>
       )}
 
+      {activeTab === 'risk' && (
+        <section className="panel settings-tab-panel">
+          <div className="settings-panel-heading"><div><h3>Risk rules</h3><p className="field-hint">Versioned decision support only. No rule is a diagnosis or a substitute for nurse judgment.</p></div></div>
+          {demonstrationRules && <div className="disabled-note">Demonstration rules are visible for testing and remain unapproved. They are used only when no clinician-approved version exists.</div>}
+          {isAdmin && <form className="inline-entry-form" onSubmit={createRiskRule}><div className="two-fields"><label>Version<input type="number" min="1" value={riskRuleForm.version} onChange={(event) => setRiskRuleForm({ ...riskRuleForm, version: event.target.value })} required /></label><label>Rule set name<input value={riskRuleForm.name} maxLength="120" onChange={(event) => setRiskRuleForm({ ...riskRuleForm, name: event.target.value })} required /></label></div><label>Rules JSON<textarea value={riskRuleForm.rules} onChange={(event) => setRiskRuleForm({ ...riskRuleForm, rules: event.target.value })} placeholder='{"requiredFields":["painScore"],"thresholds":{"moderate":3,"high":7},"indicators":[]}' required /></label><button className="primary-btn">Save draft rule set</button></form>}
+          {riskMessage && <p className="success-message" role="status">{riskMessage}</p>}
+          <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Version</th><th>Name</th><th>Status</th><th>Approver</th><th>Action</th></tr></thead><tbody>{riskRules.map((rule) => <tr key={rule.id}><td>{rule.version}</td><td>{rule.name}</td><td><span className={`status-chip ${rule.status === 'clinician_approved' ? 'success' : 'warn'}`}>{rule.status === 'clinician_approved' ? 'Clinician approved' : 'Draft — not in use'}</span></td><td>{rule.approved_by || 'None'}</td><td>{user?.role === 'school_nurse' && rule.status === 'draft' ? <button type="button" className="table-action" onClick={() => approveRiskRule(rule)} disabled={!user.prcLicenseNumber}>Approve</button> : '—'}</td></tr>)}</tbody></table></div>
+          {user?.role === 'school_nurse' && !user.prcLicenseNumber && <p className="disabled-note">A PRC license number must be recorded on your account before approval is available.</p>}
+        </section>
+      )}
+
+      {activeTab === 'security' && isAdmin && (
+        <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><h3>Privacy & security</h3><p className="field-hint">Security policy is enforced by the server.</p></div></div><p className="disabled-note">Sessions, password policy, MFA, authorization, audit retention, and database backups are managed through server configuration and the administrator account. Local-only switches are intentionally unavailable because they would not persist.</p></section>
+      )}
+
       {activeTab === 'data' && isAdmin && (
-        <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><p className="section-kicker">Records & continuity</p><h3>Data & reports</h3></div></div><div className="data-command-grid"><button className="data-action" onClick={exportData}><Download size={17} /><span><strong>Export all data</strong><small>Spreadsheet-safe CSV record export</small></span></button><button className="data-action" onClick={exportWorkspaceBackup}><Database size={17} /><span><strong>Backup now</strong><small>Download a complete JSON workspace backup</small></span></button><button className="data-action" onClick={() => studentFileInput.current?.click()}><Upload size={17} /><span><strong>Import students</strong><small>Upload a CSV roster</small></span></button></div><input ref={studentFileInput} type="file" accept="text/csv,.csv" hidden onChange={importStudentsCsv} /><p className="disabled-note">Schedule encrypted database backups with the hosting provider; local exports are manual.</p><h4 className="preference-title">System activity logs</h4><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>User</th><th>Action</th><th>Timestamp</th></tr></thead><tbody>{auditLogs.map((entry, index) => <tr key={`${entry.timestamp}-${index}`}><td>{getAuditSubject(entry)}</td><td>{getAuditMeta(entry.event).label}</td><td>{new Date(entry.timestamp).toLocaleString()}</td></tr>)}</tbody></table></div></section>
+        <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><h3>Data & reports</h3><p className="field-hint">Imports are for fictional student rosters and are checked before saving.</p></div></div><div className="data-command-grid"><button className="data-action" onClick={exportData}><Download size={17} /><span><strong>Export oversight data</strong><small>Spreadsheet-safe settings and roster export</small></span></button><button className="data-action" onClick={exportOversightSnapshot}><Database size={17} /><span><strong>Download oversight snapshot</strong><small>JSON of the settings and roster visible to this account</small></span></button><button className="data-action" onClick={downloadStudentTemplate}><FileBarChart size={17} /><span><strong>Download student template</strong><small>Quoted-field-safe CSV headings</small></span></button><button className="data-action" onClick={() => studentFileInput.current?.click()}><Upload size={17} /><span><strong>Import students</strong><small>Validate required IDs and duplicates</small></span></button></div><input ref={studentFileInput} type="file" accept="text/csv,.csv" hidden onChange={importStudentsCsv} /><p className="disabled-note">Clinical visit imports are restricted to school nurses. Schedule encrypted database backups with the hosting provider; local exports are manual.</p><h4 className="preference-title">System activity logs</h4><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>User</th><th>Action</th><th>Timestamp</th></tr></thead><tbody>{auditLogs.map((entry, index) => <tr key={`${entry.timestamp}-${index}`}><td>{getAuditSubject(entry)}</td><td>{getAuditMeta(entry.event).label}</td><td>{new Date(entry.timestamp).toLocaleString()}</td></tr>)}</tbody></table></div></section>
       )}
 
       {activeTab === 'schedule' && !isAdmin && <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><p className="section-kicker">Assigned by administrator</p><h3>My schedule</h3></div><span className="settings-badge">View only</span></div><div className="schedule-card"><strong>Monday – Friday</strong><span>08:00 AM – 04:00 PM</span><small>Assigned grade / section: All clinic referrals</small></div></section>}
-      {activeTab === 'reports' && !isAdmin && <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><p className="section-kicker">Personal reporting</p><h3>My reports</h3></div></div><div className="two-fields"><label>From<input type="date" /></label><label>To<input type="date" /></label></div><button className="primary-btn"><FileBarChart size={15} /> Export my logged visits</button><p className="disabled-note">Your report includes only visits logged by your account.</p></section>}
+      {activeTab === 'reports' && !isAdmin && <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><h3>My reports</h3><p className="field-hint">Staff reports are available from the Reports page.</p></div></div><p className="disabled-note">A personal export is not available yet because report access is scoped to authorized clinic-wide aggregates.</p><button className="secondary-btn" onClick={() => window.location.assign('/reports')}><FileBarChart size={15} /> Open reports</button></section>}
 
       {activeTab === 'school' && isAdmin && <div className="settings-layout">
         <section className="panel form-panel">
@@ -462,6 +607,11 @@ export default function Settings({ data, setData, user }) {
                 onChange={update}
               />
             </label>
+            <div className="two-fields">
+              <label>Clinic opens<input type="time" name="clinicOpenTime" value={form.clinicOpenTime || '08:00'} onChange={update} /></label>
+              <label>Clinic closes<input type="time" name="clinicCloseTime" value={form.clinicCloseTime || '16:00'} onChange={update} /></label>
+            </div>
+            <label>Appointment slot length<select name="appointmentDurationMinutes" value={form.appointmentDurationMinutes || 30} onChange={update}><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">60 minutes</option></select></label>
           </div>
           {saved && (
             <p className="success-message">
@@ -523,9 +673,9 @@ export default function Settings({ data, setData, user }) {
             <h3>Workspace data</h3>
             <p>Records are stored in the secured PostgreSQL database and shared only with authorized accounts.</p>
             <div className="workspace-stats">
-              <div><strong>{data.students.length}</strong><span>Students</span></div>
-              <div><strong>{data.visits.length}</strong><span>Visits</span></div>
-              <div><strong>{data.inventory.length}</strong><span>Stock items</span></div>
+              <div><strong>{data.students.length}</strong><span>{isAdmin ? 'Roster records' : 'Students'}</span></div>
+              <div><strong>{isAdmin ? '—' : data.visits.length}</strong><span>{isAdmin ? 'Clinical details hidden' : 'Visits'}</span></div>
+              {!isAdmin && <div><strong>{data.inventory.length}</strong><span>Stock items</span></div>}
             </div>
           </div>
           {isAdmin && <>
@@ -539,23 +689,17 @@ export default function Settings({ data, setData, user }) {
               <small>Download spreadsheet-compatible records</small>
             </span>
           </button>
-          <button className="data-action primary-data-action" onClick={exportWorkspaceBackup}>
+          <button className="data-action primary-data-action" onClick={exportOversightSnapshot}>
             <Database size={17} />
-            <span><strong>Download workspace backup</strong><small>Full restore file in JSON format</small></span>
+            <span><strong>Download oversight snapshot</strong><small>Visible settings and roster JSON</small></span>
           </button>
-          <button className="data-action" onClick={restore}>
+          <button className="data-action" disabled title="Sample reset is disabled for server-backed records">
             <RotateCcw size={17} />
             <span>
-              <strong>Reset workspace</strong>
-              <small>Replace records with sample data</small>
+              <strong>Reset workspace unavailable</strong>
+              <small>Sample data cannot replace server-backed records</small>
             </span>
           </button>
-          <button className="data-action" onClick={() => fileInput.current?.click()}>
-            <Upload size={17} />
-            <span><strong>Restore workspace backup</strong><small>Import a HealthMate+ JSON file</small></span>
-          </button>
-          <input ref={fileInput} type="file" accept="application/json,.json" hidden onChange={importData} />
-
           <div className="audit-card">
             <div className="audit-card-heading">
               <div>
