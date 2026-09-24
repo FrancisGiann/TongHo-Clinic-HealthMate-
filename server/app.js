@@ -42,6 +42,7 @@ import { clinicalWriteRoles, reportReadRoles } from './domain/authorization.js';
 import { broadcastBatchId, validateBroadcastPayload, validateConsentUpdate } from './domain/communications.js';
 import { clinicDataTransaction, linkUserToPatient, listUsers, loadClinicData, saveClinicData, validateVersionAfterAdvance } from './repository.js';
 import { runClinicReminderSweep } from './reminders.js';
+import { ensureSameOrigin, loginOtpRequired, requestOriginAllowed } from './security.js';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const distDir = join(currentDir, '..', 'dist');
@@ -71,21 +72,6 @@ async function readInventoryState(client, schemaVersion) {
 function inventoryRecordId(value) {
   const id = String(value || '').trim();
   return id && id.length <= 120 ? id : null;
-}
-
-function allowedOrigins() {
-  const configured = [process.env.APP_URL, process.env.DEV_APP_URL].filter(Boolean);
-  if (!process.env.APP_URL && process.env.NODE_ENV !== 'production') configured.push('http://localhost:5173', 'http://localhost:5174');
-  return [...new Set(configured.map((origin) => {
-    try { return new URL(origin).origin; } catch { return String(origin).replace(/\/$/, ''); }
-  }))];
-}
-
-function ensureSameOrigin(req, res, next) {
-  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-  const origin = req.headers.origin;
-  if (!origin || allowedOrigins().includes(origin)) return next();
-  return errorResponse(res, 403, 'ORIGIN_REJECTED', 'The request origin is not allowed.');
 }
 
 async function latestRules() {
@@ -177,7 +163,7 @@ export function createApp() {
     if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
     next();
   });
-  app.use(cors({ origin: (origin, callback) => callback(null, !origin || allowedOrigins().includes(origin)), credentials: true }));
+  app.use(cors({ origin: (origin, callback) => callback(null, requestOriginAllowed(origin)), credentials: true }));
   app.use(express.json({ limit: '5mb' }));
   app.use(ensureSameOrigin);
 
@@ -208,7 +194,7 @@ export function createApp() {
     }
     if (user.status !== 'active') return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'This account is not active. Contact an administrator.');
     await clearFailedLogin(identifier);
-    const requireOtp = user.mfa_enabled || process.env.REQUIRE_LOGIN_OTP !== 'false';
+    const requireOtp = loginOtpRequired();
     if (requireOtp) {
       const challengeId = await createOtpChallenge(user, 'login', { remember: Boolean(req.body?.remember) });
       await audit(req, 'LOGIN_OTP_SENT', { userId: user.id });

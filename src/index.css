@@ -2916,7 +2916,7 @@ td small {
   margin-bottom: 8px;
 }
 .login-branding h1 {
-  font: 700 28px Outfit;
+  font: 700 28px "IBM Plex Sans", sans-serif;
   margin: 0;
   color: #0f172a;
   letter-spacing: -0.5px;
@@ -2941,7 +2941,7 @@ td small {
   margin-bottom: 25px;
 }
 .login-intro h2 {
-  font: 600 24px Outfit;
+  font: 600 24px "IBM Plex Sans", sans-serif;
   margin: 0 0 6px;
   color: var(--ink);
   letter-spacing: -0.4px;
