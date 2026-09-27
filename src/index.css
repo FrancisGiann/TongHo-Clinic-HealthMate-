@@ -5688,3 +5688,90 @@ nav a.active,
 @media (max-width: 420px) {
   .dispensation-row { grid-template-columns: minmax(0, 1fr) minmax(85px, .55fr) 34px; gap: 8px; }
 }
+
+/* Administrator dashboard account overview */
+.dashboard .admin-table-wrap {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.dashboard .admin-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 14px;
+  text-align: left;
+}
+.dashboard .admin-table th {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--muted);
+  font: 600 12px/1.35 "IBM Plex Sans", sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.dashboard .admin-table th:first-child,
+.dashboard .admin-table .admin-account-cell { width: 50%; }
+.dashboard .admin-table th:nth-child(2),
+.dashboard .admin-table .admin-role-cell { width: 25%; }
+.dashboard .admin-table th:last-child,
+.dashboard .admin-table .admin-status-cell { width: 25%; }
+.dashboard .admin-table td {
+  padding: 14px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  vertical-align: middle;
+}
+.dashboard .admin-table tbody tr:first-child td { border-top: 0; }
+.dashboard .admin-table .admin-account-cell,
+.dashboard .admin-table .admin-role-cell,
+.dashboard .admin-table .admin-status-cell { overflow-wrap: anywhere; }
+.dashboard .admin-table .admin-account-cell strong {
+  display: block;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.dashboard .admin-table .admin-account-cell small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.dashboard .admin-table .admin-role-cell {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.dashboard .admin-table .status-chip {
+  display: inline-block;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  text-transform: capitalize;
+}
+.dashboard .admin-table-review { margin-top: 16px; }
+.dark .dashboard .admin-table th { background: var(--paper); }
+
+@media (max-width: 420px) {
+  .dashboard .admin-table th:first-child,
+  .dashboard .admin-table .admin-account-cell { width: 44%; }
+  .dashboard .admin-table th:nth-child(2),
+  .dashboard .admin-table .admin-role-cell { width: 25%; }
+  .dashboard .admin-table th:last-child,
+  .dashboard .admin-table .admin-status-cell { width: 31%; }
+  .dashboard .admin-table th,
+  .dashboard .admin-table td { padding-inline: 8px; }
+  .dashboard .admin-table .status-chip { padding-inline: 5px; }
+}
+
+@media (max-width: 360px) {
+  .dashboard .admin-table th,
+  .dashboard .admin-table td { padding-inline: 5px; }
+  .dashboard .admin-table th { font-size: 11px; }
+}

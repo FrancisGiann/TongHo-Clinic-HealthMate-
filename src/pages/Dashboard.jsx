@@ -317,27 +317,28 @@ export default function Dashboard({ data, user }) {
           </div>
           {isAdmin ? (
             <div className="admin-table-wrap">
-              <table className="admin-table" style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
+              <table className="admin-table">
+                <caption className="sr-only">Accounts, assigned roles, and access status</caption>
                 <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                    <th style={{ padding: '8px 0', color: 'var(--text-2)', fontWeight: 500 }}>Account</th>
-                    <th style={{ padding: '8px 0', color: 'var(--text-2)', fontWeight: 500 }}>Role</th>
-                    <th style={{ padding: '8px 0', color: 'var(--text-2)', fontWeight: 500 }}>Status</th>
+                  <tr>
+                    <th scope="col">Account</th>
+                    <th scope="col">Role</th>
+                    <th scope="col">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {adminUsers.slice(0, 5).map(account => (
-                    <tr key={account.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
-                      <td style={{ padding: '12px 0' }}><strong>{account.name}</strong><small>{account.email}</small></td>
-                      <td style={{ padding: '12px 0', color: 'var(--text-2)' }}>{account.role === 'school_nurse' ? 'School nurse' : account.role === 'system_administrator' ? 'Administrator' : account.role}</td>
-                      <td style={{ padding: '12px 0' }}><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span>
+                    <tr key={account.id}>
+                      <td className="admin-account-cell"><strong>{account.name}</strong><small>{account.email}</small></td>
+                      <td className="admin-role-cell">{account.role === 'school_nurse' ? 'School nurse' : account.role === 'system_administrator' ? 'Administrator' : account.role}</td>
+                      <td className="admin-status-cell"><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               {!adminUsers.length && <div className="empty-state">No system accounts are available yet.</div>}
-              <button className="full-btn" onClick={() => navigate('/settings?tab=users')} style={{ marginTop: '1rem' }}>
+              <button className="full-btn admin-table-review" onClick={() => navigate('/settings?tab=users')}>
                 Review user access
               </button>
             </div>
