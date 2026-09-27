@@ -37,7 +37,7 @@ export async function recordNurseLicenseVerification(client, userId, { licenseNu
     `UPDATE users
      SET prc_license_number=$1,
          prc_license_verified_at=CASE WHEN $4 THEN NOW() ELSE NULL END,
-         prc_license_verified_by=CASE WHEN $4 THEN $2 ELSE NULL END,
+         prc_license_verified_by=CASE WHEN $4 THEN $2::uuid ELSE NULL END,
          updated_at=NOW()
      WHERE id=$3 AND role='school_nurse'
      RETURNING id,role,status,prc_license_verified_at IS NOT NULL AND prc_license_verified_by IS NOT NULL AS prc_license_verified`,

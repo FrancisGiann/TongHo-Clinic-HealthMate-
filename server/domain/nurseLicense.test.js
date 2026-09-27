@@ -34,6 +34,7 @@ test('recording a nurse license uses parameterized values and stores the verifyi
 
   assert.deepEqual(result, { id: 'nurse-id', role: 'school_nurse', status: 'active', verified: true });
   assert.match(calls[1].sql, /WHERE id=\$3 AND role='school_nurse'/);
+  assert.match(calls[1].sql, /prc_license_verified_by=CASE WHEN \$4 THEN \$2::uuid ELSE NULL END/);
   assert.deepEqual(calls[1].params, ["X' OR TRUE --", 'admin-id', 'nurse-id', true]);
   assert.equal(calls[1].sql.includes("X' OR TRUE --"), false);
 });
