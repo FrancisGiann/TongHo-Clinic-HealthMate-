@@ -15,6 +15,7 @@ import {
   normalizeIdentifier,
   issueSession,
   loadSession,
+  publicUser,
   revokeAllUserSessions,
   revokeUserSession,
   validEmail,
@@ -32,6 +33,13 @@ test('password policy requires length and character classes', () => {
   assert.match(validatePassword('alllowercase123') || '', /uppercase/i);
   assert.equal(validatePassword('StrongPassword1!'), null);
   assert.match(validatePassword(`Aa1!${'x'.repeat(1021)}`) || '', /1,024 characters/);
+});
+
+test('public nurse license status requires both an admin verifier and a recorded license', () => {
+  const account = { id: 'nurse-id', role: 'school_nurse', prc_license_number: 'PRC-123' };
+  assert.equal(publicUser(account).prcLicenseVerified, false);
+  assert.equal(publicUser({ ...account, prc_license_verified_at: new Date(), prc_license_verified_by: 'admin-id' }).prcLicenseVerified, true);
+  assert.equal(publicUser({ ...account, prc_license_number: '', prc_license_verified_at: new Date(), prc_license_verified_by: 'admin-id' }).prcLicenseVerified, false);
 });
 
 test('malformed OTP challenge IDs and codes are rejected before database access', async () => {

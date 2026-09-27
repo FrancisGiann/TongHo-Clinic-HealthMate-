@@ -34,7 +34,7 @@ import {
   verifyPassword,
 } from './auth.js';
 import { emailConfigured, escapeHtml, sendEmail } from './email.js';
-import { approveDraftRiskRule, assessRisk, ensureConservativeCandidateDraft, getConservativeCandidateRuleDraft, getDemonstrationRules, riskAllowsAcknowledgedIncomplete, riskNeedsNurseAcknowledgement, validateRiskRules } from './domain/risk.js';
+import { activateRiskRuleForTesting, approveDraftRiskRule, assessRisk, disableRiskRuleTesting, ensureConservativeCandidateDraft, getConservativeCandidateRuleDraft, getDemonstrationRules, readTestRiskRuleActivation, riskAllowsAcknowledgedIncomplete, riskNeedsNurseAcknowledgement, selectRiskRules, validateRiskRules } from './domain/risk.js';
 import { buildClinicReport, reportForRole, reportSnapshotForStorage } from './domain/reporting.js';
 import { applyStockAdjustment, validateInventoryArchive, validateInventoryItem, validateStockAdjustment } from './domain/inventory.js';
 import { persistVisitAndDispensations, resolveInventoryDispensations } from './domain/dispensing.js';
@@ -50,6 +50,7 @@ import { runClinicReminderSweep } from './reminders.js';
 import { canRollbackImport, normalizeImportRows, selectedImportRows } from './domain/imports.js';
 import { ensureSameOrigin, loginOtpRequired, rateLimit, requestOriginAllowed, trustProxyHops } from './security.js';
 import { buildInvitationActivationUrl } from './invitationUrl.js';
+import { recordNurseLicenseVerification, validateNurseLicenseUpdate } from './domain/nurseLicense.js';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const distDir = join(currentDir, '..', 'dist');
@@ -81,10 +82,12 @@ function inventoryRecordId(value) {
   return id && id.length <= 120 ? id : null;
 }
 
+function validUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+}
+
 async function latestRules() {
-  const result = await query("SELECT version,name,status,rules FROM risk_rules WHERE status='clinician_approved' ORDER BY version DESC LIMIT 1");
-  if (!result.rows[0]) return getDemonstrationRules();
-  return { ...result.rows[0].rules, version: result.rows[0].version, name: result.rows[0].name, status: result.rows[0].status };
+  return selectRiskRules({ query });
 }
 
 async function canAccessPatient(user, patientId) {
@@ -446,6 +449,23 @@ export function createApp() {
   });
 
   app.get('/api/admin/users', requireRoles('system_administrator'), async (_req, res) => res.json({ data: { users: await listUsers() } }));
+
+  app.patch('/api/admin/users/:id/prc-license', requireRoles('system_administrator'), async (req, res) => {
+    if (!validUuid(req.params.id)) return errorResponse(res, 400, 'INVALID_USER_ID', 'A valid user id is required.');
+    const validation = validateNurseLicenseUpdate(req.body);
+    if (!validation.valid) return errorResponse(res, 400, validation.code, validation.message);
+    try {
+      const updated = await transaction(async (client) => {
+        const account = await recordNurseLicenseVerification(client, req.params.id, validation, req.user.id);
+        await audit(req, 'NURSE_PRC_LICENSE_VERIFICATION_UPDATED', { verified: account.verified, cleared: !account.verified }, 'user', account.id, client);
+        return account;
+      });
+      return res.json({ data: { user: { id: updated.id, role: updated.role, status: updated.status, prcLicenseVerified: updated.verified } } });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'LICENSE_UPDATE_FAILED', error.message);
+      throw error;
+    }
+  });
 
   app.post('/api/admin/users/:id/resend-invitation', requireRoles('system_administrator'), async (req, res) => {
     const result = await query("SELECT id,email,name,role,status FROM users WHERE id=$1", [req.params.id]);
@@ -893,9 +913,12 @@ export function createApp() {
     return res.status(201).json({ data: { visit, assessment, summaryPendingApproval: Boolean(input.summaryDraft && !input.summaryApproved) } });
   });
 
-  app.get('/api/risk/rules', requireRoles(...reportReadRoles), async (_req, res) => {
+  app.get('/api/risk/rules', requireRoles(...reportReadRoles), async (req, res) => {
     const result = await query('SELECT id,version,name,status,rules,approved_by,approved_at,created_at FROM risk_rules ORDER BY version DESC');
-    return res.json({ data: { rules: result.rows, demonstrationRules: getDemonstrationRules(), candidateRuleDraft: getConservativeCandidateRuleDraft() } });
+    const testActivationAvailable = process.env.NODE_ENV === 'development';
+    const testActivation = await readTestRiskRuleActivation({ query });
+    const currentUserLicenseVerified = Boolean(req.user.prc_license_number?.trim() && req.user.prc_license_verified_at && req.user.prc_license_verified_by);
+    return res.json({ data: { rules: result.rows, demonstrationRules: getDemonstrationRules(), candidateRuleDraft: getConservativeCandidateRuleDraft(), testActivationAvailable, testActivation, currentUserLicenseVerified } });
   });
 
   app.post('/api/risk/rules/conservative-candidate', requireRoles('system_administrator'), async (req, res) => {
@@ -938,8 +961,45 @@ export function createApp() {
     return res.status(201).json({ data: { id, version, status } });
   });
 
+  app.put('/api/risk/rules/:id/test-activation', requireRoles('school_nurse', 'system_administrator'), async (req, res) => {
+    if (process.env.NODE_ENV !== 'development') return errorResponse(res, 404, 'NOT_FOUND', 'Test rule activation is only available in development.');
+    if (!validUuid(req.params.id)) return errorResponse(res, 400, 'INVALID_RULE_ID', 'A valid risk rule id is required.');
+    try {
+      const result = await transaction(async (client) => {
+        const activation = await activateRiskRuleForTesting(client, req.params.id);
+        if (activation.changed) {
+          await audit(req, 'RISK_RULE_TEST_ACTIVATED', { version: activation.rule.version, mode: 'conservative_triage_v1' }, 'risk_rule', activation.rule.id, client);
+        }
+        return activation;
+      });
+      return res.json({ data: { testActivation: result.activation, changed: result.changed } });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'TEST_ACTIVATION_FAILED', error.message);
+      throw error;
+    }
+  });
+
+  app.delete('/api/risk/rules/test-activation', requireRoles('school_nurse', 'system_administrator'), async (req, res) => {
+    if (process.env.NODE_ENV !== 'development') return errorResponse(res, 404, 'NOT_FOUND', 'Test rule activation is only available in development.');
+    try {
+      const result = await transaction(async (client) => {
+        const disabled = await disableRiskRuleTesting(client);
+        if (disabled.changed) {
+          await audit(req, 'RISK_RULE_TEST_ACTIVATION_DISABLED', {}, 'risk_rule', disabled.ruleId, client);
+        }
+        return disabled;
+      });
+      return res.json({ data: { testActivation: null, changed: result.changed } });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'TEST_ACTIVATION_FAILED', error.message);
+      throw error;
+    }
+  });
+
   app.patch('/api/risk/rules/:id/approve', requireRoles('school_nurse'), async (req, res) => {
-    if (!String(req.user.prc_license_number || '').trim()) return errorResponse(res, 403, 'LICENSE_REQUIRED', 'A school nurse with a recorded license is required to approve risk rules.');
+    if (!String(req.user.prc_license_number || '').trim() || !req.user.prc_license_verified_at || !req.user.prc_license_verified_by) {
+      return errorResponse(res, 403, 'LICENSE_REQUIRED', 'A school nurse with an administrator-recorded, verified PRC license is required to approve risk rules.');
+    }
     let approved;
     try {
       approved = await transaction(async (client) => {

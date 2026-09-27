@@ -74,6 +74,92 @@ test('persisting the built-in candidate draft is administrator-only', () => {
   assert.deepEqual(invoke('student'), { statusCode: 403, nextCalled: false });
 });
 
+test('risk-rule test activation is available to nurses and administrators behind dedicated routes', async () => {
+  const app = createApp();
+  const routes = app.router.stack
+    .filter((layer) => ['/api/risk/rules/:id/test-activation', '/api/risk/rules/test-activation'].includes(layer.route?.path))
+    .map((layer) => ({ path: layer.route.path, method: Object.keys(layer.route.methods)[0], guard: layer.route.stack[0].handle, handler: layer.route.stack.at(-1).handle }));
+  assert.deepEqual(routes.map(({ path, method }) => [path, method]), [
+    ['/api/risk/rules/:id/test-activation', 'put'],
+    ['/api/risk/rules/test-activation', 'delete'],
+  ]);
+  for (const route of routes) {
+    const invokeGuard = (role) => {
+      let statusCode = 200;
+      let nextCalled = false;
+      const response = { status(code) { statusCode = code; return { json: () => response }; } };
+      route.guard({ user: { role } }, response, () => { nextCalled = true; });
+      return { statusCode, nextCalled };
+    };
+    assert.deepEqual(invokeGuard('school_nurse'), { statusCode: 200, nextCalled: true });
+    assert.deepEqual(invokeGuard('system_administrator'), { statusCode: 200, nextCalled: true });
+    assert.deepEqual(invokeGuard('student'), { statusCode: 403, nextCalled: false });
+  }
+
+  const configuredNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    for (const route of routes) {
+      let statusCode = 200;
+      let responseBody;
+      const response = {
+        status(code) { statusCode = code; return this; },
+        json(body) { responseBody = body; return this; },
+      };
+      await route.handler({ params: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }, user: { id: 'nurse-test' } }, response);
+      assert.equal(statusCode, 404);
+      assert.equal(responseBody.error.code, 'NOT_FOUND');
+    }
+  } finally {
+    if (configuredNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = configuredNodeEnv;
+  }
+});
+
+test('PRC license recording is administrator-only and requires explicit verification', async () => {
+  const app = createApp();
+  const route = app.router.stack.find((layer) => layer.route?.path === '/api/admin/users/:id/prc-license');
+  assert.ok(route?.route?.methods.patch);
+  const guard = route.route.stack[0].handle;
+  const invokeGuard = (role) => {
+    let statusCode = 200;
+    let nextCalled = false;
+    const response = { status(code) { statusCode = code; return { json: () => response }; } };
+    guard({ user: { role } }, response, () => { nextCalled = true; });
+    return { statusCode, nextCalled };
+  };
+  assert.deepEqual(invokeGuard('system_administrator'), { statusCode: 200, nextCalled: true });
+  assert.deepEqual(invokeGuard('school_nurse'), { statusCode: 403, nextCalled: false });
+  assert.deepEqual(invokeGuard('student'), { statusCode: 403, nextCalled: false });
+
+  let statusCode = 200;
+  let responseBody;
+  const response = {
+    status(code) { statusCode = code; return this; },
+    json(body) { responseBody = body; return this; },
+  };
+  await route.route.stack.at(-1).handle({ params: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }, body: { prcLicenseNumber: 'PRC-123' } }, response);
+  assert.equal(statusCode, 400);
+  assert.equal(responseBody.error.code, 'VERIFICATION_CONFIRMATION_REQUIRED');
+});
+
+test('an unverified license value cannot approve a risk rule', async () => {
+  const app = createApp();
+  const route = app.router.stack.find((layer) => layer.route?.path === '/api/risk/rules/:id/approve');
+  let statusCode = 200;
+  let responseBody;
+  const response = {
+    status(code) { statusCode = code; return this; },
+    json(body) { responseBody = body; return this; },
+  };
+  await route.route.stack.at(-1).handle({
+    params: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+    user: { id: 'nurse-id', role: 'school_nurse', prc_license_number: 'PRC-123', prc_license_verified_at: null, prc_license_verified_by: null },
+  }, response);
+  assert.equal(statusCode, 403);
+  assert.equal(responseBody.error.code, 'LICENSE_REQUIRED');
+});
+
 test('visit creation and clinical snapshot writes are restricted to school nurses', () => {
   const app = createApp();
   const routes = app.router.stack

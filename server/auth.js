@@ -67,6 +67,7 @@ export function publicUser(user) {
     status: user.status,
     schoolId: user.school_id || '',
     prcLicenseNumber: user.prc_license_number || '',
+    prcLicenseVerified: Boolean(user.prc_license_number?.trim() && user.prc_license_verified_at && user.prc_license_verified_by),
     contactNumber: user.contact_number || '',
     schoolName: user.school_name || '',
     lastLogin: user.last_login_at || null,

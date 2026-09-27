@@ -28,6 +28,7 @@ const auditEventMeta = {
   INVITATION_RESENT: { label: "Invitation resent", tone: "security", group: "People" },
   INVITATION_EMAIL_FAILED: { label: "Invitation email failed", tone: "critical", group: "People" },
   ACCOUNT_STATUS_CHANGED: { label: "Account status changed", tone: "security", group: "People" },
+  NURSE_PRC_LICENSE_VERIFICATION_UPDATED: { label: "Nurse PRC license verification updated", tone: "security", group: "People" },
   ACCOUNT_APPROVED: { label: "Staff account approved", tone: "positive", group: "People" },
   ACCOUNT_REJECTED: { label: "Staff account rejected", tone: "critical", group: "People" },
   NURSE_ACCOUNT_CREATED: { label: "Staff account created", tone: "security", group: "People" },
@@ -105,6 +106,9 @@ export default function Settings({ data, user, reload, section }) {
   const [riskRules, setRiskRules] = useState([]);
   const [demonstrationRules, setDemonstrationRules] = useState(null);
   const [candidateRuleDraft, setCandidateRuleDraft] = useState(null);
+  const [testActivationAvailable, setTestActivationAvailable] = useState(false);
+  const [testActivation, setTestActivation] = useState(null);
+  const [currentUserLicenseVerified, setCurrentUserLicenseVerified] = useState(false);
   const [riskRuleForm, setRiskRuleForm] = useState({ version: '', name: '', rules: '' });
   const [riskMessage, setRiskMessage] = useState('');
   const [currentPassword, setCurrentPassword] = useState("");
@@ -115,6 +119,10 @@ export default function Settings({ data, user, reload, section }) {
   const [users, setUsers] = useState([]);
   const [showUserForm, setShowUserForm] = useState(false);
   const [newUser, setNewUser] = useState({ name: '', email: '', role: 'Nurse', patientId: '', relationship: 'Guardian' });
+  const [nurseLicenseTarget, setNurseLicenseTarget] = useState(null);
+  const [nurseLicenseNumber, setNurseLicenseNumber] = useState('');
+  const [licenseVerificationConfirmed, setLicenseVerificationConfirmed] = useState(false);
+  const [licenseSaving, setLicenseSaving] = useState(false);
   const activeSection = section || 'account';
   const feedbackScope = `${location.pathname}:${activeSection}`;
   const feedbackScopeRef = useRef(feedbackScope);
@@ -192,10 +200,16 @@ export default function Settings({ data, user, reload, section }) {
       setRiskRules(ruleData.rules || []);
       setDemonstrationRules(ruleData.demonstrationRules || null);
       setCandidateRuleDraft(ruleData.candidateRuleDraft || null);
+      setTestActivationAvailable(Boolean(ruleData.testActivationAvailable));
+      setTestActivation(ruleData.testActivation || null);
+      setCurrentUserLicenseVerified(Boolean(ruleData.currentUserLicenseVerified));
     }).catch(() => {
       setRiskRules([]);
       setDemonstrationRules(null);
       setCandidateRuleDraft(null);
+      setTestActivationAvailable(false);
+      setTestActivation(null);
+      setCurrentUserLicenseVerified(false);
     });
     if (!isAdmin) return;
     if (activeSection === 'security') {
@@ -313,6 +327,35 @@ export default function Settings({ data, user, reload, section }) {
     showScopedUserActionFeedback(scope, result.success ? 'success' : 'error', result.success ? `${account.name} was deactivated.` : result.error);
     await refreshReviewData();
   };
+  const openNurseLicenseEditor = (account) => {
+    setNurseLicenseTarget(account);
+    setNurseLicenseNumber('');
+    setLicenseVerificationConfirmed(false);
+  };
+  const updateNurseLicense = async (event) => {
+    event.preventDefault();
+    if (!nurseLicenseTarget) return;
+    const scope = feedbackScopeRef.current;
+    clearUserActionFeedback();
+    setLicenseSaving(true);
+    try {
+      const result = await api.patch(`/api/admin/users/${encodeURIComponent(nurseLicenseTarget.id)}/prc-license`, {
+        prcLicenseNumber: nurseLicenseNumber,
+        verificationConfirmed: licenseVerificationConfirmed,
+      });
+      setNurseLicenseTarget(null);
+      setNurseLicenseNumber('');
+      setLicenseVerificationConfirmed(false);
+      showScopedUserActionFeedback(scope, 'success', result.user.prcLicenseVerified
+        ? `A verified PRC license is now recorded by an administrator for ${nurseLicenseTarget.name}.`
+        : `The PRC license record was cleared for ${nurseLicenseTarget.name}.`);
+      await refreshReviewData();
+    } catch (error) {
+      showScopedUserActionFeedback(scope, 'error', error.message);
+    } finally {
+      setLicenseSaving(false);
+    }
+  };
   const update = (event) =>
     setForm({ ...form, [event.target.name]: event.target.value });
   const save = async () => {
@@ -420,6 +463,9 @@ export default function Settings({ data, user, reload, section }) {
     setRiskRules(result.rules || []);
     setDemonstrationRules(result.demonstrationRules || null);
     setCandidateRuleDraft(result.candidateRuleDraft || null);
+    setTestActivationAvailable(Boolean(result.testActivationAvailable));
+    setTestActivation(result.testActivation || null);
+    setCurrentUserLicenseVerified(Boolean(result.currentUserLicenseVerified));
   };
   const loadCandidateIntoDraft = () => {
     if (!candidateRuleDraft) return;
@@ -464,6 +510,32 @@ export default function Settings({ data, user, reload, section }) {
       await api.patch(`/api/risk/rules/${encodeURIComponent(rule.id)}/approve`, {});
       setScopedFeedback(scope, setRiskMessage, `Version ${rule.version} approved by your nurse account.`);
       await loadRiskRules();
+    } catch (error) {
+      setScopedFeedback(scope, setRiskMessage, error.message);
+    }
+  };
+  const enableRiskRuleForTesting = async (rule) => {
+    const scope = feedbackScopeRef.current;
+    setRiskMessage('');
+    try {
+      const result = await api.put(`/api/risk/rules/${encodeURIComponent(rule.id)}/test-activation`, {});
+      setScopedFeedback(scope, setRiskMessage, result.changed
+        ? `Version ${rule.version} is enabled for testing in this development environment. Assessments are marked test_active; this does not approve the rule.`
+        : `Version ${rule.version} was already enabled for testing. Its draft status and clinician approval fields are unchanged.`);
+      await Promise.all([loadRiskRules(), reload()]);
+    } catch (error) {
+      setScopedFeedback(scope, setRiskMessage, error.message);
+    }
+  };
+  const disableRiskRuleTesting = async () => {
+    const scope = feedbackScopeRef.current;
+    setRiskMessage('');
+    try {
+      const result = await api.delete('/api/risk/rules/test-activation');
+      setScopedFeedback(scope, setRiskMessage, result.changed
+        ? 'Test activation disabled. New assessments now use the clinician-approved rule or the legacy demonstration rules.'
+        : 'No test activation was active.');
+      await Promise.all([loadRiskRules(), reload()]);
     } catch (error) {
       setScopedFeedback(scope, setRiskMessage, error.message);
     }
@@ -628,7 +700,14 @@ export default function Settings({ data, user, reload, section }) {
           </div>
           {showUserForm && <form className="inline-user-form" onSubmit={handleCreateUser}><label>Name<input value={newUser.name} onChange={(event) => setNewUser({ ...newUser, name: event.target.value })} required /></label><label>Email<input type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} required /></label><label>Role<select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value, patientId: '' })}><option>Admin</option><option>Nurse</option><option>Student</option><option>Guardian</option></select></label>{['Student', 'Guardian'].includes(newUser.role) && <label>Linked patient<select value={newUser.patientId} onChange={(event) => setNewUser({ ...newUser, patientId: event.target.value })} required><option value="">Select patient…</option>{data.students.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label>}{newUser.role === 'Guardian' && <label>Relationship<input value={newUser.relationship} onChange={(event) => setNewUser({ ...newUser, relationship: event.target.value })} required /></label>}<button type="submit" className="primary-btn">Send invitation</button></form>}
           {userActionFeedback && <div className={userActionFeedback.tone === 'error' ? 'error-banner' : 'success-message'} role={userActionFeedback.tone === 'error' ? 'alert' : 'status'}>{userActionFeedback.tone === 'success' && <Check size={14} aria-hidden="true" />} {userActionFeedback.message}</div>}
-          <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{visibleUsers.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.status === 'invited' ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}</td></tr>)}</tbody></table>{visibleUsers.length === 0 && <p className="empty-state">{users.length ? 'No accounts match this filter.' : 'No system accounts are available yet.'}</p>}</div>
+          <p className="disabled-note nurse-license-admin-note">Only administrators can record a nurse’s PRC license, after independently verifying it against an authoritative source. This list shows the recording status without displaying the license number.</p>
+          {nurseLicenseTarget && <form className="nurse-license-editor" onSubmit={updateNurseLicense}>
+            <div><h4>PRC license for {nurseLicenseTarget.name}</h4><p>Current status: {nurseLicenseTarget.prcLicenseVerified ? 'recorded by an administrator' : 'not recorded'}. The current number is not displayed.</p></div>
+            <label>PRC license number<input type="text" value={nurseLicenseNumber} maxLength={80} autoComplete="off" onChange={(event) => setNurseLicenseNumber(event.target.value)} placeholder="Enter a verified number, or leave blank to clear" /></label>
+            {Boolean(nurseLicenseNumber.trim()) && <label className="check-label"><input type="checkbox" checked={licenseVerificationConfirmed} onChange={(event) => setLicenseVerificationConfirmed(event.target.checked)} required /> I independently verified this license against an authoritative source.</label>}
+            <div className="form-actions"><button type="submit" className="primary-btn" disabled={licenseSaving || (Boolean(nurseLicenseNumber.trim()) && !licenseVerificationConfirmed) || (!nurseLicenseNumber.trim() && !nurseLicenseTarget.prcLicenseNumber)}>{licenseSaving ? 'Saving…' : nurseLicenseNumber.trim() ? 'Record verified license' : 'Clear license record'}</button><button type="button" className="secondary-btn" onClick={() => setNurseLicenseTarget(null)} disabled={licenseSaving}>Cancel</button></div>
+          </form>}
+          <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>PRC license</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{visibleUsers.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.role === 'school_nurse' ? <span className={`status-chip ${account.prcLicenseVerified ? 'success' : 'warn'}`}>{account.prcLicenseVerified ? 'Recorded by admin' : 'Not recorded'}</span> : '—'}</td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.status === 'invited' ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}{account.role === 'school_nurse' && <button type="button" className="table-action" onClick={() => openNurseLicenseEditor(account)}>{account.prcLicenseVerified ? 'Update or clear license' : 'Record verified license'}</button>}</td></tr>)}</tbody></table>{visibleUsers.length === 0 && <p className="empty-state">{users.length ? 'No accounts match this filter.' : 'No system accounts are available yet.'}</p>}</div>
           <div className="settings-subsection nurse-verifications">
             <div><h4>Pending nurse verifications</h4><p>Review the school and license details submitted with nurse registrations.</p></div>
             {pendingRegistrations.length === 0 ? <p className="muted-copy">No pending nurse registrations at the moment.</p> : (
@@ -725,11 +804,29 @@ export default function Settings({ data, user, reload, section }) {
               <button type="button" className="secondary-btn" onClick={loadCandidateIntoDraft}>Load candidate into draft form</button>
             </div>}
           </div>}
-          {demonstrationRules && <div className="disabled-note">Demonstration rules are visible for testing and remain unapproved. They are used only when no clinician-approved version exists.</div>}
+          {testActivationAvailable && <div className="disabled-note risk-test-activation-note" role="status">
+            <strong>Development testing</strong>
+            <span>Test activation is available to clinic administrators and nurses in this development environment. It keeps the rule in draft, leaves clinician approval fields empty, and labels assessments test_active.</span>
+            {testActivation && <span>Currently testing rule version {riskRules.find((rule) => rule.id === testActivation.ruleId)?.version || 'unknown'}.</span>}
+            {testActivation && <button type="button" className="secondary-btn" onClick={disableRiskRuleTesting}>Disable test activation</button>}
+          </div>}
+          {demonstrationRules && <div className="disabled-note">Demonstration rules are visible for testing and remain unapproved. They are the fallback when no clinician-approved version exists; an enabled test rule takes precedence in development.</div>}
           {isAdmin && <form className="inline-entry-form" onSubmit={createRiskRule}><div className="two-fields"><label>Version<input type="number" min="1" value={riskRuleForm.version} onChange={(event) => setRiskRuleForm({ ...riskRuleForm, version: event.target.value })} required /></label><label>Rule set name<input value={riskRuleForm.name} maxLength="120" onChange={(event) => setRiskRuleForm({ ...riskRuleForm, name: event.target.value })} required /></label></div><label>Rules JSON<textarea value={riskRuleForm.rules} onChange={(event) => setRiskRuleForm({ ...riskRuleForm, rules: event.target.value })} placeholder='{"requiredFields":["painScore"],"thresholds":{"moderate":3,"high":7},"indicators":[]}' required /></label><button className="primary-btn">Save draft rule set</button></form>}
           {riskMessage && <p className="success-message" role="status">{riskMessage}</p>}
-          <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Version</th><th>Name</th><th>Status</th><th>Approver</th><th>Action</th></tr></thead><tbody>{riskRules.map((rule) => <tr key={rule.id}><td>{rule.version}</td><td>{rule.name}</td><td><span className={`status-chip ${rule.status === 'clinician_approved' ? 'success' : 'warn'}`}>{rule.status === 'clinician_approved' ? 'Clinician approved' : 'Draft — not in use'}</span></td><td>{rule.approved_by || 'None'}</td><td>{user?.role === 'school_nurse' && rule.status === 'draft' ? <button type="button" className="table-action" onClick={() => approveRiskRule(rule)} disabled={!user.prcLicenseNumber}>Approve</button> : '—'}</td></tr>)}</tbody></table></div>
-          {user?.role === 'school_nurse' && !user.prcLicenseNumber && <p className="disabled-note">A PRC license number must be recorded on your account before approval is available.</p>}
+          <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Version</th><th>Name</th><th>Status</th><th>Approver</th><th>Action</th></tr></thead><tbody>{riskRules.map((rule) => {
+            const isTestActive = testActivation?.ruleId === rule.id;
+            const isDraft = rule.status === 'draft';
+            const canTest = testActivationAvailable && isDraft && rule.rules?.mode === 'conservative_triage_v1'
+              && ['school_nurse', 'system_administrator'].includes(user?.role);
+            return <tr key={rule.id}><td>{rule.version}</td><td>{rule.name}</td><td><span className={`status-chip ${rule.status === 'clinician_approved' ? 'success' : 'warn'}`}>{rule.status === 'clinician_approved' ? 'Clinician approved' : isTestActive ? 'Test active · development' : 'Draft — not in use'}</span></td><td>{rule.approved_by || 'None'}</td><td>
+              {canTest && (isTestActive
+                ? <button type="button" className="table-action" onClick={disableRiskRuleTesting}>Disable test</button>
+                : <button type="button" className="table-action" onClick={() => enableRiskRuleForTesting(rule)}>Enable for testing</button>)}
+              {user?.role === 'school_nurse' && isDraft && <button type="button" className="table-action" onClick={() => approveRiskRule(rule)} disabled={!currentUserLicenseVerified}>Approve</button>}
+              {!canTest && !(user?.role === 'school_nurse' && isDraft) && '—'}
+            </td></tr>;
+          })}</tbody></table></div>
+          {user?.role === 'school_nurse' && !currentUserLicenseVerified && <p className="disabled-note">A system administrator must independently verify and record your PRC license before rule approval is available. Nurses cannot record their own license here. Test activation does not require a PRC license.</p>}
         </section>
       )}
 

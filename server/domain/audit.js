@@ -6,6 +6,7 @@ const safeAuditFields = {
   INVITATION_RESENT: ['email'],
   INVITATION_EMAIL_FAILED: ['email'],
   ACCOUNT_STATUS_CHANGED: ['status'],
+  NURSE_PRC_LICENSE_VERIFICATION_UPDATED: ['verified', 'cleared'],
   ACCOUNT_APPROVED: ['approvedBy'],
   ACCOUNT_REJECTED: ['email'],
   NURSE_ACCOUNT_CREATED: ['email', 'role'],

@@ -277,6 +277,100 @@ export function getConservativeCandidateRuleDraft() {
   return JSON.parse(JSON.stringify(CONSERVATIVE_TRIAGE_DRAFT));
 }
 
+function testActivationError(status, code, message) {
+  const error = new Error(message);
+  error.status = status;
+  error.code = code;
+  return error;
+}
+
+function eligibleTestRule(rule) {
+  return rule?.status === 'draft'
+    && rule.rules?.mode === CONSERVATIVE_TRIAGE_MODE
+    && validateRiskRules(rule.rules).valid;
+}
+
+function validRuleId(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+}
+
+export async function selectRiskRules(client, environment = process.env.NODE_ENV) {
+  if (environment === 'development') {
+    const settings = await client.query('SELECT data FROM clinic_settings WHERE id=1');
+    const ruleId = settings.rows[0]?.data?.testRiskRuleActivation?.ruleId;
+    if (validRuleId(ruleId)) {
+      const result = await client.query('SELECT id,version,name,status,rules FROM risk_rules WHERE id=$1', [ruleId]);
+      const rule = result.rows[0];
+      if (eligibleTestRule(rule)) {
+        return { ...rule.rules, version: rule.version, name: rule.name, status: 'test_active' };
+      }
+    }
+  }
+
+  const approved = await client.query("SELECT version,name,status,rules FROM risk_rules WHERE status='clinician_approved' ORDER BY version DESC LIMIT 1");
+  if (!approved.rows[0]) return getDemonstrationRules();
+  return { ...approved.rows[0].rules, version: approved.rows[0].version, name: approved.rows[0].name, status: approved.rows[0].status };
+}
+
+export async function readTestRiskRuleActivation(client, environment = process.env.NODE_ENV) {
+  if (environment !== 'development') return null;
+  const settings = await client.query('SELECT data FROM clinic_settings WHERE id=1');
+  const activation = settings.rows[0]?.data?.testRiskRuleActivation;
+  if (!validRuleId(activation?.ruleId)) return null;
+  const result = await client.query('SELECT id,status,rules FROM risk_rules WHERE id=$1', [activation.ruleId]);
+  if (!eligibleTestRule(result.rows[0])) return null;
+  return { ruleId: activation.ruleId, activatedAt: activation.activatedAt || null };
+}
+
+export async function activateRiskRuleForTesting(client, ruleId, environment = process.env.NODE_ENV) {
+  if (environment !== 'development') {
+    throw testActivationError(404, 'NOT_FOUND', 'Test rule activation is only available in development.');
+  }
+  await client.query("SELECT pg_advisory_xact_lock(hashtext('risk-rule-test-activation'))");
+  const locked = await client.query('SELECT data FROM clinic_settings WHERE id=1 FOR UPDATE');
+  if (!locked.rowCount) throw testActivationError(500, 'SETTINGS_NOT_FOUND', 'Clinic settings are unavailable.');
+  const current = locked.rows[0]?.data && typeof locked.rows[0].data === 'object' && !Array.isArray(locked.rows[0].data)
+    ? locked.rows[0].data
+    : {};
+  const result = await client.query('SELECT id,version,name,status,rules FROM risk_rules WHERE id=$1 FOR UPDATE', [ruleId]);
+  if (!result.rowCount) throw testActivationError(404, 'NOT_FOUND', 'Risk rule version not found.');
+  const rule = result.rows[0];
+  if (!eligibleTestRule(rule)) {
+    throw testActivationError(409, 'RULE_NOT_ELIGIBLE_FOR_TESTING', 'Only a valid conservative triage draft can be enabled for testing.');
+  }
+  const existing = current.testRiskRuleActivation;
+  if (existing?.ruleId === ruleId) return { activation: { ruleId, activatedAt: existing.activatedAt || null }, changed: false };
+
+  const activation = { ruleId, activatedAt: new Date().toISOString() };
+  await client.query(
+    'UPDATE clinic_settings SET data=$1::jsonb,version=version+1,updated_at=NOW() WHERE id=1',
+    [JSON.stringify({ ...current, testRiskRuleActivation: activation })],
+  );
+  return { activation, changed: true, rule: { id: rule.id, version: rule.version, name: rule.name, status: rule.status } };
+}
+
+export async function disableRiskRuleTesting(client, environment = process.env.NODE_ENV) {
+  if (environment !== 'development') {
+    throw testActivationError(404, 'NOT_FOUND', 'Test rule activation is only available in development.');
+  }
+  await client.query("SELECT pg_advisory_xact_lock(hashtext('risk-rule-test-activation'))");
+  const locked = await client.query('SELECT data FROM clinic_settings WHERE id=1 FOR UPDATE');
+  if (!locked.rowCount) throw testActivationError(500, 'SETTINGS_NOT_FOUND', 'Clinic settings are unavailable.');
+  const current = locked.rows[0]?.data && typeof locked.rows[0].data === 'object' && !Array.isArray(locked.rows[0].data)
+    ? locked.rows[0].data
+    : {};
+  if (!current.testRiskRuleActivation) return { changed: false };
+  const ruleId = current.testRiskRuleActivation.ruleId;
+
+  const next = { ...current };
+  delete next.testRiskRuleActivation;
+  await client.query(
+    'UPDATE clinic_settings SET data=$1::jsonb,version=version+1,updated_at=NOW() WHERE id=1',
+    [JSON.stringify(next)],
+  );
+  return { changed: true, ruleId: validRuleId(ruleId) ? ruleId : null };
+}
+
 export async function ensureConservativeCandidateDraft(client) {
   await client.query("SELECT pg_advisory_xact_lock(hashtext('risk-rule-conservative-candidate'))");
   const existing = await client.query(

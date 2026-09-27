@@ -18,3 +18,11 @@ test('audit log sanitizer does not pass through unknown event details', () => {
   const [entry] = sanitizeAuditLogs([{ event: 'UNKNOWN_EVENT', details: { private: 'value' } }]);
   assert.deepEqual(entry.details, {});
 });
+
+test('nurse license audit details record verification status without the license number', () => {
+  assert.deepEqual(redactAuditDetails('NURSE_PRC_LICENSE_VERIFICATION_UPDATED', {
+    verified: true,
+    cleared: false,
+    prcLicenseNumber: 'PRIVATE-123',
+  }), { verified: true, cleared: false });
+});

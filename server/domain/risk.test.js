@@ -1,6 +1,60 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { approveDraftRiskRule, assessRisk, ensureConservativeCandidateDraft, getConservativeCandidateRuleDraft, getDemonstrationRules, riskAllowsAcknowledgedIncomplete, riskNeedsNurseAcknowledgement, validateRiskRules } from './risk.js';
+import { activateRiskRuleForTesting, approveDraftRiskRule, assessRisk, disableRiskRuleTesting, ensureConservativeCandidateDraft, getConservativeCandidateRuleDraft, getDemonstrationRules, readTestRiskRuleActivation, riskAllowsAcknowledgedIncomplete, riskNeedsNurseAcknowledgement, selectRiskRules, validateRiskRules } from './risk.js';
+
+function testActivationClient({ active = null, includeApproved = false, shared: existingState = null } = {}) {
+  const shared = existingState || {
+    settings: { schoolName: 'Test Clinic', testRiskRuleActivation: active },
+    updates: 0,
+    lockTail: Promise.resolve(),
+    rules: [
+      { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', version: 9, name: 'Conservative draft', status: 'draft', approved_by: null, approved_at: null, rules: getConservativeCandidateRuleDraft().rules },
+      ...(includeApproved ? [{ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', version: 8, name: 'Approved legacy', status: 'clinician_approved', rules: getDemonstrationRules() }] : []),
+    ],
+  };
+  let releaseLock;
+  const client = {
+    async query(sql, params = []) {
+      if (sql.includes("pg_advisory_xact_lock(hashtext('risk-rule-test-activation'))")) {
+        const previous = shared.lockTail;
+        shared.lockTail = new Promise((resolve) => { releaseLock = resolve; });
+        await previous;
+        return { rows: [] };
+      }
+      if (sql.includes('SELECT data FROM clinic_settings WHERE id=1')) {
+        return { rowCount: 1, rows: [{ data: structuredClone(shared.settings) }] };
+      }
+      if (sql.includes('SELECT data FROM clinic_settings WHERE id=1 FOR UPDATE')) {
+        return { rowCount: 1, rows: [{ data: structuredClone(shared.settings) }] };
+      }
+      if (sql.startsWith('SELECT id,version,name,status,rules FROM risk_rules')) {
+        const rule = shared.rules.find((item) => item.id === params[0]);
+        return { rowCount: rule ? 1 : 0, rows: rule ? [structuredClone(rule)] : [] };
+      }
+      if (sql.startsWith('SELECT id,status,rules FROM risk_rules')) {
+        const rule = shared.rules.find((item) => item.id === params[0]);
+        return { rowCount: rule ? 1 : 0, rows: rule ? [structuredClone(rule)] : [] };
+      }
+      if (sql.startsWith('SELECT version,name,status,rules FROM risk_rules')) {
+        const rule = shared.rules.find((item) => item.status === 'clinician_approved');
+        return { rowCount: rule ? 1 : 0, rows: rule ? [structuredClone(rule)] : [] };
+      }
+      if (sql.startsWith('UPDATE clinic_settings SET data=')) {
+        shared.settings = JSON.parse(params[0]);
+        shared.updates += 1;
+        return { rowCount: 1, rows: [] };
+      }
+      throw new Error(`Unexpected test activation query: ${sql}`);
+    },
+    finishTransaction() { releaseLock?.(); releaseLock = null; },
+  };
+  return { client, shared };
+}
+
+async function inMockTransaction(client, operation) {
+  try { return await operation(); }
+  finally { client.finishTransaction(); }
+}
 
 test('risk assessment stays incomplete when pain score is missing', () => {
   const result = assessRisk({ recentVisitCount: 0 }, getDemonstrationRules());
@@ -177,6 +231,97 @@ test('version-0 demonstration no-match behavior remains low and routine', () => 
   assert.equal(result.status, 'complete');
   assert.equal(result.category, 'low');
   assert.equal(result.priority, 'routine');
+});
+
+test('development test activation keeps a candidate draft and is idempotent', async () => {
+  const { client, shared } = testActivationClient();
+  const ruleId = shared.rules[0].id;
+  const first = await inMockTransaction(client, () => activateRiskRuleForTesting(client, ruleId, 'development'));
+  const repeated = await inMockTransaction(client, () => activateRiskRuleForTesting(client, ruleId, 'development'));
+
+  assert.equal(first.changed, true);
+  assert.equal(repeated.changed, false);
+  assert.equal(shared.updates, 1);
+  assert.equal(shared.settings.schoolName, 'Test Clinic');
+  assert.equal(shared.settings.testRiskRuleActivation.ruleId, ruleId);
+  assert.equal(Object.hasOwn(shared.settings.testRiskRuleActivation, 'activatedBy'), false);
+  assert.equal(shared.rules[0].status, 'draft');
+  assert.equal(shared.rules[0].approved_by, null);
+  assert.equal(shared.rules[0].approved_at, null);
+});
+
+test('risk selection marks development test results and ignores activation outside development', async () => {
+  const activation = { ruleId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', activatedAt: '2026-09-28T00:00:00.000Z' };
+  const { client, shared } = testActivationClient({ active: activation, includeApproved: true });
+  const developmentRules = await selectRiskRules(client, 'development');
+  const developmentResult = assessRisk({ temperature: 37, clinicianRedFlag: false }, developmentRules);
+  assert.equal(developmentResult.ruleVersion, 9);
+  assert.equal(developmentResult.ruleStatus, 'test_active');
+  assert.equal(shared.rules[0].status, 'draft');
+  assert.equal(shared.rules[0].approved_by, null);
+
+  const productionRules = await selectRiskRules(client, 'production');
+  const productionResult = assessRisk({ painScore: 5 }, productionRules);
+  assert.equal(productionResult.ruleVersion, 8);
+  assert.equal(productionResult.ruleStatus, 'clinician_approved');
+});
+
+test('production keeps the legacy demonstration fallback when no approved rule exists', async () => {
+  const activation = { ruleId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' };
+  const { client, shared } = testActivationClient({ active: activation });
+  const rules = await selectRiskRules(client, 'production');
+  const result = assessRisk({ painScore: 1, recentVisitCount: 0 }, rules);
+
+  assert.equal(result.ruleVersion, 0);
+  assert.equal(result.ruleStatus, 'draft');
+  assert.equal(result.category, 'low');
+  assert.equal(result.priority, 'routine');
+  assert.equal(shared.rules[0].status, 'draft');
+});
+
+test('production cannot activate test rules and invalid drafts are rejected', async () => {
+  const { client, shared } = testActivationClient();
+  await assert.rejects(
+    inMockTransaction(client, () => activateRiskRuleForTesting(client, shared.rules[0].id, 'production')),
+    (error) => error.status === 404 && error.code === 'NOT_FOUND',
+  );
+  const normalDraft = { ...shared.rules[0], id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', rules: getDemonstrationRules() };
+  shared.rules.push(normalDraft);
+  await assert.rejects(
+    inMockTransaction(client, () => activateRiskRuleForTesting(client, normalDraft.id, 'development')),
+    (error) => error.status === 409 && error.code === 'RULE_NOT_ELIGIBLE_FOR_TESTING',
+  );
+  assert.equal(shared.settings.testRiskRuleActivation, null);
+  assert.equal(shared.rules[0].approved_by, null);
+});
+
+test('disable clears only test activation and is idempotent', async () => {
+  const activation = { ruleId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', activatedAt: '2026-09-28T00:00:00.000Z' };
+  const { client, shared } = testActivationClient({ active: activation });
+  const visible = await readTestRiskRuleActivation(client, 'development');
+  assert.deepEqual(visible, activation);
+
+  const disabled = await inMockTransaction(client, () => disableRiskRuleTesting(client, 'development'));
+  const repeated = await inMockTransaction(client, () => disableRiskRuleTesting(client, 'development'));
+  assert.equal(disabled.changed, true);
+  assert.equal(disabled.ruleId, activation.ruleId);
+  assert.equal(repeated.changed, false);
+  assert.equal(shared.settings.schoolName, 'Test Clinic');
+  assert.equal(Object.hasOwn(shared.settings, 'testRiskRuleActivation'), false);
+  assert.equal(shared.rules[0].status, 'draft');
+  assert.equal(shared.updates, 1);
+});
+
+test('concurrent test activations serialize and write one activation', async () => {
+  const { shared } = testActivationClient();
+  const ruleId = shared.rules[0].id;
+  const clients = [testActivationClient({ shared }), testActivationClient({ shared })];
+  const results = await Promise.all(clients.map(({ client }) => inMockTransaction(client, () => activateRiskRuleForTesting(client, ruleId, 'development'))));
+
+  assert.equal(results.filter((result) => result.changed).length, 1);
+  assert.equal(shared.updates, 1);
+  assert.equal(shared.settings.testRiskRuleActivation.ruleId, ruleId);
+  assert.equal(shared.rules[0].status, 'draft');
 });
 
 test('risk rule validator rejects unsupported fields and non-monotonic thresholds', () => {

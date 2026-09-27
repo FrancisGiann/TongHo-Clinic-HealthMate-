@@ -1,0 +1,3 @@
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS prc_license_verified_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS prc_license_verified_by UUID REFERENCES users(id) ON DELETE SET NULL;
