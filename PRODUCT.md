@@ -12,7 +12,7 @@ The primary user is the Philippine Tong Ho Institute school nurse working on a d
 
 ## Product Purpose
 
-HealthMate+ replaces fragmented paper clinic records and manual workflows with one secure clinic system. It centralizes patient profiles, consultation history, appointments, queue management, risk indicators, notifications, inventory activity, and clinic reports. Success means clinic staff can record and retrieve accurate information quickly while each user sees only authorized data.
+HealthMate+ replaces fragmented paper clinic records and manual workflows with one secure clinic system for a single school nurse. It centralizes patient profiles, consultation history, appointments, risk indicators, notifications, inventory activity, and clinic reports. Success means clinic staff can record and retrieve accurate information quickly while each user sees only authorized data.
 
 ## Positioning
 
@@ -20,7 +20,7 @@ HealthMate+ combines PTHI-specific clinic workflows with explainable risk and pa
 
 ## Operating Context
 
-The application is used through standard desktop and laptop web browsers. It must support high-volume clinic intake, consultation documentation, follow-up work, appointment requests, walk-in queue management, school reporting, and account administration. Health screening and incident reporting are outside the current prototype scope and intended revised proposal scope. The original proposal has not yet been revised and still includes a manual student incident self-report passage. Historical screening and incident rows remain in the database, but the application no longer exposes those records, includes them in reports or exports, or accepts new or changed records. The final deployment may run on Hostinger with Supabase PostgreSQL and SMTP email; it has no offline fallback and must not assume localhost or a school-only LAN.
+The application is used through standard desktop and laptop web browsers. It supports consultation documentation, follow-up work, appointment requests, school reporting, and account administration. Health screening, incident reporting, walk-in queue management, and immunization recording are outside the current prototype scope and intended revised proposal scope. The original proposal has not yet been revised and still includes a manual student incident self-report passage. Historical records for removed workflows remain in the database, but the current app does not expose them or accept new or changed screening and incident records. The final deployment may run on Hostinger with Supabase PostgreSQL and SMTP email; it has no offline fallback and must not assume localhost or a school-only LAN.
 
 ## Capabilities and Constraints
 

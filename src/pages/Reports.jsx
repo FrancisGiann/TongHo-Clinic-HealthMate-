@@ -1,31 +1,44 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { BarChart3, Download, FileText, PieChart, Save } from "lucide-react";
 import { api } from "../utils/api";
-export default function Reports({ user }) {
+export default function Reports() {
   const exportReport = () => window.print();
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
-  const [period, setPeriod] = useState('monthly');
-  const [start, setStart] = useState(`${today.slice(0, 8)}01`);
+  const [searchParams] = useSearchParams();
+  const initialPeriod = searchParams.get('period') === 'daily' ? 'daily' : 'monthly';
+  const [period, setPeriod] = useState(initialPeriod);
+  const [start, setStart] = useState(initialPeriod === 'daily' ? today : `${today.slice(0, 8)}01`);
   const [end, setEnd] = useState(today);
   const [serverReport, setServerReport] = useState(null);
   const [snapshots, setSnapshots] = useState([]);
   const [reportLoading, setReportLoading] = useState(true);
+  const [snapshotsLoading, setSnapshotsLoading] = useState(true);
+  const [snapshotsError, setSnapshotsError] = useState('');
   const [reportMessage, setReportMessage] = useState('');
   const [reportError, setReportError] = useState('');
   const [savingSnapshot, setSavingSnapshot] = useState(false);
-  const canViewClinicalDetails = user?.role === 'school_nurse';
-  const loadReport = async () => {
+  useEffect(() => {
+    let active = true;
     setReportError('');
     setReportLoading(true);
-    try {
-      setServerReport(await api.get(`/api/reports?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`));
-    } catch (error) {
-      setReportError(error.message);
-    } finally {
-      setReportLoading(false);
-    }
-  };
-  useEffect(() => { loadReport(); api.get('/api/reports/snapshots').then((result) => setSnapshots(result.snapshots || [])).catch(() => {}); }, [start, end]);
+    setServerReport(null);
+    api.get(`/api/reports?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`)
+      .then((result) => { if (active) setServerReport(result); })
+      .catch((error) => { if (active) setReportError(error.message); })
+      .finally(() => { if (active) setReportLoading(false); });
+    return () => { active = false; };
+  }, [start, end]);
+  useEffect(() => {
+    let active = true;
+    setSnapshotsLoading(true);
+    setSnapshotsError('');
+    api.get('/api/reports/snapshots')
+      .then((result) => { if (active) setSnapshots(result.snapshots || []); })
+      .catch((error) => { if (active) setSnapshotsError(error.message || 'Saved snapshots could not be loaded.'); })
+      .finally(() => { if (active) setSnapshotsLoading(false); });
+    return () => { active = false; };
+  }, []);
   const choosePeriod = (value) => {
     setPeriod(value);
     const date = new Date();
@@ -42,6 +55,7 @@ export default function Reports({ user }) {
       await api.post('/api/reports/snapshots', { start, end, type: period });
       const result = await api.get('/api/reports/snapshots');
       setSnapshots(result.snapshots || []);
+      setSnapshotsError('');
       setReportMessage('Report snapshot saved for audit and future reference.');
     } catch (error) { setReportError(error.message); }
     finally { setSavingSnapshot(false); }
@@ -54,8 +68,6 @@ export default function Reports({ user }) {
     "None";
   const gradeCounts = serverReport?.grades || {};
   
-  const vaccineDueSuppressed = serverReport?.suppressedTotals?.includes('vaccineDueRecords');
-  const vaccineDueRecords = serverReport?.totals?.vaccineDueRecords || 0;
   return (
     <div className="form-page">
       <div className="page-intro">
@@ -65,7 +77,7 @@ export default function Reports({ user }) {
         </div>
         <div className="intro-actions"><button type="button" className="secondary-btn" onClick={saveSnapshot} disabled={reportLoading || savingSnapshot}><Save size={16} /> {savingSnapshot ? 'Saving…' : 'Save snapshot'}</button><button type="button" className="secondary-btn" onClick={exportReport}><Download size={16} /> Print / PDF</button></div>
       </div>
-      <section className="panel inline-entry-form"><div className="report-filter-grid"><label>Report period<select value={period} onChange={(event) => choosePeriod(event.target.value)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="custom">Custom</option></select></label><label>Start date<input type="date" value={start} max={end} onChange={(event) => { setPeriod('custom'); setStart(event.target.value); }} /></label><label>End date<input type="date" value={end} min={start} max={today} onChange={(event) => { setPeriod('custom'); setEnd(event.target.value); }} /></label></div>{reportLoading && <p className="field-hint" role="status">Loading the selected date range…</p>}{reportMessage && <p className="success-message">{reportMessage}</p>}{reportError && <div className="error-banner" role="alert">{reportError}</div>}</section>
+      <section className="panel inline-entry-form"><div className="report-filter-grid"><label>Report period<select value={period} onChange={(event) => choosePeriod(event.target.value)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="custom">Custom</option></select></label><label>Start date<input type="date" value={start} max={end} onChange={(event) => { setPeriod('custom'); setStart(event.target.value); }} /></label><label>End date<input type="date" value={end} min={start} max={today} onChange={(event) => { setPeriod('custom'); setEnd(event.target.value); }} /></label></div>{reportLoading && <p className="field-hint" role="status">Loading the selected date range…</p>}{reportMessage && <p className="success-message" role="status">{reportMessage}</p>}{reportError && <div className="error-banner" role="alert">{reportError}</div>}</section>
       <div className="report-kpis">
         <div>
           <span>Visits this period</span>
@@ -77,12 +89,8 @@ export default function Reports({ user }) {
           <strong className="report-word">{complaintSuppressed ? 'Withheld' : Object.entries(serverReport?.complaints || complaintCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || topComplaint}</strong>
           <small>{complaintSuppressed ? 'Small categories are suppressed' : 'Most recorded concern'}</small>
         </div>
-        <div>
-          <span>Recorded vaccine due dates</span>
-          <strong>{vaccineDueSuppressed ? 'Withheld' : vaccineDueRecords}</strong>
-          <small>{vaccineDueSuppressed ? 'Small counts are suppressed' : `Latest student and vaccine records due by ${end}`}</small>
-        </div>
       </div>
+      <section className="panel table-panel"><div className="panel-heading"><h3>Patients with visits by type</h3></div>{serverReport?.suppressedAggregates?.includes('patientTypes') ? <p className="field-hint" role="note">Small patient-type groups are suppressed to protect privacy.</p> : Object.entries(serverReport?.patientTypes || {}).map(([type, count]) => <div className="queue-row" key={type}><span>{type === 'faculty' ? 'Faculty' : 'Students'}</span><strong>{count}</strong></div>)}{serverReport && !serverReport.suppressedAggregates?.includes('patientTypes') && !Object.keys(serverReport.patientTypes || {}).length && <p className="empty-state">No visits were recorded in this period.</p>}</section>
       <div className="reports-grid">
         <section className="panel report-chart">
           <div className="panel-heading">
@@ -129,8 +137,10 @@ export default function Reports({ user }) {
       </div>
       <section className="panel table-panel">
         <div className="panel-heading"><div><h3>Saved report snapshots</h3><p className="field-hint">Server-stored aggregate reports for audit and reference.</p></div></div>
-        {snapshots.slice(0, 5).map((snapshot) => <div className="queue-row" key={snapshot.id}><strong>{snapshot.report_type}</strong><span>{snapshot.period_start} to {snapshot.period_end}</span><span>{snapshot.data?.suppressedTotals?.includes('visits') ? 'Withheld visits' : `${snapshot.data?.totals?.visits ?? 0} visits`}</span><time>{new Date(snapshot.created_at).toLocaleDateString()}</time></div>)}
-        {!snapshots.length && <p className="empty-state">No saved snapshots yet.</p>}
+        {snapshotsLoading && <p className="empty-state" role="status">Loading saved snapshots…</p>}
+        {snapshotsError && <div className="error-banner" role="alert">Saved snapshots could not be loaded. {snapshotsError}</div>}
+        {!snapshotsLoading && !snapshotsError && snapshots.slice(0, 5).map((snapshot) => <div className="queue-row" key={snapshot.id}><strong>{snapshot.report_type} · {snapshot.source === 'automated' ? 'Automatic' : 'Manual'}</strong><span>{snapshot.period_start} to {snapshot.period_end}</span><span>{snapshot.data?.suppressedTotals?.includes('visits') ? 'Withheld visits' : `${snapshot.data?.totals?.visits ?? 0} visits`}</span><time>{new Date(snapshot.created_at).toLocaleDateString()}</time></div>)}
+        {!snapshotsLoading && !snapshotsError && !snapshots.length && <p className="empty-state">No saved snapshots yet.</p>}
       </section>
       <div className="reports-grid">
         {[["Consultation types", "consultationTypes", serverReport?.consultationTypes], ["Treatments", "treatments", serverReport?.treatments], ["Medication use", "medications", serverReport?.medications], ["Supply use", "supplies", serverReport?.supplies], ["Unclassified historical items", "unclassifiedItems", serverReport?.unclassifiedItems]].map(([title, key, values]) => {
@@ -139,10 +149,6 @@ export default function Reports({ user }) {
           return <section className="panel table-panel" key={key}><div className="panel-heading"><h3>{title}</h3></div>{entries.map(([label, count]) => <div className="queue-row" key={label}><span>{label}</span><strong>{count}</strong></div>)}{suppressed && <p className="field-hint" role="note">Small categories are suppressed to protect privacy.</p>}{!suppressed && !entries.length && <p className="empty-state">No records in this period.</p>}</section>;
         })}
       </div>
-      {canViewClinicalDetails && <section className="panel table-panel">
-        <div className="panel-heading"><div><p className="section-kicker">Preventive care</p><h3>Latest recorded vaccine due dates</h3><p className="field-hint">One latest record per student and vaccine. Due labels use only the next due date recorded by the clinic.</p></div></div>
-        {serverReport?.vaccineTracking?.length ? <table><thead><tr><th>Student</th><th>Vaccine</th><th>Dose</th><th>Administered</th><th>Source</th><th>Next due</th><th>Status at period end</th></tr></thead><tbody>{serverReport.vaccineTracking.map((record) => <tr key={`${record.studentId}-${record.vaccineName}`}><td><strong>{record.studentName}</strong></td><td>{record.vaccineName}</td><td>{record.doseNumber}</td><td>{record.dateAdministered || '—'}</td><td>{record.source === 'external' ? `External${record.clinicName ? ` · ${record.clinicName}` : ''}` : record.source === 'clinic' ? 'School clinic' : 'Not recorded'}</td><td>{record.nextDueDate}</td><td>{record.dueStatus}</td></tr>)}</tbody></table> : <p className="empty-state">No current vaccine records have a next due date recorded.</p>}
-      </section>}
       <section className="panel table-panel">
         <div className="panel-heading">
           <div>

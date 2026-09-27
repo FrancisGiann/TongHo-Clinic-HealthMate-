@@ -12,7 +12,7 @@
 - Register or update patient profiles.
 - Record visits, pain score, clinical observations, treatment, disposition, and follow-up.
 - Review the explainable risk result. It is not a diagnosis. High-risk results require a documented acknowledgement and appropriate clinical action.
-- Manage immunizations, appointments, queue, medicine dispensing, and stock.
+- Manage appointments, medicine dispensing, and stock.
 - Health screening and incident reporting are not available in the current app. Historical records from earlier versions remain in the database but are not shown in the app, reports, or exports.
 - Generate daily, weekly, monthly, or custom reports and save snapshots.
 

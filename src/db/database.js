@@ -1,3 +1,5 @@
+import { generateDemoData } from './demoData.js';
+
 const isoDate = (daysAgo = 0) => {
   const date = new Date();
   date.setHours(12, 0, 0, 0);
@@ -37,25 +39,17 @@ const seed = {
     { id: 304, name: 'Oral rehydration salts', category: 'Supplies', quantity: 18, unit: 'sachets', expiryDate: '2027-06-30', reorderLevel: 10 },
     { id: 305, name: 'Instant cold pack', category: 'First Aid', quantity: 12, unit: 'pieces', expiryDate: '2028-04-30', reorderLevel: 8 },
   ],
-  immunizations: [
-    { id: 501, studentId: 101, vaccineName: 'MMR', doseNumber: '2nd', dateAdministered: '2025-09-10', nextDueDate: '', remarks: 'Up to date' },
-    { id: 502, studentId: 102, vaccineName: 'Td', doseNumber: '1st', dateAdministered: '2025-09-12', nextDueDate: isoDate(-30), remarks: 'Schedule booster' },
-    { id: 503, studentId: 103, vaccineName: 'MMR', doseNumber: '1st', dateAdministered: '2025-09-08', nextDueDate: '2026-10-08', remarks: 'Follow-up due' },
-  ],
   appointments: [
     { id: 701, studentId: 103, date: isoDate(-2), time: '02:30 PM', reason: 'Asthma follow-up', status: 'Scheduled' },
     { id: 702, studentId: 102, date: isoDate(-5), time: '10:00 AM', reason: 'Parent notification', status: 'Pending' },
   ],
-  queue: []
 };
 
 const collectionKeys = [
   'students',
   'visits',
   'inventory',
-  'immunizations',
   'appointments',
-  'queue',
   'dispenseLogs',
   'stockAdjustments',
 ];
@@ -87,7 +81,8 @@ function normalizeData(value) {
     ...source,
     settings: { ...(source.settings || {}) },
   };
-
+  delete normalized.immunizations;
+  delete normalized.queue;
   delete normalized.screenings;
   delete normalized.incidents;
 
@@ -104,7 +99,7 @@ function normalizeData(value) {
  * @returns {Object} Complete application data object
  */
 export function loadData() {
-  return createInitialData();
+  return generateDemoData();
 }
 
 /**

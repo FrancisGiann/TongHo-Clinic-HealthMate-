@@ -2,27 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { advanceClinicDataVersion, hydrateAuthoritativeRecord, saveClinicData, saveClinicDataInTransaction, studentRecordForUser, syncCollection, syncPatients, validateClinicDataPayload, validateVersionAfterAdvance } from './repository.js';
 
-test('repository hydration prefers authoritative queue columns over legacy JSON', () => {
-  const result = hydrateAuthoritativeRecord('queue', {
-    id: 'queue-1',
-    patient_id: 'student-1',
-    status: 'Being Seen',
-    priority: 3,
-    created_at: new Date('2026-09-23T02:30:00.000Z'),
-    updated_at: new Date('2026-09-23T02:35:00.000Z'),
-    data: { id: 'legacy-id', patientId: 'legacy-student', status: 'Waiting', priority: 0 },
-  });
-
-  assert.deepEqual(result, {
-    id: 'queue-1',
-    patientId: 'student-1',
-    status: 'Being Seen',
-    priority: 3,
-    arrivalAt: '2026-09-23T02:30:00.000Z',
-    updatedAt: '2026-09-23T02:35:00.000Z',
-  });
-});
-
 test('repository hydration keeps appointment patient and scheduling state authoritative', () => {
   const result = hydrateAuthoritativeRecord('appointments', {
     id: 'appointment-1',
@@ -45,29 +24,11 @@ test('repository hydration keeps inventory quantity authoritative and carries ar
   assert.deepEqual(result, { id: 'medicine-1', quantity: 3, name: 'Bandages', archived: true });
 });
 
-test('immunization hydration adds authoritative patient and creation timestamps', () => {
-  const result = hydrateAuthoritativeRecord('immunizations', {
-    id: 'immunization-1',
-    patient_id: 'student-1',
-    created_at: new Date('2026-09-23T02:00:00.000Z'),
-    data: { id: 'legacy-id', studentId: 99, vaccineName: 'MMR', dateAdministered: '2026-09-01' },
-  });
-  assert.deepEqual(result, {
-    id: 'immunization-1',
-    patientId: 'student-1',
-    createdAt: '2026-09-23T02:00:00.000Z',
-    studentId: 99,
-    vaccineName: 'MMR',
-    dateAdministered: '2026-09-01',
-  });
-});
-
-test('bulk sync validation is complete and upsert-only writes preserve omitted records', async () => {
-  const complete = { settings: {}, students: [], visits: [], screenings: [], immunizations: [], incidents: [], appointments: [], queue: [], inventory: [], dispenseLogs: [], stockAdjustments: [] };
+test('bulk sync accepts retired fields as absent and upsert-only writes preserve omitted records', async () => {
+  const complete = { settings: {}, students: [], visits: [], immunizations: [], appointments: [], queue: [], inventory: [], dispenseLogs: [], stockAdjustments: [] };
   assert.equal(validateClinicDataPayload(complete, 3).valid, true);
-  assert.equal(validateClinicDataPayload({ ...complete, screenings: undefined, incidents: undefined }, 3).valid, true);
-  assert.equal(validateClinicDataPayload({ ...complete, immunizations: undefined }, 3).valid, false);
-  assert.equal(validateClinicDataPayload({ settings: {}, students: [], screenings: [], immunizations: [], incidents: [] }, 3).valid, true);
+  assert.equal(validateClinicDataPayload({ settings: {}, students: [] }, 3).valid, true);
+  assert.equal(validateClinicDataPayload({ ...complete, visits: undefined }, 3, { internal: true }).valid, false);
   await assert.rejects(
     () => saveClinicData(complete, { role: 'system_administrator' }, 3),
     (error) => error.status === 403,
@@ -81,9 +42,11 @@ test('bulk sync validation is complete and upsert-only writes preserve omitted r
   assert.match(queries.at(-1)[0], /INSERT INTO visits\(/);
 });
 
-test('removed screening and incident collections are not written by repository sync', async () => {
+test('retired queue, immunization, screening, and incident collections cannot be synced', async () => {
   const queries = [];
   const client = { query: async (...args) => { queries.push(args); return { rows: [] }; } };
+  await syncCollection(client, 'queue', [{ id: 'legacy-queue', patientId: 'student-1' }], 'nurse-1');
+  await syncCollection(client, 'immunizations', [{ id: 'legacy-vaccine', patientId: 'student-1' }], 'nurse-1');
   await syncCollection(client, 'screenings', [{ id: 'legacy-screen', patientId: 'student-1' }], 'nurse-1');
   await syncCollection(client, 'incidents', [{ id: 'legacy-incident', patientId: 'student-1' }], 'nurse-1');
   assert.deepEqual(queries, []);
@@ -110,7 +73,7 @@ test('snapshot writes reject versions made stale by a transactional API write', 
     },
   };
   const snapshot = {
-    settings: {}, students: [], visits: [], screenings: [], immunizations: [], incidents: [],
+    settings: {}, students: [], visits: [], immunizations: [],
     appointments: [], queue: [], inventory: [], dispenseLogs: [], stockAdjustments: [],
   };
 
@@ -122,16 +85,16 @@ test('snapshot writes reject versions made stale by a transactional API write', 
   );
   assert.equal(queries.length, 2, 'the stale snapshot stops before syncing any collections');
 
-  const safeSnapshot = { ...snapshot, screenings: [], immunizations: [], incidents: [] };
+  const safeSnapshot = { ...snapshot, immunizations: [] };
   const savedVersion = await saveClinicDataInTransaction(client, safeSnapshot, { id: 'nurse-1', role: 'school_nurse' }, 5);
   assert.equal(savedVersion, 6);
   assert.equal(queries.some((sql) => /INSERT INTO (visits|appointments|queue_entries|inventory_items|dispense_logs|stock_adjustments)\(/i.test(sql)), false);
 });
 
-test('legacy snapshots never upsert visits, appointments, queue, inventory or stock history', async () => {
+test('legacy snapshots cannot write visits, appointments, retired workflows, inventory or stock history', async () => {
   const protectedRecord = { id: 'should-not-persist', patientId: 'student-1', quantity: 999, status: 'Completed' };
   const snapshot = {
-    settings: {}, students: [], screenings: [], immunizations: [], incidents: [],
+    settings: {}, students: [], immunizations: [],
     visits: [protectedRecord], appointments: [protectedRecord], queue: [protectedRecord],
     inventory: [protectedRecord], dispenseLogs: [protectedRecord], stockAdjustments: [protectedRecord],
   };
@@ -148,8 +111,30 @@ test('legacy snapshots never upsert visits, appointments, queue, inventory or st
   await saveClinicDataInTransaction(client, snapshot, { id: 'nurse-1', role: 'school_nurse' }, 1);
 
   assert.ok(queries.some((sql) => /INSERT INTO patients/.test(sql)) === false);
-  assert.equal(queries.some((sql) => /INSERT INTO (visits|appointments|queue_entries|inventory_items|dispense_logs|stock_adjustments)\(/i.test(sql)), false);
+  assert.equal(queries.some((sql) => /INSERT INTO (visits|appointments|queue_entries|immunizations|inventory_items|dispense_logs|stock_adjustments)\(/i.test(sql)), false);
   assert.equal(queries.filter((sql) => /INSERT INTO (screenings|immunizations|incidents)\(/i.test(sql)).length, 0);
+});
+
+test('internal demo snapshots do not write retired collections', async () => {
+  const snapshot = {
+    settings: {}, students: [], visits: [], screenings: [], incidents: [], appointments: [],
+    immunizations: [{ id: 'legacy-vaccine', patientId: 'student-1' }],
+    queue: [{ id: 'legacy-queue', patientId: 'student-1' }],
+    inventory: [], dispenseLogs: [], stockAdjustments: [],
+  };
+  const queries = [];
+  const client = {
+    query: async (sql) => {
+      queries.push(sql);
+      if (/SELECT data, version FROM clinic_settings/.test(sql)) return { rows: [{ data: {}, version: 1 }] };
+      if (/UPDATE clinic_settings SET data=/.test(sql)) return { rows: [{ version: 2 }] };
+      return { rows: [] };
+    },
+  };
+
+  await saveClinicDataInTransaction(client, snapshot, { id: 'seed-admin', role: 'system_administrator' }, 1, { internal: true });
+
+  assert.equal(queries.some((sql) => /INSERT INTO (immunizations|queue_entries)\(/i.test(sql)), false);
 });
 
 test('roster bulk sync cannot set patient consent fields and preserves server values', async () => {

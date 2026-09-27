@@ -8,9 +8,7 @@ const emptyClinicData = () => ({
   settings: {},
   students: [],
   visits: [],
-  immunizations: [],
   appointments: [],
-  queue: [],
   inventory: [],
   dispenseLogs: [],
   stockAdjustments: [],
@@ -101,6 +99,37 @@ export function useClinicData(user) {
       if (identityRef.current.sessionKey === sessionKey && loadSequence === loadSequenceRef.current) setError(requestError.message);
     } finally {
       if (identityRef.current.sessionKey === sessionKey && loadSequence === loadSequenceRef.current) setLoading(false);
+    }
+  }, [applyData, sessionKey, user]);
+
+  const refreshInBackground = useCallback(async () => {
+    if (!user || !sessionKey || identityRef.current.sessionKey !== sessionKey) return false;
+
+    await saveQueue.current;
+    if (identityRef.current.sessionKey !== sessionKey || pendingWritesRef.current > 0 || requiresReloadRef.current) return false;
+
+    const loadSequence = ++loadSequenceRef.current;
+    const refreshEpoch = refreshEpochRef.current;
+    const sequence = sequenceRef.current;
+    setError('');
+    try {
+      const refreshed = await api.get('/api/data');
+      if (identityRef.current.sessionKey !== sessionKey || loadSequence !== loadSequenceRef.current) return false;
+      if (refreshEpochRef.current !== refreshEpoch || sequenceRef.current !== sequence || pendingWritesRef.current > 0 || requiresReloadRef.current) {
+        return false;
+      }
+
+      refreshEpochRef.current += 1;
+      sequenceRef.current += 1;
+      applyData(refreshed, sessionKey);
+      refreshedSequenceRef.current = sequenceRef.current;
+      requiresReloadRef.current = false;
+      return true;
+    } catch (requestError) {
+      if (identityRef.current.sessionKey === sessionKey && loadSequence === loadSequenceRef.current) {
+        setError(requestError.message);
+      }
+      throw requestError;
     }
   }, [applyData, sessionKey, user]);
 
@@ -277,5 +306,5 @@ export function useClinicData(user) {
   }, [applyData, sessionKey]);
 
   const ready = Boolean(sessionKey && dataOwnerKey === sessionKey && !loading);
-  return [data, setData, { loading, saving, error, reload, applyServerData, commitData, ready }];
+  return [data, setData, { loading, saving, error, reload, refreshInBackground, applyServerData, commitData, ready }];
 }

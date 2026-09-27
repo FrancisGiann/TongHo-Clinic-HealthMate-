@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Archive,
   ArrowDownToLine,
@@ -8,15 +9,16 @@ import {
   PackagePlus,
   Search,
   TriangleAlert,
-  X,
   RotateCcw,
 } from "lucide-react";
 import { api } from "../utils/api";
+import ModalDialog from "../components/ModalDialog";
 
 const categories = ["Analgesics", "First Aid", "Supplies", "Respiratory", "Antibiotics", "Vitamins", "Emergency"];
 const units = ["tablets", "pieces", "packs", "sachets", "inhalers", "bottles", "boxes", "ml"];
 
 export default function Inventory({ data, applyServerData, reload, saving = false }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
   const [sortAscending, setSortAscending] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
@@ -189,6 +191,28 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
       schemaVersion: data.schemaVersion,
     }));
   };
+
+  useEffect(() => {
+    const requestedAdd = searchParams.get('add') === '1';
+    const requestedArchived = searchParams.get('archived') === '1';
+    const requestedEdit = searchParams.get('edit');
+    const requestedRestock = searchParams.get('restock');
+    const requestedEditItem = requestedEdit && inventory.find((item) => String(item.id) === requestedEdit && !item.archived);
+    const requestedRestockItem = requestedRestock && inventory.find((item) => String(item.id) === requestedRestock && !item.archived);
+    const hasInventoryAction = requestedAdd || requestedArchived || requestedEdit || requestedRestock;
+    if (!hasInventoryAction) return;
+
+    if (requestedArchived) setShowArchived(true);
+    if (requestedAdd) openAddForm();
+    else if (requestedEdit) {
+      if (requestedEditItem) openEditForm(requestedEditItem);
+      else setActionError('That inventory item is no longer available to edit. Refresh the inventory list and try again.');
+    } else if (requestedRestock) {
+      if (requestedRestockItem) openRestock(requestedRestockItem);
+      else setActionError('That inventory item is no longer available to restock. Refresh the inventory list and try again.');
+    }
+    setSearchParams(new URLSearchParams(), { replace: true });
+  }, [searchParams, setSearchParams, inventory]);
   return (
     <div className="form-page">
       <div className="page-intro">
@@ -233,7 +257,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
         </div>
       )}
       <section className="panel table-panel inventory-table">
-        <div className="panel-heading">
+        <div className="panel-heading inventory-list-heading">
           <div>
             <p className="section-kicker">Current stock</p>
             <h3>Medications & supplies</h3>
@@ -248,7 +272,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
                 aria-label="Search inventory items"
               />
             </div>
-            <label className="filter-btn"><input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} /> Show archived</label>
+            <label className="filter-btn inventory-archived-filter"><input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />Show archived</label>
             <button type="button" className="filter-btn" aria-pressed={sortAscending} onClick={() => setSortAscending((value) => !value)}>
               <ArrowUpDown size={15} /> Sort
             </button>
@@ -280,6 +304,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
                   <small>
                     Reorder at {item.reorderLevel} {item.unit}
                   </small>
+                  {!item.archived && !['medication', 'supply'].includes(item.itemType) && <small className="inventory-type-review"><Link to={`/inventory?edit=${encodeURIComponent(item.id)}`}>Review item type</Link></small>}
                 </td>
                 <td>{item.itemType
                   ? <span className="status-chip neutral">{item.itemType === 'medication' ? 'Medication' : 'Supply'}</span>
@@ -324,21 +349,19 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
           </tbody>
         </table>
       </section>
-      {restockItem && <div className="modal-backdrop" role="presentation" onClick={() => !pendingAction && setRestockItem(null)}><form className="modal-card" role="dialog" aria-modal="true" aria-labelledby="inventory-restock-title" onSubmit={restock} onClick={(event) => event.stopPropagation()}><div className="modal-heading"><div><p className="section-kicker">Stock adjustment</p><h3 id="inventory-restock-title">Restock item</h3></div><button type="button" className="icon-btn" onClick={() => setRestockItem(null)} aria-label="Close restock dialog" disabled={pendingAction}><X size={18}/></button></div><div className="restock-item-preview"><PackagePlus size={18} aria-hidden="true"/><div><strong>{restockItem.name}</strong><span>{restockItem.quantity} {restockItem.unit} currently on hand</span></div></div>{actionError && <div className="error-banner" role="alert">{actionError}</div>}{pendingAction && <p className="field-hint" role="status" aria-live="polite">Saving stock adjustment…</p>}<label>Quantity received<input type="number" min="1" max="1000000" step="1" value={restockQuantity} onChange={(event) => setRestockQuantity(event.target.value)} required disabled={pendingAction} /></label><label>Reason<select value={restockReason} onChange={(event) => setRestockReason(event.target.value)} disabled={pendingAction}><option>Routine restock</option><option>Emergency purchase</option><option>Donation</option><option>Stock correction</option></select></label><div className="form-actions"><button type="button" className="secondary-btn" onClick={() => setRestockItem(null)} disabled={pendingAction}>Cancel</button><button type="submit" className="primary-btn" disabled={pendingAction || saving}><PackagePlus size={16}/> {pendingAction ? 'Saving…' : 'Confirm restock'}</button></div></form></div>}
+      <ModalDialog open={Boolean(restockItem)} title="Restock item" eyebrow="Stock adjustment" onClose={() => setRestockItem(null)} busy={pendingAction}>
+        {restockItem && <form onSubmit={restock}>
+          <div className="restock-item-preview"><PackagePlus size={18} aria-hidden="true"/><div><strong>{restockItem.name}</strong><span>{restockItem.quantity} {restockItem.unit} currently on hand</span></div></div>
+          {actionError && <div className="error-banner" role="alert">{actionError}</div>}
+          {pendingAction && <p className="field-hint" role="status" aria-live="polite">Saving stock adjustment…</p>}
+          <label>Quantity received<input type="number" min="1" max="1000000" step="1" value={restockQuantity} onChange={(event) => setRestockQuantity(event.target.value)} required disabled={pendingAction} autoFocus /></label>
+          <label>Reason<select value={restockReason} onChange={(event) => setRestockReason(event.target.value)} disabled={pendingAction}><option>Routine restock</option><option>Emergency purchase</option><option>Donation</option><option>Stock correction</option></select></label>
+          <div className="form-actions"><button type="button" className="secondary-btn" onClick={() => setRestockItem(null)} disabled={pendingAction}>Cancel</button><button type="submit" className="primary-btn" disabled={pendingAction || saving}><PackagePlus size={16}/> {pendingAction ? 'Saving…' : 'Confirm restock'}</button></div>
+        </form>}
+      </ModalDialog>
 
-      {showAddForm && (
-        <div className="modal-backdrop" role="presentation" onClick={() => !pendingAction && setShowAddForm(false)}>
-          <form className="modal-card" role="dialog" aria-modal="true" aria-labelledby="inventory-item-title" onSubmit={handleSubmit} onClick={(event) => event.stopPropagation()}>
-            <div className="modal-heading">
-              <div>
-                <p className="section-kicker">Inventory management</p>
-                <h3 id="inventory-item-title">{editingItem ? 'Edit item' : 'Add new item'}</h3>
-              </div>
-              <button type="button" className="icon-btn" onClick={() => setShowAddForm(false)} aria-label="Close form" disabled={pendingAction}>
-                <X size={18} />
-              </button>
-            </div>
-
+      <ModalDialog open={showAddForm} title={editingItem ? 'Edit item' : 'Add new item'} eyebrow="Inventory management" onClose={() => setShowAddForm(false)} busy={pendingAction || saving} className="inventory-item-dialog">
+          <form onSubmit={handleSubmit}>
             {formError && <div className="error-banner" role="alert">{formError}</div>}
 
             <div className="form-grid">
@@ -352,6 +375,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
                   maxLength={120}
                   required 
                   disabled={pendingAction}
+                  autoFocus
                 />
               </label>
 
@@ -440,8 +464,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
               </button>
             </div>
           </form>
-        </div>
-      )}
+      </ModalDialog>
     </div>
   );
 }

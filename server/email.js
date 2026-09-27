@@ -20,12 +20,20 @@ export function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+export function smtpSecurityConfiguration(env = process.env) {
+  const secure = String(env.SMTP_SECURE || 'false').toLowerCase() === 'true';
+  return {
+    secure,
+    requireTLS: !secure,
+    tls: { rejectUnauthorized: env.SMTP_TLS_REJECT_UNAUTHORIZED !== 'false' },
+  };
+}
+
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: Number(process.env.SMTP_PORT || 587),
-  secure: String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
+  ...smtpSecurityConfiguration(),
   auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-  tls: { rejectUnauthorized: process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== 'false' },
 });
 
 export async function sendEmail({ to, subject, text, html }) {

@@ -38,12 +38,14 @@ export default function StudentProfile({ data, commitData, reload }) {
   if (!student)
     return (
       <div className="empty-page">
-        <h2>Student not found</h2>
-        <Link to="/students">Back to students</Link>
+        <h2>Patient not found</h2>
+        <Link to="/students">Back to patients</Link>
       </div>
     );
 
   const visits = data.visits.filter((visit) => String(visit.studentId || visit.patientId) === String(student.id));
+  const isFaculty = student.patientType === 'faculty';
+  const patientLabel = isFaculty ? 'faculty member' : 'student';
 
   const openEditor = () => {
     setRecordSaveError('');
@@ -106,21 +108,22 @@ export default function StudentProfile({ data, commitData, reload }) {
    */
   const validateStudentForm = (studentForm) => {
     if (!studentForm.name?.trim()) {
-      setRecordSaveError('Student name is required.');
+      setRecordSaveError('Patient name is required.');
       return false;
     }
-    if (!studentForm.studentId?.trim()) {
-      setRecordSaveError('Student ID is required.');
+    const externalId = (studentForm.facultyId || studentForm.studentId || '').trim();
+    if (!externalId) {
+      setRecordSaveError(`${isFaculty ? 'Faculty' : 'Student'} ID is required.`);
       return false;
     }
 
     // Check for duplicate student ID among OTHER students
-    const duplicateId = data.students?.some(
-      (s) => String(s.id) !== String(student.id) && s.studentId === studentForm.studentId.trim()
-    );
+    const normalizedId = externalId.toLowerCase();
+    const duplicateId = data.students?.some((s) => String(s.id) !== String(student.id)
+      && String(s.studentId || s.facultyId || '').trim().toLowerCase() === normalizedId);
 
     if (duplicateId) {
-      setRecordSaveError('A student with this ID is already registered.');
+      setRecordSaveError('Another patient record already uses this ID.');
       return false;
     }
 
@@ -138,11 +141,12 @@ export default function StudentProfile({ data, commitData, reload }) {
     setRecordSaving(true);
     setRecordSaveError('');
     try {
+      const updated = isFaculty ? { ...form, studentId: form.facultyId || form.studentId } : form;
       await commitData((current) => saveData({
         ...current,
-        students: current.students.map((item) => String(item.id) === String(student.id) ? form : item),
+        students: current.students.map((item) => String(item.id) === String(student.id) ? updated : item),
       }));
-      setRecordSaveMessage('Student record saved to clinic records.');
+      setRecordSaveMessage('Patient record saved to clinic records.');
       setForm(null);
       setImagePreview(null);
       setEditing(false);
@@ -174,7 +178,7 @@ export default function StudentProfile({ data, commitData, reload }) {
   return (
     <div className="profile-page">
       <Link to="/students" className="back-link">
-        <ArrowLeft size={16} /> Back to students
+        <ArrowLeft size={16} /> Back to patients
       </Link>
       <section className="profile-head">
         <div className="avatar-container">
@@ -197,26 +201,25 @@ export default function StudentProfile({ data, commitData, reload }) {
             className="image-upload-btn"
             onClick={openEditor}
             title="Upload profile image"
-            aria-label="Upload student profile image"
+            aria-label={`Upload ${isFaculty ? 'faculty' : 'student'} profile image`}
           >
             <Camera size={16} />
           </button>
         </div>
         <div>
-          <p className="section-kicker">Student profile</p>
+          <p className="section-kicker">{isFaculty ? 'Faculty profile' : 'Student profile'}</p>
           <h2>{student.name}</h2>
           {recordSaveMessage && <p className="success-message" role="status">{recordSaveMessage}</p>}
           <p>
-            {student.studentId} <span>·</span> {student.gradeLevel},{" "}
-            {student.section}
+            {isFaculty ? student.facultyId || student.studentId : student.studentId} <span>·</span> {isFaculty ? [student.department, student.position].filter(Boolean).join(' · ') || 'Faculty' : [student.gradeLevel, student.section].filter(Boolean).join(', ')}
           </p>
         </div>
         <div className="profile-actions">
-          <button className="secondary-btn" onClick={openEditor}><Pencil size={16} /> Edit student</button>
-          <button className="secondary-btn" onClick={() => window.location.href = `tel:${student.guardianPhone}`}>
-            <Phone size={16} /> Guardian
-          </button>
-          <Link to="/new-visit" className="primary-btn">
+          <button className="secondary-btn" onClick={openEditor}><Pencil size={16} /> Edit profile</button>
+          {(student.contactNumber || student.guardianPhone) && <button className="secondary-btn" onClick={() => window.location.href = `tel:${isFaculty ? student.contactNumber : student.guardianPhone}`}>
+            <Phone size={16} /> {isFaculty ? 'Contact' : 'Guardian'}
+          </button>}
+          <Link to="/new-visit" state={{ selectedStudent: student }} className="primary-btn">
             <Stethoscope size={16} /> Start visit
           </Link>
         </div>
@@ -246,8 +249,7 @@ export default function StudentProfile({ data, commitData, reload }) {
               label="Medical conditions"
               value={student.conditions || "None recorded"}
             />
-            <Detail label="Guardian" value={student.guardianName} />
-            <Detail label="Contact" value={student.guardianPhone} />
+            {isFaculty ? <><Detail label="Department" value={student.department} /><Detail label="Position" value={student.position} /><Detail label="Email" value={student.email} /><Detail label="Contact" value={student.contactNumber} /></> : <><Detail label="Guardian" value={student.guardianName} /><Detail label="Contact" value={student.guardianPhone} /></>}
           </div>
         </section>
         <section className="panel history-panel">
@@ -256,7 +258,7 @@ export default function StudentProfile({ data, commitData, reload }) {
               <p className="section-kicker">Care record</p>
               <h3>Visit history</h3>
             </div>
-            <button className="text-btn" onClick={() => navigate('/new-visit')}>Log visit</button>
+            <button className="text-btn" onClick={() => navigate('/new-visit', { state: { selectedStudent: student } })}>Log visit</button>
           </div>
           {visits.length > 0 ? (
             visits.map((visit) => (
@@ -281,11 +283,11 @@ export default function StudentProfile({ data, commitData, reload }) {
           ) : (
             <div className="empty-state">
               <p>No clinic visits yet</p>
-              <small>Visit history will appear here once you log a visit for this student.</small>
+              <small>Visit history will appear here once you log a visit for this {patientLabel}.</small>
             </div>
           )}
         </section>
-        <section className="panel consent-tracking-panel">
+        {!isFaculty && <section className="panel consent-tracking-panel">
           <div className="panel-heading">
             <div>
               <h3>Consent tracking</h3>
@@ -312,20 +314,23 @@ export default function StudentProfile({ data, commitData, reload }) {
               {consentMessage && <span className="field-hint" role="status">{consentMessage}</span>}
             </div>
           </form>
-        </section>
+        </section>}
       </div>
       {form && (
         <div className="modal-backdrop" role="presentation" onClick={() => !recordSaving && setForm(null)}>
           <form
             className="modal-card student-edit-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="student-edit-title"
             onSubmit={save}
             onClick={(event) => event.stopPropagation()}
             aria-busy={recordSaving}
           >
             <div className="modal-heading">
               <div>
-                <p className="section-kicker">Student record</p>
-                <h3>Edit student</h3>
+                <p className="section-kicker">{isFaculty ? 'Faculty record' : 'Student record'}</p>
+                <h3 id="student-edit-title">Edit {isFaculty ? 'faculty' : 'student'}</h3>
               </div>
               <button
                 type="button"
@@ -391,10 +396,10 @@ export default function StudentProfile({ data, commitData, reload }) {
 
             <div className="two-fields">
               <label>
-                Student ID *
+                {isFaculty ? 'Faculty ID *' : 'Student ID *'}
                 <input
-                  name="studentId"
-                  value={form.studentId}
+                  name={isFaculty ? 'facultyId' : 'studentId'}
+                  value={isFaculty ? form.facultyId || form.studentId : form.studentId}
                   onChange={update}
                   required
                 />
@@ -410,7 +415,10 @@ export default function StudentProfile({ data, commitData, reload }) {
               </label>
             </div>
 
-            <div className="two-fields">
+            {isFaculty ? <div className="two-fields">
+              <label>Department<input name="department" value={form.department || ''} onChange={update} maxLength={120} /></label>
+              <label>Position<input name="position" value={form.position || ''} onChange={update} maxLength={120} /></label>
+            </div> : <div className="two-fields">
               <label>
                 Grade level
                 <select name="gradeLevel" value={form.gradeLevel} onChange={update}>
@@ -423,7 +431,12 @@ export default function StudentProfile({ data, commitData, reload }) {
                 Section
                 <input name="section" value={form.section || ""} onChange={update} />
               </label>
-            </div>
+            </div>}
+
+            {isFaculty && <div className="two-fields">
+              <label>Email<input name="email" type="email" value={form.email || ''} onChange={update} maxLength={254} /></label>
+              <label>Contact number<input name="contactNumber" type="tel" value={form.contactNumber || ''} onChange={update} maxLength={40} /></label>
+            </div>}
 
             <div className="two-fields">
               <label>
@@ -452,7 +465,7 @@ export default function StudentProfile({ data, commitData, reload }) {
               </select>
             </label>
 
-            <div className="two-fields">
+            {!isFaculty && <div className="two-fields">
               <label>
                 Guardian name
                 <input
@@ -469,7 +482,7 @@ export default function StudentProfile({ data, commitData, reload }) {
                   onChange={update}
                 />
               </label>
-            </div>
+            </div>}
 
             <div className="two-fields">
               <label>

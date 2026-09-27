@@ -33,7 +33,7 @@ export async function summarizeEncounter(encounter) {
   const endpoint = process.env.AI_SUMMARY_ENDPOINT?.trim();
   const apiKey = process.env.AI_SUMMARY_API_KEY?.trim();
   if (!endpoint || !apiKey) {
-    return { draft: templateSummary(safeEncounter), provider: 'template', model: null, generatedAt: new Date().toISOString() };
+    return { draft: templateSummary(encounter), provider: 'template', model: null, generatedAt: new Date().toISOString() };
   }
 
   try {
@@ -55,6 +55,6 @@ export async function summarizeEncounter(encounter) {
     };
   } catch (error) {
     console.error('AI summary provider failed; using template fallback:', error.message);
-    return { draft: templateSummary(safeEncounter), provider: 'template-fallback', model: null, generatedAt: new Date().toISOString() };
+    return { draft: templateSummary(encounter), provider: 'template-fallback', model: null, generatedAt: new Date().toISOString() };
   }
 }

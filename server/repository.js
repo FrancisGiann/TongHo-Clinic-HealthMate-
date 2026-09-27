@@ -3,18 +3,16 @@ import { query, transaction } from './db.js';
 
 const collectionMap = {
   visits: { table: 'visits', patient: true },
-  immunizations: { table: 'immunizations', patient: true },
   appointments: { table: 'appointments', patient: true },
-  queue: { table: 'queue_entries', patient: true },
   inventory: { table: 'inventory_items', staffOnly: true },
   dispenseLogs: { table: 'dispense_logs', staffOnly: true },
   stockAdjustments: { table: 'stock_adjustments', staffOnly: true },
 };
 
 const staffRoles = new Set(['school_nurse', 'system_administrator']);
-const clinicalCollections = new Set(['visits', 'immunizations', 'appointments', 'queue', 'dispenseLogs', 'stockAdjustments']);
+const clinicalCollections = new Set(['visits', 'appointments', 'dispenseLogs', 'stockAdjustments']);
 const adminRestrictedCollections = new Set([...clinicalCollections, 'inventory']);
-const snapshotWritableCollections = ['immunizations'];
+const snapshotWritableCollections = [];
 
 function recordId(record) {
   const value = record?.id;
@@ -36,23 +34,12 @@ function timestampValue(value) {
 
 export function studentRecordForUser(record, user) {
   if (user.role !== 'system_administrator') return { ...record, id: record.id };
-  const fields = ['studentId', 'name', 'gradeLevel', 'section', 'adviser', 'birthDate', 'gender', 'guardianName', 'guardianPhone', 'guardianRelation'];
+  const fields = ['patientType', 'studentId', 'facultyId', 'name', 'gradeLevel', 'section', 'adviser', 'department', 'position', 'email', 'contactNumber', 'birthDate', 'gender', 'guardianName', 'guardianPhone', 'guardianRelation'];
   return { id: record.id, ...Object.fromEntries(fields.filter((field) => record[field] !== undefined).map((field) => [field, record[field]])) };
 }
 
 export function hydrateAuthoritativeRecord(key, row) {
   const record = row.data || {};
-  if (key === 'queue') {
-    return {
-      ...record,
-      id: row.id,
-      patientId: row.patient_id,
-      status: row.status,
-      priority: row.priority,
-      arrivalAt: timestampValue(row.created_at),
-      updatedAt: timestampValue(row.updated_at),
-    };
-  }
   if (key === 'appointments') {
     return {
       ...record,
@@ -62,14 +49,6 @@ export function hydrateAuthoritativeRecord(key, row) {
       status: row.status,
       createdAt: timestampValue(row.created_at),
       updatedAt: timestampValue(row.updated_at),
-    };
-  }
-  if (key === 'immunizations') {
-    return {
-      ...record,
-      id: row.id,
-      patientId: row.patient_id,
-      createdAt: timestampValue(row.created_at),
     };
   }
   if (key === 'inventory') {
@@ -93,12 +72,12 @@ export async function loadClinicData(user, { includeClinical = false } = {}) {
   const ids = await accessiblePatientIds(user);
   const staff = staffRoles.has(user.role);
   const patientResult = ids === null
-    ? await query('SELECT id,data FROM patients ORDER BY created_at')
-    : await query('SELECT id,data FROM patients WHERE id=ANY($1::text[]) ORDER BY created_at', [ids]);
+    ? await query('SELECT id,patient_type,data FROM patients ORDER BY created_at')
+    : await query('SELECT id,patient_type,data FROM patients WHERE id=ANY($1::text[]) ORDER BY created_at', [ids]);
   const data = {
     schemaVersion: settingsResult.rows[0]?.version || 1,
     settings: settingsResult.rows[0]?.data || {},
-    students: patientResult.rows.map((row) => studentRecordForUser({ ...row.data, id: row.id }, user)),
+    students: patientResult.rows.map((row) => studentRecordForUser({ ...row.data, id: row.id, patientType: row.patient_type }, user)),
   };
 
   for (const [key, config] of Object.entries(collectionMap)) {
@@ -110,19 +89,9 @@ export async function loadClinicData(user, { includeClinical = false } = {}) {
       data[key] = [];
       continue;
     }
-    if (key === 'queue' || key === 'appointments') {
-      const table = key === 'queue' ? 'queue_entries' : 'appointments';
-      const columns = key === 'queue'
-        ? 'id,patient_id,status,priority,created_at,updated_at,data'
-        : 'id,patient_id,status,starts_at,created_at,updated_at,data';
+    if (key === 'appointments') {
       const scope = ids !== null ? ' WHERE patient_id=ANY($1::text[])' : '';
-      const result = await query(`SELECT ${columns} FROM ${table}${scope} ORDER BY created_at`, ids !== null ? [ids] : []);
-      data[key] = result.rows.map((row) => hydrateAuthoritativeRecord(key, row));
-      continue;
-    }
-    if (key === 'immunizations') {
-      const scope = ids !== null ? ' WHERE patient_id=ANY($1::text[])' : '';
-      const result = await query(`SELECT id,patient_id,created_at,data FROM immunizations${scope} ORDER BY created_at`, ids !== null ? [ids] : []);
+      const result = await query(`SELECT id,patient_id,status,starts_at,created_at,updated_at,data FROM appointments${scope} ORDER BY created_at`, ids !== null ? [ids] : []);
       data[key] = result.rows.map((row) => hydrateAuthoritativeRecord(key, row));
       continue;
     }
@@ -221,7 +190,7 @@ export async function syncCollection(client, key, records, actorId) {
   for (const record of records) {
     const id = recordId(record);
     const json = JSON.stringify(record);
-    if (['visits', 'immunizations'].includes(key)) {
+    if (key === 'visits') {
       const table = collectionMap[key].table;
       const pid = patientId(record);
       if (!pid) throw new Error(`${key} record ${id} is missing a patient id.`);
@@ -238,14 +207,6 @@ export async function syncCollection(client, key, records, actorId) {
         `INSERT INTO appointments(id,patient_id,starts_at,status,data,created_by) VALUES($1,$2,$3,$4,$5::jsonb,$6)
          ON CONFLICT(id) DO UPDATE SET patient_id=EXCLUDED.patient_id,starts_at=EXCLUDED.starts_at,status=EXCLUDED.status,data=EXCLUDED.data,updated_at=NOW()`,
         [id, pid, startsAt || null, record.status || 'Requested', json, actorId],
-      );
-    } else if (key === 'queue') {
-      const pid = patientId(record);
-      if (!pid) throw new Error(`queue record ${id} is missing a patient id.`);
-      await client.query(
-        `INSERT INTO queue_entries(id,patient_id,status,priority,data) VALUES($1,$2,$3,$4,$5::jsonb)
-         ON CONFLICT(id) DO UPDATE SET patient_id=EXCLUDED.patient_id,status=EXCLUDED.status,priority=EXCLUDED.priority,data=EXCLUDED.data,updated_at=NOW()`,
-        [id, pid, record.status || 'Waiting', Number(record.priority || (record.urgent ? 10 : 0)), json],
       );
     } else if (key === 'inventory') {
       const quantity = Number(record.quantity);
@@ -313,7 +274,7 @@ export async function linkUserToPatient(userId, patientId, role, relationship = 
 
 export async function listUsers() {
   const result = await query(
-    `SELECT id,username,email,name,role,status,mfa_enabled,school_id,prc_license_number,contact_number,school_name,last_login_at,created_at
+    `SELECT id,username,email,name,role,status,school_id,prc_license_number,contact_number,school_name,last_login_at,created_at
      FROM users ORDER BY created_at DESC`,
   );
   return result.rows;

@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { useLocation } from "react-router-dom";
-import { Check, ChevronDown, ClipboardPlus, Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useLocation } from "react-router-dom";
+import { ArrowUpRight, Check, ChevronDown, ClipboardPlus, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { api } from "../utils/api";
 import StudentPicker from "../components/StudentPicker";
 
@@ -22,7 +22,24 @@ function clinicDate(value) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-export default function NewVisit({ data, user, reload }) {
+function validDateKey(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function inventoryAvailability(item, today) {
+  const reasons = [];
+  if (item.archived) reasons.push({ text: 'Archived.', action: 'Show archived items', to: '/inventory?archived=1' });
+  if (!['medication', 'supply'].includes(item.itemType)) reasons.push({ text: 'Item type is unclassified.', action: 'Review item type', to: `/inventory?edit=${encodeURIComponent(item.id)}` });
+  if (!Number.isInteger(Number(item.quantity)) || Number(item.quantity) < 1) reasons.push({ text: 'Out of stock.', action: 'Restock item', to: `/inventory?restock=${encodeURIComponent(item.id)}` });
+  if (item.expiryDate && !validDateKey(String(item.expiryDate))) reasons.push({ text: 'Expiry date is invalid.', action: 'Edit expiry date', to: `/inventory?edit=${encodeURIComponent(item.id)}` });
+  else if (item.expiryDate && item.expiryDate < today) reasons.push({ text: `Expired ${item.expiryDate}.`, action: 'Review expiry date', to: `/inventory?edit=${encodeURIComponent(item.id)}` });
+  return reasons;
+}
+
+export default function NewVisit({ data, user, reload, refreshInBackground }) {
   const location = useLocation();
   const [selectedId, setSelectedId] = useState(() => String(location.state?.selectedStudent?.id || ""));
   const [complaint, setComplaint] = useState("");
@@ -36,7 +53,7 @@ export default function NewVisit({ data, user, reload }) {
   const [pulse, setPulse] = useState("");
   const [notes, setNotes] = useState("");
   const [painScore, setPainScore] = useState("");
-  const [clinicianRedFlag, setClinicianRedFlag] = useState(false);
+  const [clinicianRedFlag, setClinicianRedFlag] = useState("");
   const [riskAcknowledgement, setRiskAcknowledgement] = useState("");
   const [riskResult, setRiskResult] = useState(null);
   const [saveError, setSaveError] = useState("");
@@ -45,9 +62,63 @@ export default function NewVisit({ data, user, reload }) {
   const [summaryApproved, setSummaryApproved] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
+  const [inventoryRefreshMessage, setInventoryRefreshMessage] = useState("");
+  const [inventoryRefreshError, setInventoryRefreshError] = useState("");
+  const inventoryRecoveryPending = useRef(false);
+  const inventoryRefreshLock = useRef(false);
   const clinicToday = clinicDate(new Date());
   const selected = data.students.find((student) => String(student.id) === selectedId);
-  const inventoryItems = (data.inventory || []).filter((item) => !item.archived);
+  const canAcknowledgeMissingTemperature = riskResult?.decisionSupportMode === 'conservative_triage_v1'
+    && riskResult?.status === 'incomplete'
+    && riskResult?.missingFields?.length === 1
+    && riskResult.missingFields[0] === 'temperature';
+  const inventoryItems = data.inventory || [];
+  const eligibleInventoryItems = inventoryItems.filter((item) => inventoryAvailability(item, clinicToday).length === 0);
+  const unavailableInventoryItems = inventoryItems
+    .map((item) => ({ item, reasons: inventoryAvailability(item, clinicToday) }))
+    .filter(({ reasons }) => reasons.length > 0);
+  const refreshInventory = useCallback(async () => {
+    if (inventoryRefreshLock.current) return false;
+    inventoryRefreshLock.current = true;
+    setInventoryRefreshing(true);
+    setInventoryRefreshMessage("");
+    setInventoryRefreshError("");
+    try {
+      if (typeof refreshInBackground !== "function") {
+        throw new Error("Inventory refresh is unavailable. Try again after the clinic data has loaded.");
+      }
+      const refreshed = await refreshInBackground();
+      if (!refreshed) throw new Error("Clinic data changed during refresh. Please try again.");
+      setInventoryRefreshMessage("Inventory refreshed. Your visit draft is still here.");
+      return true;
+    } catch (error) {
+      setInventoryRefreshError(error.message || "Inventory could not be refreshed. Please try again.");
+      return false;
+    } finally {
+      inventoryRefreshLock.current = false;
+      setInventoryRefreshing(false);
+    }
+  }, [refreshInBackground]);
+  const noteInventoryRecovery = useCallback(() => {
+    inventoryRecoveryPending.current = true;
+    setInventoryRefreshMessage("");
+    setInventoryRefreshError("");
+  }, []);
+
+  useEffect(() => {
+    const refreshAfterInventoryReturn = () => {
+      if (!inventoryRecoveryPending.current || document.visibilityState !== "visible") return;
+      inventoryRecoveryPending.current = false;
+      void refreshInventory();
+    };
+    window.addEventListener("focus", refreshAfterInventoryReturn);
+    document.addEventListener("visibilitychange", refreshAfterInventoryReturn);
+    return () => {
+      window.removeEventListener("focus", refreshAfterInventoryReturn);
+      document.removeEventListener("visibilitychange", refreshAfterInventoryReturn);
+    };
+  }, [refreshInventory]);
   const generateSummary = async () => {
     setSaveError("");
     try {
@@ -59,10 +130,11 @@ export default function NewVisit({ data, user, reload }) {
       setSaveError(error.message);
     }
   };
-  const save = async () => {
+  const save = async (event) => {
+    event?.preventDefault();
     if (saving) return;
     setSaved(false);
-    if (!selected) return setSaveError('Select a student before saving the visit.');
+    if (!selected) return setSaveError('Select a patient before saving the visit.');
     if (!complaint.trim()) return setSaveError('Enter a chief complaint before saving the visit.');
     if (!treatment.trim()) return setSaveError('Enter the treatment or care provided before saving the visit.');
     const chosenDispensations = dispensations.filter((entry) => entry.itemId || entry.quantity !== '1');
@@ -72,6 +144,9 @@ export default function NewVisit({ data, user, reload }) {
       if (!entry.itemId || !Number.isInteger(quantity) || quantity < 1 || quantity > 100) return setSaveError('Choose an inventory item and enter a whole-number quantity from 1 to 100.');
       if (dispensedIds.has(entry.itemId)) return setSaveError('Choose each inventory item only once.');
       dispensedIds.add(entry.itemId);
+      const item = eligibleInventoryItems.find((record) => String(record.id) === String(entry.itemId));
+      if (!item) return setSaveError('An item in this visit is no longer available. Review the inventory selection before saving.');
+      if (quantity > Number(item.quantity)) return setSaveError(`${item.name} has only ${item.quantity} ${item.unit} available.`);
     }
     if (followUp && !followUpDate) return setSaveError('Choose a follow-up date before saving the visit.');
     if (followUp && followUpDate < clinicToday) return setSaveError('Follow-up date must be today or later.');
@@ -80,19 +155,30 @@ export default function NewVisit({ data, user, reload }) {
     try {
       const preview = await api.post('/api/risk/assess', {
         painScore: painScore === "" ? null : Number(painScore),
-        clinicianRedFlag,
+        clinicianRedFlag: clinicianRedFlag === "" ? null : clinicianRedFlag === "true",
         recentVisitCount: data.visits.filter((visit) => String(visit.studentId || visit.patientId) === String(selected.id)).length,
         temperature: temperature === "" ? null : Number(temperature),
         pulse: pulse === "" ? null : Number(pulse),
       });
       setRiskResult(preview);
-      if (preview.status === 'incomplete') {
+      const missingWarningScreen = preview.missingFields?.some((field) => ['clinicianRedFlag', 'validClinicianRedFlag'].includes(field));
+      if (preview.status === 'incomplete' && missingWarningScreen) {
+        setSaveError('Complete the clinician warning-sign screen before saving. Select “No warning sign observed” only after assessing the student.');
+        setSaving(false);
+        return;
+      }
+      const canAcknowledgeIncomplete = preview.decisionSupportMode === 'conservative_triage_v1'
+        && preview.status === 'incomplete'
+        && preview.missingFields?.length === 1
+        && preview.missingFields[0] === 'temperature';
+      if (preview.status === 'incomplete' && !canAcknowledgeIncomplete) {
         setSaveError(preview.rationale);
         setSaving(false);
         return;
       }
-      if (preview.category === 'high' && !riskAcknowledgement.trim()) {
-        setSaveError('Document the nurse acknowledgement before saving a high-risk assessment.');
+      const requiresNurseReview = preview.category === 'high' || preview.priority === 'requires-review' || preview.status === 'incomplete';
+      if (requiresNurseReview && !riskAcknowledgement.trim()) {
+        setSaveError('Document the nurse review and action before saving this assessment.');
         setSaving(false);
         return;
       }
@@ -115,7 +201,8 @@ export default function NewVisit({ data, user, reload }) {
         temperature: temperature === "" ? null : Number(temperature),
         pulse: pulse === "" ? null : Number(pulse),
         painScore: painScore === "" ? null : Number(painScore),
-        clinicianRedFlag,
+        clinicianRedFlag: clinicianRedFlag === "" ? null : clinicianRedFlag === "true",
+        clinicianRedFlagAssessed: clinicianRedFlag !== "",
         riskAcknowledgement: riskAcknowledgement.trim(),
         notes,
         summaryDraft: summaryDraft.trim(),
@@ -139,9 +226,9 @@ export default function NewVisit({ data, user, reload }) {
         </div>
       </div>
       <div className="form-layout">
-        <section className="panel form-panel">
-          <FormStep number="01" title="Select student">
-            <StudentPicker students={data.students} value={selectedId} onChange={setSelectedId} required disabled={saving} />
+        <form className="panel form-panel" onSubmit={save}>
+          <FormStep number="01" title="Select patient">
+            <StudentPicker students={data.students} value={selectedId} onChange={setSelectedId} label="Patient" required disabled={saving} />
             {selected && (
               <div className="selected-student">
                 <div className="avatar small teal">
@@ -154,13 +241,13 @@ export default function NewVisit({ data, user, reload }) {
                 <div>
                   <strong>{selected.name}</strong>
                   <span>
-                    {selected.studentId} · {selected.gradeLevel}
+                    {selected.patientType === 'faculty' ? selected.facultyId || selected.studentId : `${selected.studentId} · ${selected.gradeLevel || 'Student'}`}
                   </span>
                 </div>
                 <Check size={18} aria-hidden="true" />
               </div>
             )}
-            {selected && <div className="selected-allergies"><strong>Allergies</strong><span>{selected.allergies?.trim() || 'None recorded'}</span></div>}
+            {selected && <div className="selected-allergies"><strong>Allergies</strong><p>{selected.allergies?.trim() || 'None recorded'}</p></div>}
           </FormStep>
           <FormStep number="02" title="Visit details">
             <label>
@@ -192,18 +279,35 @@ export default function NewVisit({ data, user, reload }) {
             </div>
             <label>Treatment and care provided *<textarea value={treatment} onChange={(event) => setTreatment(event.target.value)} maxLength={300} placeholder="Record the care provided." required disabled={saving} /></label>
             <div className="dispensation-list">
-              <div className="panel-heading"><div><p className="section-kicker">Inventory</p><h4>Items dispensed</h4></div><button type="button" className="secondary-btn" onClick={() => setDispensations((items) => [...items, { itemId: '', quantity: '1' }])} disabled={saving || dispensations.length >= 20}><Plus size={15}/> Add item</button></div>
+              <div className="panel-heading"><div><p className="section-kicker">Inventory</p><h4>Items dispensed</h4></div><button type="button" className="secondary-btn" onClick={() => setDispensations((items) => [...items, { itemId: '', quantity: '1' }])} disabled={saving || dispensations.length >= 20 || eligibleInventoryItems.length <= new Set(dispensations.map((item) => item.itemId).filter(Boolean)).size}><Plus size={15}/> Add item</button></div>
+              {!eligibleInventoryItems.length ? (
+                <div className="inventory-empty-state" id="inventory-eligibility-help" role="status">
+                  <p>{inventoryItems.length ? 'No inventory items are currently eligible to dispense.' : 'No inventory items have been added yet.'}</p>
+                  <span>{inventoryItems.length ? 'Review each item’s status below, or add a new classified item.' : 'Add a medication or supply in Inventory before recording it here.'}</span>
+                  <Link className="secondary-btn inventory-new-tab-link" to="/inventory?add=1" target="_blank" rel="noopener noreferrer" onClick={noteInventoryRecovery}><Plus size={15} /> Add inventory item <ArrowUpRight size={14} aria-hidden="true" /><span className="sr-only">Opens in a new tab</span></Link>
+                </div>
+              ) : <p className="field-hint" id="inventory-eligibility-help">Only active, classified items with stock available and a valid, current expiry date can be dispensed.</p>}
+              <div className="inventory-refresh-control">
+                <button type="button" className="secondary-btn" onClick={refreshInventory} disabled={inventoryRefreshing || saving} aria-describedby="inventory-refresh-status">
+                  <RefreshCw size={15} aria-hidden="true" className={inventoryRefreshing ? "spin-icon" : ""} /> {inventoryRefreshing ? "Refreshing inventory…" : "Refresh inventory"}
+                </button>
+                <span id="inventory-refresh-status" className="sr-only">
+                  {inventoryRefreshing ? "Refresh in progress." : "Refreshes clinic inventory without leaving this visit."}
+                </span>
+                {inventoryRefreshMessage && <p className="success-message" role="status">{inventoryRefreshMessage}</p>}
+                {inventoryRefreshError && <div className="error-banner" role="alert">{inventoryRefreshError}</div>}
+              </div>
               {dispensations.map((entry, index) => (
                 <div className="two-fields dispensation-row" key={index}>
-                  <label>Medication or supply<select value={entry.itemId} onChange={(event) => setDispensations((items) => items.map((item, row) => row === index ? { ...item, itemId: event.target.value } : item))} disabled={saving}>
+                  <label>Medication or supply<select aria-describedby="inventory-eligibility-help" value={entry.itemId} onChange={(event) => setDispensations((items) => items.map((item, row) => row === index ? { ...item, itemId: event.target.value } : item))} disabled={saving || !eligibleInventoryItems.length}>
                     <option value="">None</option>
-                    {inventoryItems.map((item) => <option key={item.id} value={item.id} disabled={!['medication', 'supply'].includes(item.itemType) || item.quantity < 1 || Boolean(item.expiryDate && item.expiryDate < clinicToday)}>{item.name} · {item.itemType ? (item.itemType === 'medication' ? 'Medication' : 'Supply') : 'Unclassified'} · {item.quantity} {item.unit} left</option>)}
+                    {eligibleInventoryItems.filter((item) => !dispensations.some((other, row) => row !== index && String(other.itemId) === String(item.id))).map((item) => <option key={item.id} value={item.id}>{item.name} · {item.itemType === 'medication' ? 'Medication' : 'Supply'} · {item.quantity} {item.unit} left</option>)}
                   </select></label>
-                  <label>Quantity<input type="number" min="1" max="100" step="1" value={entry.quantity} onChange={(event) => setDispensations((items) => items.map((item, row) => row === index ? { ...item, quantity: event.target.value } : item))} disabled={saving || !entry.itemId} /></label>
+                  <label>Quantity<input type="number" min="1" max={Math.min(100, Number(eligibleInventoryItems.find((item) => String(item.id) === String(entry.itemId))?.quantity || 100))} step="1" value={entry.quantity} onChange={(event) => setDispensations((items) => items.map((item, row) => row === index ? { ...item, quantity: event.target.value } : item))} disabled={saving || !entry.itemId} /></label>
                   {dispensations.length > 1 && <button type="button" className="icon-btn-small danger" aria-label={`Remove item row ${index + 1}`} onClick={() => setDispensations((items) => items.filter((_, row) => row !== index))} disabled={saving}><Trash2 size={14}/></button>}
                 </div>
               ))}
-              <p className="field-hint">Unclassified, expired, archived, and out-of-stock items are unavailable until corrected.</p>
+              {unavailableInventoryItems.length > 0 && <details className="inventory-unavailable-list"><summary>Unavailable inventory items ({unavailableInventoryItems.length})</summary><ul>{unavailableInventoryItems.map(({ item, reasons }) => <li key={item.id}><span><strong>{item.name}</strong> — {reasons.map((reason) => reason.text).join(' ')}</span><Link to={reasons[0].to} target="_blank" rel="noopener noreferrer" onClick={noteInventoryRecovery}>{reasons[0].action}<ArrowUpRight size={13} aria-hidden="true" /><span className="sr-only">Opens in a new tab</span></Link></li>)}</ul></details>}
             </div>
             <span className="field-label">Optional treatment prompts</span>
             <div className="chip-row">
@@ -227,33 +331,40 @@ export default function NewVisit({ data, user, reload }) {
             </div>
             <div className="two-fields">
               <label>Pain score (1–10)<input type="number" min="1" max="10" step="1" value={painScore} onChange={(event) => setPainScore(event.target.value)} required /></label>
-              <label className="check-label"><input type="checkbox" checked={clinicianRedFlag} onChange={(event) => setClinicianRedFlag(event.target.checked)} /> Clinician-observed urgent warning sign</label>
+              <label>Clinician warning-sign screen *
+                <select value={clinicianRedFlag} onChange={(event) => setClinicianRedFlag(event.target.value)} required disabled={saving}>
+                  <option value="">Complete screen before saving…</option>
+                  <option value="false">Assessed — no urgent warning sign observed</option>
+                  <option value="true">Urgent warning sign observed</option>
+                </select>
+                <small>Choose after assessing the student. Leaving this unanswered does not mean no warning sign was found. Examples include severe breathing difficulty or blue lips, unresponsiveness or seizure, heavy bleeding or possible shock, high-risk trauma, and poisoning. Examples are not exhaustive; use full age-appropriate triage. See <a href="https://www.who.int/tools/triage" target="_blank" rel="noreferrer">WHO IITT guidance</a>.</small>
+              </label>
             </div>
-            {(clinicianRedFlag || riskResult?.category === 'high') && <label>Nurse acknowledgement / override reason<textarea value={riskAcknowledgement} onChange={(event) => setRiskAcknowledgement(event.target.value)} placeholder="Document the assessment and action taken…" /></label>}
+            {(clinicianRedFlag === "true" || riskResult?.category === 'high' || (riskResult?.priority === 'requires-review' && (riskResult?.status !== 'incomplete' || canAcknowledgeMissingTemperature)) || canAcknowledgeMissingTemperature) && <label>Nurse review / acknowledgement<textarea value={riskAcknowledgement} onChange={(event) => setRiskAcknowledgement(event.target.value)} placeholder="Document the review and action taken…" disabled={saving} /></label>}
             <label>
               Notes{" "}
               <textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Describe symptoms, observations, and action taken..." />
             </label>
             <button type="button" className="secondary-btn" onClick={generateSummary} disabled={!complaint || saving}>Generate summary draft</button>
-            {summaryDraft && <div className="risk-result"><strong>Review AI-assisted draft</strong><textarea value={summaryDraft} onChange={(event) => { setSummaryDraft(event.target.value); setSummaryApproved(false); }} />{user?.role === 'school_nurse' ? <label className="check-label"><input type="checkbox" checked={summaryApproved} onChange={(event) => setSummaryApproved(event.target.checked)} /> I reviewed and approve this summary for the record</label> : <small>A school nurse must approve this draft before it can be saved to the record.</small>}<small>Provider: {summaryMeta?.provider}. The risk score is calculated separately and is never controlled by AI.</small></div>}
+            {summaryDraft && <div className="risk-result"><strong>Review AI-assisted draft</strong><textarea className="summary-draft-input" aria-label="AI-assisted visit summary draft" rows="6" value={summaryDraft} onChange={(event) => { setSummaryDraft(event.target.value); setSummaryApproved(false); }} disabled={saving} />{user?.role === 'school_nurse' ? <label className="check-label"><input type="checkbox" checked={summaryApproved} onChange={(event) => setSummaryApproved(event.target.checked)} disabled={saving} /> I reviewed and approve this summary for the record</label> : <small>A school nurse must approve this draft before it can be saved to the record.</small>}<small>Provider: {summaryMeta?.provider}. The risk score is calculated separately and is never controlled by AI.</small></div>}
           </FormStep>
-          <div className="form-actions">
+          <div className="form-actions visit-save-actions">
             <div className="follow-up-control">
               <label className="check-label"><input type="checkbox" checked={followUp} onChange={(e) => { setFollowUp(e.target.checked); if (!e.target.checked) setFollowUpDate(""); }} /> Schedule follow-up</label>
               {followUp && <label className="follow-up-date-field">Follow-up due date
                 <input type="date" value={followUpDate} min={clinicToday} onChange={(e) => setFollowUpDate(e.target.value)} required />
               </label>}
             </div>
-            <button className="primary-btn" onClick={save} disabled={saving}>
+            <button type="submit" className="primary-btn" disabled={saving}>
               <ClipboardPlus size={16} /> {saving ? 'Saving visit…' : 'Save visit'}
             </button>
           </div>
           {saved && (
-            <p className="success-message">Visit saved to today’s activity.</p>
+            <p className="success-message" role="status">Visit saved to today’s activity.</p>
           )}
           {saveError && <div className="error-banner" role="alert">{saveError}</div>}
-          {riskResult && <div className={`risk-result risk-${riskResult.category}`}><strong>Decision-support result: {riskResult.category}</strong><p>{riskResult.rationale}</p><small>{riskResult.disclaimer} Rule version: {riskResult.ruleVersion} ({riskResult.ruleStatus}).</small></div>}
-        </section>
+          {riskResult && <div className={`risk-result risk-${riskResult.category}`}><strong>{riskResult.priority === 'requires-review' ? 'Nurse review required' : riskResult.priority === 'urgent' ? 'Urgent nurse review required' : `Decision-support result: ${riskResult.category}`}</strong><p>{riskResult.rationale}</p>{riskResult.decisionSupportMode === 'conservative_triage_v1' && <small>No-match remains unclassified and never means low risk or routine disposition. This prompt cannot replace the nurse’s assessment.</small>}<small>{riskResult.disclaimer} Rule version: {riskResult.ruleVersion} ({riskResult.ruleStatus}).</small></div>}
+        </form>
         <aside className="visit-aside">
           <div className="aside-card">
             <p className="section-kicker">Helpful prompts</p>

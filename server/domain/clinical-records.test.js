@@ -9,7 +9,7 @@ const base = {
   incidents: [],
 };
 
-test('unchanged historical clinical records remain readable without being revalidated', () => {
+test('unchanged legacy records are not rejected when supplied in both snapshots', () => {
   const before = {
     screenings: [{ id: 'legacy-screen', studentId: 'student-1', result: 'Pass' }],
     immunizations: [{ id: 'legacy-vaccine', studentId: 'student-1', vaccineName: 'Legacy vaccine' }],
@@ -23,49 +23,47 @@ test('unchanged historical clinical records remain readable without being revali
   }), { valid: true });
 });
 
-test('new and changed screening or incident records return FEATURE_REMOVED while unchanged history remains readable', () => {
-  const before = {
-    screenings: [{ id: 'legacy-screen', patientId: 'student-1', date: '2025-01-01' }],
-    incidents: [{ id: 'legacy-incident', patientId: 'student-1', type: 'Other' }],
-  };
-  assert.deepEqual(validateChangedClinicalRecords(before, { ...base, ...before }), { valid: true });
-
-  for (const [collection, record] of [
-    ['screenings', { id: 'screen-1', patientId: 'student-1', schoolYear: '2026-2027', date: '2026-09-23' }],
-    ['incidents', { id: 'incident-1', patientId: 'student-1', date: '2026-09-23T10:30', location: 'Hallway', type: 'Other' }],
-  ]) {
+test('new and changed screening or incident records return a retired-feature response', () => {
+  const screening = { id: 'screen-1', patientId: 'student-1', schoolYear: '2026-2027', date: '2026-09-23' };
+  const incident = { id: 'incident-1', patientId: 'student-1', date: '2026-09-23T10:30', location: 'Hallway', type: 'Other' };
+  for (const [collection, record] of [['screenings', screening], ['incidents', incident]]) {
     const created = validateChangedClinicalRecords({}, { ...base, [collection]: [record] });
     assert.equal(created.valid, false);
     assert.equal(created.status, 410);
     assert.equal(created.code, 'FEATURE_REMOVED');
     assert.match(created.message, /cannot be created or changed/);
 
-    const updated = validateChangedClinicalRecords({ ...base, [collection]: [record] }, {
+    const changed = validateChangedClinicalRecords({ ...base, [collection]: [record] }, {
       ...base,
-      [collection]: [{ ...record, notes: 'edited legacy value' }],
+      [collection]: [{ ...record, location: 'Courtyard', updatedAt: '2026-09-23T11:00' }],
     });
-    assert.equal(updated.status, 410);
-    assert.equal(updated.code, 'FEATURE_REMOVED');
+    assert.equal(changed.status, 410);
+    assert.equal(changed.code, 'FEATURE_REMOVED');
   }
 });
 
-test('new immunization records require external clinic details and reject future dates', () => {
+test('unchanged screening and incident records can pass through without being rewritten', () => {
+  const before = {
+    screenings: [{ id: 'legacy-screen', patientId: 'student-1', result: 'Pass' }],
+    incidents: [{ id: 'legacy-incident', patientId: 'student-1', type: 'Other' }],
+  };
+  assert.deepEqual(validateChangedClinicalRecords(before, { ...base, ...before }), { valid: true });
+});
+
+test('legacy immunization records cannot be created or changed', () => {
   const record = { id: 'vaccine-1', patientId: 'student-1', vaccineName: 'Vaccine outside suggestions', doseNumber: 'Dose 1', dateAdministered: '2026-09-22', source: 'external' };
-  const missingClinic = validateChangedClinicalRecords({}, { ...base, immunizations: [record] }, { now: new Date('2026-09-23T02:00:00Z') });
-  assert.equal(missingClinic.valid, false);
-  assert.match(missingClinic.message, /external clinic name/);
+  const created = validateChangedClinicalRecords({}, { ...base, immunizations: [record] });
+  assert.deepEqual(created, {
+    valid: false,
+    status: 410,
+    code: 'FEATURE_REMOVED',
+    message: 'Immunization records are retained as historical data and cannot be created or changed.',
+  });
 
-  const future = validateChangedClinicalRecords({}, {
+  const changed = validateChangedClinicalRecords({ ...base, immunizations: [record] }, {
     ...base,
-    immunizations: [{ ...record, clinicName: 'Community Clinic', dateAdministered: '2026-09-24' }],
-  }, { now: new Date('2026-09-23T02:00:00Z') });
-  assert.equal(future.valid, false);
-  assert.match(future.message, /cannot be in the future/);
-
-  const pastDue = validateChangedClinicalRecords({}, {
-    ...base,
-    immunizations: [{ ...record, clinicName: 'Community Clinic', nextDueDate: '2026-09-21' }],
-  }, { now: new Date('2026-09-23T02:00:00Z') });
-  assert.equal(pastDue.valid, false);
-  assert.match(pastDue.message, /cannot be before/);
+    immunizations: [{ ...record, remarks: 'Updated' }],
+  });
+  assert.equal(changed.status, 410);
+  assert.equal(changed.code, 'FEATURE_REMOVED');
 });

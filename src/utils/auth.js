@@ -22,7 +22,7 @@ export async function getCurrentUser() {
   }
 }
 
-export async function authenticateUser(identifier, password, remember = true) {
+export async function authenticateUser(identifier, password, remember = false) {
   try {
     const result = await api.post('/api/auth/login', { identifier, password, remember });
     if (result.mfaRequired) return { success: false, mfaRequired: true, ...result };
@@ -89,19 +89,19 @@ export function validatePasswordStrength(password) {
   return { valid: true, strength: 4 };
 }
 
-export async function getUsersForAdmin() {
+export async function getUsersForAdmin({ throwOnError = false } = {}) {
   try {
     const result = await api.get('/api/admin/users');
     return (result.users || []).map((user) => ({
       ...user,
-      mfaEnabled: Boolean(user.mfa_enabled),
       schoolId: user.school_id || '',
       prcLicenseNumber: user.prc_license_number || '',
       schoolName: user.school_name || '',
       contactNumber: user.contact_number || '',
       lastLogin: user.last_login_at || null,
     }));
-  } catch {
+  } catch (error) {
+    if (throwOnError) throw error;
     return [];
   }
 }
@@ -134,25 +134,17 @@ export async function resendInvitation(id) {
   }
 }
 
-export async function getAuditLogs() {
+export async function getAuditLogs({ throwOnError = false } = {}) {
   try {
-    const result = await api.get('/api/admin/audit-logs');
+    const result = await api.get('/api/admin/audit-logs?limit=200');
     return (result.logs || []).map((entry) => ({
       ...entry,
       timestamp: entry.created_at,
       details: entry.details || {},
     }));
-  } catch {
-    return [];
-  }
-}
-
-export async function updateMfaPreference(enabled) {
-  try {
-    const result = await api.patch('/api/me/mfa', { enabled });
-    return { success: true, ...result };
   } catch (error) {
-    return failure(error);
+    if (throwOnError) throw error;
+    return [];
   }
 }
 

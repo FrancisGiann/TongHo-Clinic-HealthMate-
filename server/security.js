@@ -38,3 +38,58 @@ export function ensureSameOrigin(req, res, next) {
 export function loginOtpRequired(env = process.env) {
   return env.NODE_ENV !== 'development' || env.REQUIRE_LOGIN_OTP !== 'false';
 }
+
+export function productionStartupIssue({ nodeEnv, databaseConfigured, databaseTlsVerified, emailConfigured, smtpTlsVerified, hasDevelopmentAccounts, hasSeedRegistry }) {
+  if (nodeEnv !== 'production') return null;
+  if (!databaseConfigured) return 'Production requires DATABASE_URL.';
+  if (!databaseTlsVerified) return 'Production requires verified PostgreSQL TLS.';
+  if (!emailConfigured) return 'Production requires configured SMTP because email verification is mandatory.';
+  if (!smtpTlsVerified) return 'Production requires certificate-verified SMTP TLS.';
+  if (hasDevelopmentAccounts || hasSeedRegistry) return 'Production database contains development-only seed data.';
+  return null;
+}
+
+export function trustProxyHops(env = process.env) {
+  const configured = env.TRUST_PROXY_HOPS;
+  if (configured === undefined || configured === '') return 0;
+  if (!/^\d+$/.test(String(configured))) throw new Error('TRUST_PROXY_HOPS must be an integer from 0 to 5.');
+  const hops = Number(configured);
+  if (!Number.isSafeInteger(hops) || hops < 0 || hops > 5) throw new Error('TRUST_PROXY_HOPS must be an integer from 0 to 5.');
+  return hops;
+}
+
+export function createWindowLimiter({ limit, windowMs, maxKeys = 10_000 }) {
+  const buckets = new Map();
+  return (key, now = Date.now()) => {
+    const normalizedKey = String(key || 'unknown');
+    let bucket = buckets.get(normalizedKey);
+    if (!bucket || bucket.resetAt <= now) {
+      if (buckets.size >= maxKeys) {
+        for (const [entryKey, entry] of buckets) {
+          if (entry.resetAt <= now || buckets.size >= maxKeys) buckets.delete(entryKey);
+          if (buckets.size < maxKeys) break;
+        }
+      }
+      bucket = { count: 0, resetAt: now + windowMs };
+      buckets.set(normalizedKey, bucket);
+    }
+    bucket.count += 1;
+    return {
+      allowed: bucket.count <= limit,
+      remaining: Math.max(0, limit - bucket.count),
+      retryAfterMs: Math.max(0, bucket.resetAt - now),
+    };
+  };
+}
+
+export function rateLimit({ limit, windowMs, key = (req) => req.ip }) {
+  const check = createWindowLimiter({ limit, windowMs });
+  return (req, res, next) => {
+    const result = check(key(req));
+    if (result.allowed) return next();
+    res.setHeader('Retry-After', String(Math.max(1, Math.ceil(result.retryAfterMs / 1000))));
+    return res.status(429).json({
+      error: { code: 'RATE_LIMITED', message: 'Too many requests. Please wait and try again.' },
+    });
+  };
+}

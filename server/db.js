@@ -6,6 +6,16 @@ const { Pool } = pg;
 const connectionString = process.env.DATABASE_URL?.trim();
 const certificatePath = process.env.DB_SSL_CA_FILE?.trim();
 
+export function databaseTlsVerifiedForConfig(url = connectionString, env = process.env) {
+  if (!url || env.DB_SSL === 'false' || env.DB_SSL_REJECT_UNAUTHORIZED === 'false') return false;
+  try {
+    const parsed = new URL(url);
+    return !['sslmode', 'sslrootcert', 'sslcert', 'sslkey'].some((parameter) => parsed.searchParams.has(parameter));
+  } catch {
+    return false;
+  }
+}
+
 function sslConfiguration() {
   if (process.env.DB_SSL === 'false') return false;
   return {
@@ -15,6 +25,11 @@ function sslConfiguration() {
 }
 
 export const databaseConfigured = Boolean(connectionString);
+export const databaseTlsVerified = databaseTlsVerifiedForConfig();
+
+if (process.env.NODE_ENV === 'production' && databaseConfigured && !databaseTlsVerified) {
+  throw new Error('Production DATABASE_URL must omit SSL query parameters; configure verified TLS with DB_SSL and DB_SSL_CA_FILE.');
+}
 
 export const pool = databaseConfigured
   ? new Pool({

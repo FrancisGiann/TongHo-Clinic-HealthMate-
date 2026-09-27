@@ -63,6 +63,33 @@ export function validateStudentImport(rows, existingStudents = []) {
   return { valid: errors.length === 0, errors, records };
 }
 
+const importHeaderAliases = {
+  studentid: 'studentId', id: 'studentId',
+  facultyid: 'facultyId', staffid: 'facultyId',
+  name: 'name', fullname: 'name', patientname: 'name',
+  grade: 'gradeLevel', gradelevel: 'gradeLevel',
+  section: 'section', adviser: 'adviser', birthdate: 'birthDate', gender: 'gender',
+  guardian: 'guardianName', guardianname: 'guardianName', guardianphone: 'guardianPhone', phone: 'guardianPhone',
+  guardianrelation: 'guardianRelation', relationship: 'guardianRelation',
+  department: 'department', position: 'position', title: 'position', email: 'email', contact: 'contactNumber', contactnumber: 'contactNumber',
+  patientid: 'patientId', visitdate: 'date', date: 'date', type: 'type', complaint: 'chiefComplaint', chiefcomplaint: 'chiefComplaint',
+  treatment: 'treatment', disposition: 'disposition', notes: 'notes',
+};
+
+export function importCsvRecords(csvRows, type) {
+  if (!['students', 'faculty', 'visits'].includes(type)) throw new Error('Choose a supported import type.');
+  if (!Array.isArray(csvRows) || csvRows.length < 2) throw new Error('Add a header row and at least one record.');
+  const headers = csvRows[0].map((value) => importHeaderAliases[String(value).trim().toLowerCase().replace(/[^a-z0-9]/g, '')] || null);
+  const required = type === 'students' ? ['studentId', 'name'] : type === 'faculty' ? ['facultyId', 'name'] : ['patientId', 'date', 'chiefComplaint', 'treatment'];
+  if (required.some((key) => !headers.includes(key))) {
+    const labels = { studentId: 'Student ID', facultyId: 'Faculty ID', name: 'Name', patientId: 'Patient ID', date: 'Date', chiefComplaint: 'Complaint', treatment: 'Treatment' };
+    throw new Error(`The CSV must include ${required.map((key) => labels[key]).join(', ')} columns.`);
+  }
+  return csvRows.slice(1).map((cells) => Object.fromEntries(headers
+    .map((key, index) => [key, String(cells?.[index] || '').trim()])
+    .filter(([key]) => key)));
+}
+
 const serializeValue = (value) => {
   if (value === null || value === undefined) return "";
   if (typeof value === "object") return JSON.stringify(value);

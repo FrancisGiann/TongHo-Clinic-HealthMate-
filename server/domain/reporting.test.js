@@ -8,7 +8,7 @@ test('report includes only records inside the requested period', () => {
       { id: 1, studentId: 10, date: '2026-09-01', chiefComplaint: 'Headache', type: 'Illness', treatment: 'Rest' },
       { id: 2, studentId: 11, date: '2026-10-01', chiefComplaint: 'Cough', type: 'Illness', treatment: 'Hydration' },
     ],
-    incidents: [{ id: 3, date: '2026-09-15', severity: 'Critical' }],
+    incidents: [{ id: 3, date: '2026-09-15' }],
     screenings: [{ id: 5, studentId: 10, date: '2026-09-15', visionFinding: '20/20' }],
     appointments: [],
     dispenseLogs: [{ id: 4, date: '2026-09-01', medicineName: 'Bandage', quantity: 2 }],
@@ -24,6 +24,28 @@ test('report includes only records inside the requested period', () => {
   assert.deepEqual(report.complaints, { Headache: 1 });
   assert.deepEqual(report.grades, { 'Grade 4': 1 });
   assert.deepEqual(report.timeSeries, { '2026-09-01': 1, '2026-09-02': 0, '2026-09-03': 0, '2026-09-04': 0, '2026-09-05': 0, '2026-09-06': 0, '2026-09-07': 0, '2026-09-08': 0, '2026-09-09': 0, '2026-09-10': 0, '2026-09-11': 0, '2026-09-12': 0, '2026-09-13': 0, '2026-09-14': 0, '2026-09-15': 0, '2026-09-16': 0, '2026-09-17': 0, '2026-09-18': 0, '2026-09-19': 0, '2026-09-20': 0, '2026-09-21': 0, '2026-09-22': 0, '2026-09-23': 0, '2026-09-24': 0, '2026-09-25': 0, '2026-09-26': 0, '2026-09-27': 0, '2026-09-28': 0, '2026-09-29': 0, '2026-09-30': 0 });
+});
+
+test('reports include faculty visits and suppress small patient-type cells in stored admin views', () => {
+  const data = {
+    students: [
+      ...Array.from({ length: 5 }, (_, index) => ({ id: `student-${index}`, patientType: 'student', gradeLevel: 'Grade 4' })),
+      { id: 'faculty-1', patientType: 'faculty' },
+    ],
+    visits: [
+      ...Array.from({ length: 5 }, (_, index) => ({ id: `visit-s-${index}`, studentId: `student-${index}`, date: '2026-09-10', chiefComplaint: 'Headache' })),
+      { id: 'visit-f-1', studentId: 'faculty-1', date: '2026-09-10', chiefComplaint: 'Headache' },
+    ],
+  };
+  const report = buildClinicReport(data, '2026-09-01', '2026-09-30');
+  assert.deepEqual(report.patientTypes, { student: 5, faculty: 1 });
+  assert.equal(report.totals.visits, 6);
+  const archived = reportSnapshotForStorage(report);
+  const adminArchive = reportForRole(archived, 'system_administrator');
+  assert.deepEqual(adminArchive.patientTypes, {});
+  assert.ok(adminArchive.suppressedAggregates.includes('patientTypes'));
+  assert.equal(adminArchive.totals.uniquePatients, null);
+  assert.equal(Object.hasOwn(adminArchive, 'vaccineTracking'), false);
 });
 
 test('administrator aggregate view suppresses small cells across all categories and totals', () => {
@@ -62,7 +84,7 @@ test('administrator aggregate view suppresses small cells across all categories 
   assert.ok(adminView.suppressedAggregates.includes('medicines'));
   assert.equal(adminView.timeSeries['2026-09-01'], null);
   assert.equal(adminView.timeSeriesSuppressed, true);
-  assert.equal(Object.hasOwn(report.totals, 'incidents'), false, 'historical incidents do not enter current reports');
+  assert.equal(Object.hasOwn(report.totals, 'incidents'), false, 'removed workflow records do not enter reports');
 });
 
 test('empty report categories remain distinguishable from suppressed categories', () => {
@@ -104,68 +126,26 @@ test('role-specific report views keep nurse detail and suppress administrator sn
   assert.ok(adminView.suppressedAggregates.includes('complaints'));
 });
 
-test('vaccine reporting shows only each student vaccine latest applicable due date', () => {
+test('retired workflow metrics are omitted from reports and scrubbed from legacy snapshots', () => {
   const report = buildClinicReport({
-    students: [{ id: 'p1', name: 'Ari Santos' }, { id: 'p2', name: 'Bea Cruz' }],
-    immunizations: [
-      { id: 'old-a', patientId: 'p1', vaccineName: 'Vaccine A', dateAdministered: '2026-01-01', nextDueDate: '2026-09-15' },
-      { id: 'new-a', patientId: 'p1', vaccineName: 'Vaccine A', dateAdministered: '2026-08-01', nextDueDate: '2027-08-01' },
-      { id: 'latest-b', patientId: 'p1', vaccineName: 'Vaccine B', dateAdministered: '2026-08-15', nextDueDate: '2026-09-20' },
-      { id: 'old-c', patientId: 'p2', vaccineName: 'Vaccine C', dateAdministered: '2026-07-01', nextDueDate: '2026-09-10' },
-      { id: 'new-c', patientId: 'p2', vaccineName: 'Vaccine C', dateAdministered: '2026-08-20' },
-      { id: 'unknown-a', patientId: 'p2', nextDueDate: '2026-09-12' },
-      { id: 'unknown-b', patientId: 'p2', nextDueDate: '2026-02-30' },
-      { id: 'correction-old', patientId: 'p1', vaccineName: 'Td', dateAdministered: '2026-08-25', createdAt: '2026-08-25T01:00:00Z', nextDueDate: '2026-09-05' },
-      { id: 'correction-new', patientId: 'p1', vaccineName: 'Td', dateAdministered: '2026-08-25', createdAt: '2026-08-25T02:00:00Z', nextDueDate: '2026-09-25' },
-      { id: 'invalid-later', patientId: 'p2', vaccineName: 'Vaccine D', dateAdministered: '2026-02-30', createdAt: '2026-08-30T02:00:00Z', nextDueDate: '2026-09-01' },
-      { id: 'valid-earlier', patientId: 'p2', vaccineName: 'Vaccine D', dateAdministered: '2026-02-28', createdAt: '2026-08-29T02:00:00Z', nextDueDate: '2026-09-26' },
-    ],
+    immunizations: [{ patientId: 'p1', vaccineName: 'MMR', nextDueDate: '2026-09-30' }],
   }, '2026-09-01', '2026-09-30');
+  assert.equal(Object.hasOwn(report.totals, 'vaccineDueRecords'), false);
+  assert.equal(Object.hasOwn(report, 'vaccineTracking'), false);
 
-  assert.deepEqual(report.vaccineTracking.map(({ studentId, vaccineName, nextDueDate }) => [studentId, vaccineName, nextDueDate]), [
-    ['p2', 'Unknown vaccine', '2026-09-12'],
-    ['p1', 'Vaccine B', '2026-09-20'],
-    ['p1', 'Td', '2026-09-25'],
-    ['p2', 'Vaccine D', '2026-09-26'],
-    ['p1', 'Vaccine A', '2027-08-01'],
-  ]);
-  assert.equal(report.totals.vaccineDueRecords, 4);
-});
-
-test('stored report snapshots omit patient-level vaccine tracking detail', () => {
-  const report = {
-    totals: { vaccineDueRecords: 3 },
+  const legacySnapshot = {
+    totals: { visits: 3, vaccineDueRecords: 3, incidents: 2, screenedPatients: 3 },
+    incidentSeverities: { Critical: 2 },
+    screeningVisionFindings: { '20/20': 3 },
+    screeningHearingFindings: { Pass: 3 },
+    suppressedAggregates: ['incidentSeverities', 'screeningVisionFindings', 'screeningHearingFindings', 'grades'],
+    suppressedTotals: ['visits', 'vaccineDueRecords', 'incidents', 'screenedPatients'],
     vaccineTracking: [{ studentId: 'patient-1', studentName: 'Fictional Student', vaccineName: 'Vaccine A', nextDueDate: '2026-09-30' }],
   };
-  const stored = reportSnapshotForStorage(report);
-  assert.deepEqual(stored, { totals: { vaccineDueRecords: 3 } });
+  const stored = reportSnapshotForStorage(legacySnapshot);
+  assert.deepEqual(stored, { totals: { visits: 3 }, suppressedAggregates: ['grades'], suppressedTotals: ['visits'] });
   assert.equal(Object.hasOwn(reportForRole(stored, 'system_administrator'), 'vaccineTracking'), false);
-  assert.equal(reportForRole(report, 'school_nurse').vaccineTracking[0].studentId, 'patient-1', 'the on-demand nurse report retains authorized detail');
-});
-
-test('legacy report snapshots omit health screening and incident metrics for every role', () => {
-  const legacy = {
-    totals: { visits: 8, incidents: 2, screenedPatients: 4, vaccineDueRecords: 5 },
-    incidentSeverities: { Critical: 2 },
-    screeningVisionFindings: { '20/20': 4 },
-    screeningHearingFindings: { Pass: 4 },
-    suppressedAggregates: ['incidentSeverities', 'screeningVisionFindings', 'screeningHearingFindings', 'grades'],
-    suppressedTotals: ['incidents', 'screenedPatients', 'vaccineDueRecords'],
-    vaccineTracking: [{ studentId: 'patient-1', vaccineName: 'MMR', nextDueDate: '2026-09-30' }],
-  };
-  const stored = reportSnapshotForStorage(legacy);
-  assert.deepEqual(stored.totals, { visits: 8, vaccineDueRecords: 5 });
-  assert.deepEqual(stored.suppressedAggregates, ['grades']);
-  assert.deepEqual(stored.suppressedTotals, ['vaccineDueRecords']);
-  for (const key of ['incidentSeverities', 'screeningVisionFindings', 'screeningHearingFindings', 'vaccineTracking']) {
-    assert.equal(Object.hasOwn(stored, key), false);
-  }
-  for (const role of ['school_nurse', 'system_administrator']) {
-    const visible = reportForRole(legacy, role);
-    assert.equal(Object.hasOwn(visible.totals, 'incidents'), false);
-    assert.equal(Object.hasOwn(visible.totals, 'screenedPatients'), false);
-    assert.equal(Object.hasOwn(visible, 'incidentSeverities'), false);
-    assert.equal(Object.hasOwn(visible, 'screeningVisionFindings'), false);
-  }
-  assert.equal(stored.totals.vaccineDueRecords, 5, 'immunization reporting remains available');
+  const nurseView = reportForRole(legacySnapshot, 'school_nurse');
+  assert.equal(Object.hasOwn(nurseView, 'vaccineTracking'), false);
+  assert.equal(Object.hasOwn(nurseView.totals, 'vaccineDueRecords'), false);
 });

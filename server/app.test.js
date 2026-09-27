@@ -1,13 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createApp } from './app.js';
+import { requireAuth } from './auth.js';
 
 test('application factory exposes an Express request handler', () => {
+  const configuredHops = process.env.TRUST_PROXY_HOPS;
+  delete process.env.TRUST_PROXY_HOPS;
+  try {
+    const app = createApp();
+    assert.equal(typeof app, 'function');
+    assert.equal(typeof app.use, 'function');
+    assert.equal(typeof app.listen, 'function');
+    assert.equal(app.get('trust proxy'), 0);
+  } finally {
+    if (configuredHops === undefined) delete process.env.TRUST_PROXY_HOPS;
+    else process.env.TRUST_PROXY_HOPS = configuredHops;
+  }
+});
+
+test('session management endpoints are available to each authenticated account', () => {
   const app = createApp();
-  assert.equal(typeof app, 'function');
-  assert.equal(typeof app.use, 'function');
-  assert.equal(typeof app.listen, 'function');
-  assert.equal(app.get('trust proxy'), 1);
+  const routes = app.router.stack
+    .filter((layer) => ['/api/auth/sessions', '/api/auth/sessions/:sessionId', '/api/auth/sessions/logout-all'].includes(layer.route?.path))
+    .map((layer) => ({ path: layer.route.path, method: Object.keys(layer.route.methods)[0], guard: layer.route.stack[0].handle }));
+  assert.deepEqual(routes.map(({ path, method }) => [path, method]), [
+    ['/api/auth/sessions', 'get'],
+    ['/api/auth/sessions/:sessionId', 'delete'],
+    ['/api/auth/sessions/logout-all', 'post'],
+  ]);
+  assert.ok(routes.every((route) => route.guard === requireAuth));
 });
 
 test('every inventory write route applies a nurse-only authorization guard', () => {
@@ -36,6 +57,23 @@ test('every inventory write route applies a nurse-only authorization guard', () 
   }
 });
 
+test('persisting the built-in candidate draft is administrator-only', () => {
+  const app = createApp();
+  const route = app.router.stack.find((layer) => layer.route?.path === '/api/risk/rules/conservative-candidate');
+  assert.ok(route?.route?.methods.post);
+  const guard = route.route.stack[0].handle;
+  const invoke = (role) => {
+    let statusCode = 200;
+    let nextCalled = false;
+    const response = { status(code) { statusCode = code; return { json: () => response }; } };
+    guard({ user: { role } }, response, () => { nextCalled = true; });
+    return { statusCode, nextCalled };
+  };
+  assert.deepEqual(invoke('system_administrator'), { statusCode: 200, nextCalled: true });
+  assert.deepEqual(invoke('school_nurse'), { statusCode: 403, nextCalled: false });
+  assert.deepEqual(invoke('student'), { statusCode: 403, nextCalled: false });
+});
+
 test('visit creation and clinical snapshot writes are restricted to school nurses', () => {
   const app = createApp();
   const routes = app.router.stack
@@ -56,5 +94,75 @@ test('visit creation and clinical snapshot writes are restricted to school nurse
     assert.deepEqual(result('system_administrator'), { statusCode: 403, nextCalled: false });
     assert.deepEqual(result('student'), { statusCode: 403, nextCalled: false });
     assert.deepEqual(result('guardian'), { statusCode: 403, nextCalled: false });
+  }
+});
+
+test('legacy queue API routes return a disabled response for old clients', async () => {
+  const app = createApp();
+  const routes = app.router.stack
+    .filter((layer) => ['/api/queue', '/api/queue/:id'].includes(layer.route?.path));
+
+  assert.deepEqual(routes.map((route) => route.route.path), ['/api/queue', '/api/queue/:id']);
+  for (const route of routes) {
+    const handler = route.route.stack.at(-1).handle;
+    let statusCode = 200;
+    let responseBody;
+    const response = {
+      status(code) { statusCode = code; return this; },
+      json(body) { responseBody = body; return this; },
+    };
+    await handler({}, response);
+    assert.equal(statusCode, 410);
+    assert.equal(responseBody.error.code, 'FEATURE_REMOVED');
+  }
+});
+
+test('faculty registration and import routes enforce their assigned roles', () => {
+  const app = createApp();
+  const guardedRoutes = app.router.stack
+    .filter((layer) => layer.route && [
+      '/api/patients/faculty',
+      '/api/import/students/preview', '/api/import/students',
+      '/api/import/faculty/preview', '/api/import/faculty',
+      '/api/import/visits/preview', '/api/import/visits',
+      '/api/import/batches/:id/rollback',
+    ].includes(layer.route.path))
+    .map((layer) => ({ path: layer.route.path, method: Object.keys(layer.route.methods)[0], guard: layer.route.stack[0].handle }));
+  const find = (path, method) => guardedRoutes.find((route) => route.path === path && route.method === method);
+  const invoke = (route, role) => {
+    let statusCode = 200;
+    let nextCalled = false;
+    const response = { status(code) { statusCode = code; return { json: () => response }; } };
+    route.guard({ user: { role } }, response, () => { nextCalled = true; });
+    return { statusCode, nextCalled };
+  };
+  assert.deepEqual(invoke(find('/api/patients/faculty', 'post'), 'school_nurse'), { statusCode: 200, nextCalled: true });
+  assert.deepEqual(invoke(find('/api/patients/faculty', 'post'), 'system_administrator'), { statusCode: 403, nextCalled: false });
+  for (const method of ['post']) {
+    assert.deepEqual(invoke(find('/api/import/students', method), 'system_administrator'), { statusCode: 200, nextCalled: true });
+    assert.deepEqual(invoke(find('/api/import/students', method), 'school_nurse'), { statusCode: 403, nextCalled: false });
+    assert.deepEqual(invoke(find('/api/import/faculty', method), 'school_nurse'), { statusCode: 200, nextCalled: true });
+    assert.deepEqual(invoke(find('/api/import/faculty', method), 'system_administrator'), { statusCode: 200, nextCalled: true });
+    assert.deepEqual(invoke(find('/api/import/visits', method), 'school_nurse'), { statusCode: 200, nextCalled: true });
+    assert.deepEqual(invoke(find('/api/import/visits', method), 'system_administrator'), { statusCode: 403, nextCalled: false });
+  }
+  assert.deepEqual(invoke(find('/api/import/batches/:id/rollback', 'post'), 'student'), { statusCode: 403, nextCalled: false });
+});
+
+test('import rollback rejects malformed UUIDs before querying the database', async () => {
+  const app = createApp();
+  const route = app.router.stack.find((layer) => layer.route?.path === '/api/import/batches/:id/rollback');
+  const handler = route.route.stack.at(-1).handle;
+
+  for (const id of ['------------------------------------', '000000000000000000000000000000000000']) {
+    let statusCode = 200;
+    let responseBody;
+    const response = {
+      status(code) { statusCode = code; return this; },
+      json(body) { responseBody = body; return this; },
+    };
+    await handler({ params: { id }, user: { role: 'school_nurse' } }, response);
+    assert.equal(statusCode, 400);
+    assert.equal(responseBody.error.code, 'INVALID_BATCH_ID');
   }
 });

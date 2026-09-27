@@ -28,7 +28,7 @@ Open `http://localhost:5173`. `npm run dev` runs Vite and Express together; Vite
 
 The first migration creates the administrator defined by `BOOTSTRAP_ADMIN_*`. The password must be at least 12 characters and should be removed from the hosting environment after the account is created.
 
-For a clean demonstration database only, run `npm run db:seed-demo`. It refuses to overwrite an existing patient database.
+Demo seeding requires `NODE_ENV=development` and explicit opt-in with `SEED_DEMO_DATA=true`; it is disabled in production. On an empty demonstration database, run `SEED_DEMO_DATA=true npm run db:seed-demo`. To add sample records alongside existing clinic data, run `SEED_DEMO_DATA=true npm run db:seed-demo-additive`; it inserts namespaced rows, preserves existing records, and refuses ID collisions. The fixture contains 210 fictional patients, 480 visits, 42 appointments, 34 inventory items, and 120 linked dispense records. It uses reserved `.test` email addresses and non-deliverable contact placeholders, and the command sends no messages.
 
 ## Commands
 

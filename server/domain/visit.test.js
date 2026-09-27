@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clinicCalendarDate, queueStatusConflict, riskPriority, sortQueueEntries, validateQueueTriage, validateVisitPayload, visitRiskInput } from './visit.js';
+import { clinicCalendarDate, validateVisitPayload, visitRiskInput } from './visit.js';
 
 const validVisit = {
   patientId: 'student-17',
@@ -21,15 +21,44 @@ test('visit validation normalizes valid inputs without trusting client risk meta
   assert.equal(result.valid, true);
   assert.equal(result.value.patientId, 'student-17');
   assert.equal(result.value.followUp, true);
+  assert.equal(result.value.clinicianRedFlagAssessed, false);
   assert.equal('recentVisitCount' in result.value, false);
   assert.equal('riskAssessment' in result.value, false);
   assert.deepEqual(visitRiskInput(result.value, 2), {
     painScore: 5,
-    clinicianRedFlag: false,
+    clinicianRedFlag: null,
     recentVisitCount: 2,
     temperature: null,
     pulse: null,
   });
+});
+
+test('visit validation distinguishes an unanswered warning-sign screen from an assessed negative screen', () => {
+  const unanswered = validateVisitPayload({ ...validVisit, clinicianRedFlag: null, clinicianRedFlagAssessed: false });
+  assert.equal(unanswered.valid, true);
+  assert.equal(unanswered.value.clinicianRedFlag, false);
+  assert.equal(unanswered.value.clinicianRedFlagAssessed, false);
+  assert.equal(visitRiskInput(unanswered.value, 0).clinicianRedFlag, null);
+
+  const assessedNegative = validateVisitPayload({ ...validVisit, clinicianRedFlag: false, clinicianRedFlagAssessed: true });
+  assert.equal(assessedNegative.valid, true);
+  assert.equal(visitRiskInput(assessedNegative.value, 0).clinicianRedFlag, false);
+
+  const contradictory = validateVisitPayload({ ...validVisit, clinicianRedFlag: true, clinicianRedFlagAssessed: false });
+  assert.equal(contradictory.valid, false);
+  assert.ok(contradictory.fields.clinicianRedFlagAssessed);
+
+  const malformedFlag = validateVisitPayload({ ...validVisit, clinicianRedFlag: 'no' });
+  assert.equal(malformedFlag.valid, false);
+  assert.ok(malformedFlag.fields.clinicianRedFlag);
+
+  const malformedAssessment = validateVisitPayload({ ...validVisit, clinicianRedFlag: false, clinicianRedFlagAssessed: 'false' });
+  assert.equal(malformedAssessment.valid, false);
+  assert.ok(malformedAssessment.fields.clinicianRedFlagAssessed);
+
+  const assessedWithoutAnswer = validateVisitPayload({ ...validVisit, clinicianRedFlagAssessed: true });
+  assert.equal(assessedWithoutAnswer.valid, false);
+  assert.ok(assessedWithoutAnswer.fields.clinicianRedFlag);
 });
 
 test('visit validation rejects missing patient, invalid pain and unsafe dispense quantities', () => {
@@ -88,27 +117,4 @@ test('scheduled follow-up requires a real clinic date today or later and no date
   assert.equal(Object.hasOwn(notScheduled.value, 'followUpDate'), false);
   const staleDate = validateVisitPayload({ ...validVisit, followUp: false, followUpDate: '2026-08-20' }, { now });
   assert.equal(staleDate.valid, false);
-});
-
-test('queue prioritizes urgency before arrival and preserves FIFO within priority', () => {
-  const sorted = sortQueueEntries([
-    { id: 'late-urgent', priority: 3, arrivalAt: '2026-04-01T09:20:00Z' },
-    { id: 'first-routine', priority: 1, arrivalAt: '2026-04-01T08:00:00Z' },
-    { id: 'early-urgent', priority: 3, arrivalAt: '2026-04-01T09:00:00Z' },
-  ]);
-  assert.deepEqual(sorted.map((entry) => entry.id), ['early-urgent', 'late-urgent', 'first-routine']);
-  assert.deepEqual([riskPriority('high'), riskPriority('moderate'), riskPriority('low'), riskPriority('other')], [3, 2, 1, 0]);
-});
-
-test('reopening a released queue entry is rejected when another active entry exists', () => {
-  assert.equal(queueStatusConflict('Released', 'Waiting', true), true);
-  assert.equal(queueStatusConflict('Released', 'Released', true), false);
-  assert.equal(queueStatusConflict('Released', 'Waiting', false), false);
-});
-
-test('queue triage requires a nurse reason for classified priorities', () => {
-  assert.equal(validateQueueTriage({ triagePriority: 'unclassified' }).valid, true);
-  assert.equal(validateQueueTriage({ triagePriority: 'high' }).valid, false);
-  assert.equal(validateQueueTriage({ triagePriority: 'high', triageReason: 'Observed urgent warning sign' }).value.prioritySource, 'nurse_triage');
-  assert.equal(validateQueueTriage({ triagePriority: 'low', triageReason: 'x'.repeat(241) }).valid, false);
 });

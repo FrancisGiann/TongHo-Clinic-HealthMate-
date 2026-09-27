@@ -67,7 +67,7 @@ export default function StudentPicker({
           aria-invalid={required && !value ? 'true' : undefined}
           autoComplete="off"
           value={query}
-          placeholder="Search by student name or ID"
+          placeholder="Search by patient name or ID"
           disabled={disabled}
           onFocus={() => setOpen(true)}
           onBlur={() => setOpen(false)}
@@ -94,12 +94,12 @@ export default function StudentPicker({
               onClick={() => choose(student)}
             >
               <strong>{student.name}</strong>
-              <span>{student.studentId} · {student.gradeLevel || 'Grade not recorded'}{student.section ? ` · ${student.section}` : ''}</span>
+              <span>{student.patientType === 'faculty' ? student.facultyId || student.studentId : student.studentId} · {student.patientType === 'faculty' ? [student.department, student.position].filter(Boolean).join(' · ') || 'Faculty' : `${student.gradeLevel || 'Grade not recorded'}${student.section ? ` · ${student.section}` : ''}`}</span>
             </button>
-          )) : <p className="student-picker-empty">No students match that name or ID.</p>}
+          )) : <p className="student-picker-empty">No patients match that name or ID.</p>}
         </div>
       )}
-      <span className="sr-only" aria-live="polite">{open ? `${matches.length} student matches` : ''}</span>
+      <span className="sr-only" aria-live="polite">{open ? `${matches.length} patient matches` : ''}</span>
     </div>
   );
 }

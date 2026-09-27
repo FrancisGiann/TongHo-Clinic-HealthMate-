@@ -1,10 +1,11 @@
 import { query } from './db.js';
-import { isValidCalendarDate, latestImmunizationsByStudentVaccine } from '../shared/immunizationOrder.js';
 
 const REMINDER_LOOKAHEAD_DAYS = 30;
 
 function isoDate(value) {
-  return isValidCalendarDate(value);
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
 function clinicDate(value) {
@@ -35,50 +36,13 @@ export async function runClinicReminderSweep({
 } = {}) {
   if (typeof notifyPatient !== 'function') throw new TypeError('A patient notification handler is required.');
   const { today, horizon } = reminderDateWindow(now);
-  const [followUpResult, immunizationResult, recurringResult, consentResult] = await Promise.all([
+  const [followUpResult, recurringResult, consentResult] = await Promise.all([
     queryFn(
       `SELECT id,patient_id,data FROM visits
        WHERE data->>'followUp'='true'
          AND data->>'followUpDate' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
          AND data->>'followUpDate' <= $1
        ORDER BY created_at DESC LIMIT 500`,
-      [horizon],
-    ),
-    queryFn(
-      `WITH immunization_dates AS (
-         SELECT id,patient_id,data,created_at,
-                CASE WHEN data->>'dateAdministered' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN
-                  CASE WHEN SUBSTRING(data->>'dateAdministered',6,2)::int BETWEEN 1 AND 12 THEN
-                    CASE WHEN SUBSTRING(data->>'dateAdministered',9,2)::int BETWEEN 1 AND
-                      CASE
-                        WHEN SUBSTRING(data->>'dateAdministered',6,2)::int=2 THEN
-                          CASE WHEN (SUBSTRING(data->>'dateAdministered',1,4)::int % 4=0
-                                     AND (SUBSTRING(data->>'dateAdministered',1,4)::int % 100<>0
-                                          OR SUBSTRING(data->>'dateAdministered',1,4)::int % 400=0))
-                               THEN 29 ELSE 28 END
-                        WHEN SUBSTRING(data->>'dateAdministered',6,2)::int IN (4,6,9,11) THEN 30
-                        ELSE 31
-                      END
-                      THEN data->>'dateAdministered' ELSE NULL END
-                  ELSE NULL END
-                ELSE NULL END AS valid_administered_date
-         FROM immunizations
-       ), latest_by_vaccine AS (
-         SELECT id,patient_id,data,created_at,
-                ROW_NUMBER() OVER (
-                  PARTITION BY patient_id,
-                    CASE WHEN BTRIM(COALESCE(data->>'vaccineName','')) = ''
-                         THEN 'legacy:' || id
-                         ELSE LOWER(BTRIM(data->>'vaccineName')) END
-                  ORDER BY valid_administered_date DESC NULLS LAST,
-                           created_at DESC, id COLLATE "C" DESC
-                ) AS vaccine_rank
-         FROM immunization_dates
-       )
-       SELECT id,patient_id,data,created_at FROM latest_by_vaccine
-       WHERE vaccine_rank=1
-         AND data->>'nextDueDate' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-         AND data->>'nextDueDate' <= $1`,
       [horizon],
     ),
     queryFn(
@@ -100,17 +64,6 @@ export async function runClinicReminderSweep({
     (visit.data?.followUp === true || visit.data?.followUp === 'true')
     && isoDate(visit.data?.followUpDate)
     && visit.data.followUpDate <= horizon
-  ));
-  const latestImmunizations = latestImmunizationsByStudentVaccine(immunizationResult.rows.map((record) => ({
-    ...record,
-    ...record.data,
-    id: record.id,
-    patientId: record.patient_id,
-    createdAt: record.created_at instanceof Date ? record.created_at.toISOString() : record.created_at,
-  })));
-  const immunizations = latestImmunizations.filter((record) => (
-    isoDate(record.data?.nextDueDate)
-    && record.data.nextDueDate <= horizon
   ));
   const pendingConsents = consentResult.rows.filter((patient) => (
     patient.data?.consentStatus === 'pending'
@@ -136,16 +89,6 @@ export async function runClinicReminderSweep({
       dedupeKey: `follow-up:${visit.id}:${dueDate}`,
     }, 'Follow-up');
   }
-  for (const immunization of immunizations) {
-    const dueDate = immunization.data.nextDueDate;
-    const vaccineName = String(immunization.data.vaccineName || 'A recorded vaccine dose');
-    await notifySafely(immunization.patient_id, {
-      type: 'immunization_reminder',
-      subject: 'Vaccine due date reminder',
-      body: `A vaccine dose has a recorded due date of ${dueDate}. Sign in to view the authorized details.`,
-      dedupeKey: `immunization-reminder:${immunization.patient_id}:${vaccineName.toLocaleLowerCase()}:${dueDate}`,
-    }, 'Immunization');
-  }
   const recurringMonth = today.slice(0, 7);
   for (const patient of recurringResult.rows) {
     await notifySafely(patient.patient_id, {
@@ -167,13 +110,11 @@ export async function runClinicReminderSweep({
   }
 
   const followUpCount = followUps.length;
-  const immunizationCount = immunizations.length;
   const recurringCount = recurringResult.rows.length;
   const consentCount = pendingConsents.length;
   return {
-    triggered: followUpCount + immunizationCount + recurringCount + consentCount,
+    triggered: followUpCount + recurringCount + consentCount,
     followUps: followUpCount,
-    immunizations: immunizationCount,
     recurring: recurringCount,
     consents: consentCount,
     notificationFailures,

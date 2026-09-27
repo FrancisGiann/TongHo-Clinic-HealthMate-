@@ -1,11 +1,30 @@
 import 'dotenv/config';
 import { createApp, runClinicReminders } from './server/app.js';
-import { closeDatabase, databaseConfigured } from './server/db.js';
+import { closeDatabase, databaseConfigured, databaseTlsVerified, query } from './server/db.js';
 import { emailConfigured } from './server/email.js';
 import { startClinicReminderScheduler } from './server/reminderScheduler.js';
+import { runReportArchiveSweep, startReportArchiveScheduler } from './server/reportArchives.js';
+import { productionStartupIssue } from './server/security.js';
 
 const port = Number(process.env.PORT || 3001);
 const app = createApp();
+if (process.env.NODE_ENV === 'production') {
+  const seedCheck = databaseConfigured
+    ? await query(`SELECT
+        EXISTS(SELECT 1 FROM users WHERE LOWER(email) LIKE '%.test') AS has_development_accounts,
+        to_regclass('public.dev_role_account_seed_registry') IS NOT NULL AS has_seed_registry`)
+    : { rows: [{ has_development_accounts: false, has_seed_registry: false }] };
+  const issue = productionStartupIssue({
+    nodeEnv: process.env.NODE_ENV,
+    databaseConfigured,
+    databaseTlsVerified,
+    emailConfigured: emailConfigured(),
+    smtpTlsVerified: process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== 'false',
+    hasDevelopmentAccounts: seedCheck.rows[0].has_development_accounts,
+    hasSeedRegistry: seedCheck.rows[0].has_seed_registry,
+  });
+  if (issue) throw new Error(issue);
+}
 const server = app.listen(port, () => {
   console.log(`HealthMate+ running on http://localhost:${port}`);
 });
@@ -14,12 +33,17 @@ const stopReminderScheduler = startClinicReminderScheduler({
   databaseConfigured,
   emailConfigured: emailConfigured(),
 });
+const stopReportArchiveScheduler = startReportArchiveScheduler({
+  run: () => runReportArchiveSweep(),
+  databaseConfigured,
+});
 
 let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   stopReminderScheduler();
+  stopReportArchiveScheduler();
   server.close(async (error) => {
     if (error) {
       console.error(`HTTP shutdown failed after ${signal}:`, error.message);
@@ -27,6 +51,7 @@ async function shutdown(signal) {
     }
     try {
       await stopReminderScheduler.drain();
+      await stopReportArchiveScheduler.drain();
       await closeDatabase();
     } catch (closeError) {
       console.error('Database shutdown failed:', closeError.message);

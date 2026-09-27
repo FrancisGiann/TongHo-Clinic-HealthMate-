@@ -1,5 +1,6 @@
 import { useId, useMemo, useState } from 'react';
-import { AlertTriangle, ArrowLeft, Eye, EyeOff, KeyRound, Lock, Mail, Plus, Shield, User, UserCheck } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Eye, EyeOff, KeyRound, Lock, Mail, Shield, User, UserCheck } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   activateAccount,
   authenticateUser,
@@ -8,13 +9,17 @@ import {
   validatePasswordStrength,
   verifyMfaCode,
 } from '../utils/auth';
+import { getSafeReturnPath } from '../utils/navigation';
 
-export default function Login({ onLogin }) {
-  const activationToken = useMemo(() => new URLSearchParams(window.location.search).get('activate'), []);
+export default function Login({ onLogin, authError = '' }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const activationToken = useMemo(() => new URLSearchParams(location.search).get('activate'), [location.search]);
+  const returnTo = useMemo(() => getSafeReturnPath(location.state?.from), [location.state]);
   const [mode, setMode] = useState(activationToken ? 'activate' : 'signin');
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
-  const [remember, setRemember] = useState(true);
+  const [remember, setRemember] = useState(false);
   const [challengeId, setChallengeId] = useState('');
   const [code, setCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -43,6 +48,7 @@ export default function Login({ onLogin }) {
     }
     if (!result.success) return setError(result.error);
     onLogin(result.user);
+    navigate(returnTo, { replace: true });
   };
 
   const verifyMfa = async (event) => {
@@ -53,6 +59,7 @@ export default function Login({ onLogin }) {
     setLoading(false);
     if (!result.success) return setError(result.error);
     onLogin(result.user);
+    navigate(returnTo, { replace: true });
   };
 
   const requestReset = async () => {
@@ -88,9 +95,13 @@ export default function Login({ onLogin }) {
     const result = await activateAccount(activationToken, activationUsername, newPassword);
     setLoading(false);
     if (!result.success) return setError(result.error);
-    window.history.replaceState({}, '', window.location.pathname);
+    const remainingSearch = new URLSearchParams(location.search);
+    remainingSearch.delete('activate');
+    const remainingQuery = remainingSearch.toString();
+    const search = remainingQuery ? `?${remainingQuery}` : '';
+    navigate({ pathname: location.pathname, search, hash: location.hash }, { replace: true });
     setSuccess(result.message);
-    setTimeout(() => setMode('signin'), 1200);
+    setMode('signin');
   };
 
   const back = () => {
@@ -102,32 +113,40 @@ export default function Login({ onLogin }) {
   };
 
   return (
-    <div className="login-container">
-      <div className="login-background">
-        <div className="orbit-ring" />
-        <div className="hero-cross" aria-hidden="true"><Plus size={120} strokeWidth={1.25} /></div>
-        <span className="orbit-dot one" />
-        <span className="orbit-dot two" />
-      </div>
-      <div className="login-card">
-        <div className="login-header">
-          <div className="brand-mark"><img src="/Logo.jpg" alt="Philippine Tong Ho Institute seal" /></div>
-          <div className="login-branding"><h1>HealthMate+</h1></div>
-          <p className="login-subtitle">Secure campus clinic portal</p>
-        </div>
+    <main className="hm-login-page">
+      <header className="hm-login-topbar">
+        <Link className="hm-login-brand" to="/" aria-label="HealthMate+ home">
+          <img src="/Logo.jpg" alt="" />
+          <span>HealthMate+</span>
+        </Link>
+        <Link className="hm-login-back" to="/"><ArrowLeft size={17} /> Back to home</Link>
+      </header>
+      <div className="hm-login-layout">
+        <section className="hm-login-welcome" aria-labelledby="hm-login-welcome-title">
+          <div className="hm-login-welcome-seal"><img src="/Logo.jpg" alt="Philippine Tong Ho Institute seal" /></div>
+          <h1 id="hm-login-welcome-title">Welcome to your school clinic portal.</h1>
+          <p>Sign in to reach the tools and records available for your account.</p>
+          <div className="hm-login-identity">Philippine Tong Ho Institute <span>City of Lucena</span></div>
+        </section>
+        <section className="hm-login-card" aria-labelledby="hm-login-title">
+          <div className="hm-login-card-heading">
+            <h2 id="hm-login-title">HealthMate+</h2>
+            <p>Sign in securely to continue.</p>
+          </div>
 
+        {authError && <div className="hm-login-connection-error" role="alert">{authError}</div>}
         {error && <div className="login-error" role="alert"><AlertTriangle size={18} /><p>{error}</p></div>}
         {success && <div className="login-success" role="status"><UserCheck size={18} /><p>{success}</p></div>}
 
         {mode === 'signin' && (
           <form onSubmit={signIn} className="login-form">
-            <Intro title="Welcome back" text="Sign in with the account provided by your administrator." />
+            <Intro title="Welcome back" text="Use the account provided by your school clinic administrator." />
             <Field icon={User} label="Email / Username" inputId="login-identifier">
               <input id="login-identifier" value={identifier} onChange={(event) => setIdentifier(event.target.value)} autoComplete="username" required autoFocus />
             </Field>
             <PasswordField label="Password" value={password} onChange={setPassword} autoComplete="current-password" />
             <div className="login-options-row">
-              <label className="remember-me"><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} /> Remember me</label>
+              <label className="remember-me"><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} /> Keep me signed in on this browser for up to 12 hours</label>
               <button type="button" className="text-link-button" onClick={() => { clearMessages(); setMode('forgot'); }}>Forgot password?</button>
             </div>
             <button type="submit" className="login-btn" disabled={loading}>{loading ? 'Signing in…' : <><Shield size={16} /> Sign in securely</>}</button>
@@ -196,8 +215,9 @@ export default function Login({ onLogin }) {
             <button type="submit" className="login-btn" disabled={loading}>{loading ? 'Activating…' : 'Activate account'}</button>
           </form>
         )}
+        </section>
       </div>
-    </div>
+    </main>
   );
 }
 

@@ -1,46 +1,45 @@
-# Hostinger Business/Cloud + Supabase deployment
+# Deployment readiness: Hostinger Business or Cloud + Supabase
 
-## 1. Database
+Hostinger documents Node.js web-app support on Business and Cloud plans. HealthMate+ uses that application hosting for its React/Express app and an external Supabase PostgreSQL project for persistent data. Hostinger does not provide managed PostgreSQL on these plans; using PostgreSQL managed directly by Hostinger would require a VPS, which is outside this deployment target. Confirm current plan limits with [Hostinger's Node.js deployment guide](https://www.hostinger.com/support/how-to-deploy-a-nodejs-website-in-hostinger/), [Supabase connection guide](https://www.hostinger.com/support/connecting-a-supabase-database-to-a-hostinger-node-js-application/), and [server capabilities list](https://www.hostinger.com/support/which-server-capabilities-are-supported-at-hostinger/).
 
-1. Create a Supabase project and copy its pooled PostgreSQL connection string.
-2. Download the database CA certificate from Supabase **Database Settings → SSL Configuration**.
-3. Include `certificates/prod-ca-2021.crt` in the deployed project and set `DATABASE_URL`, `DB_SSL=true`, `DB_SSL_REJECT_UNAUTHORIZED=true`, and `DB_SSL_CA_FILE=certificates/prod-ca-2021.crt` in Hostinger.
-4. Set strong one-time `BOOTSTRAP_ADMIN_*` values.
-5. Run `npm run db:migrate` from a trusted deployment shell or locally against the production database.
-6. Remove `BOOTSTRAP_ADMIN_PASSWORD` after the administrator exists.
+No production deployment, migration, email delivery, scheduled-job reliability, or clinical workflow is claimed as verified by this repository.
 
-## 2. Hostinger Node.js application
+## 1. Prepare a separate production database
 
-Use a Hostinger Business or Cloud plan with Node.js web-app support.
+1. Create a new Supabase project reserved for production. Do not promote or reuse the current development project.
+2. Confirm the production database has no fictional development accounts ending in `.test` and no `public.dev_role_account_seed_registry` table. The server refuses production startup if either is present.
+3. Configure the pooled PostgreSQL connection string and verified TLS in Hostinger. Keep `DB_SSL=true` and `DB_SSL_REJECT_UNAUTHORIZED=true`; provide the provider CA file with `DB_SSL_CA_FILE` when required. Remove `sslmode`, `sslrootcert`, `sslcert`, and `sslkey` query parameters from `DATABASE_URL`, because node-postgres URL SSL options replace the Pool `ssl` object. See the [node-postgres SSL configuration guide](https://node-postgres.com/features/ssl).
+4. Set unique `BOOTSTRAP_ADMIN_*` values through Hostinger's secret configuration. Apply `npm run db:migrate` against production from a trusted deployment shell before starting the new app version. Remove `BOOTSTRAP_ADMIN_PASSWORD` after the administrator exists.
+5. Do not run demo or development-account seed commands against production. The dev-account preflight is a safety check, not a migration or cleanup command.
 
-- Repository: this project
-- Node.js: 22.x
-- Build command: `npm ci && npm run build`
-- Start command: `npm start`
-- Application port: use Hostinger's injected `PORT`
-- Domain: set `APP_URL=https://your-domain.example`
-- Production flags: `NODE_ENV=production`, `COOKIE_SECURE=true`
+Migrations create the schema only. No actual school paper records or authorized source dataset were available for migration. Historical import stays available for a future dataset only after PTHI authorization, privacy review, field mapping, duplicate policy, backup, and nurse-reviewed staging rehearsal. A launch may use newly entered, consented records and fictional staging data; that does not establish a legacy migration.
 
-Add the PostgreSQL, SMTP, and optional AI variables from `.env.example` in hPanel. Do not upload the local `.env` file.
+## 2. Configure the Hostinger Node.js app
 
-## 3. Email and activation
+- Plan: Business or Cloud with Node.js web-app support
+- Runtime: Node.js 22.x
+- Build: `npm ci && npm run build`
+- Start: `npm start`
+- Port: use Hostinger's injected `PORT`
+- Environment: set `NODE_ENV=production`, `APP_URL=https://your-domain.example`, and `COOKIE_SECURE=true`
+- Proxy: set `TRUST_PROXY_HOPS` only after Hostinger confirms the exact trusted proxy hop count. The default `0` ignores forwarded addresses. Verify `req.ip` in a staging deployment before relying on IP throttles; do not trust client-supplied `X-Forwarded-For` values.
 
-Configure a Hostinger mailbox or another SMTP provider. Account invitations, OTP login, and password reset require working SMTP. Test `/api/health`; it reports database and email configuration without exposing secrets.
+Add the required database and SMTP variables from `.env.example` in hPanel. Do not upload a local `.env` file. Production startup fails closed if `DATABASE_URL`, verified PostgreSQL TLS, SMTP configuration, SMTP certificate verification, or the development-seed check is missing or unsafe.
 
-## 4. Automatic clinic reminders
+## 3. Email verification and security checks
 
-Automatic reminders are disabled by default. To enable them, set `CLINIC_REMINDER_SCHEDULER_ENABLED=true` only with `NODE_ENV=production`, a configured database, and working SMTP. The persistent `npm start` process runs the first sweep after `CLINIC_REMINDER_INITIAL_DELAY_MS` (30 seconds by default), then every `CLINIC_REMINDER_INTERVAL_HOURS` (24 hours by default). Development never starts the scheduler; administrators can still use the explicit manual trigger.
+Production always requires email OTP at sign-in; there is no per-account MFA switch. OTP, invitations, password resets, and notices require working SMTP. Non-implicit SMTP connections require STARTTLS, and certificate verification must remain enabled in production. For Hostinger SMTP on port 587, leave `SMTP_SECURE=false` so STARTTLS is required; use implicit TLS only when the selected provider documents it. `REQUIRE_LOGIN_OTP=false` is accepted only when `NODE_ENV=development`. The app does not simulate email delivery. See Nodemailer's [SMTP TLS options](https://nodemailer.com/smtp).
 
-The new-visit form requires an explicit follow-up date when follow-up is selected; the server accepts only a valid calendar date that is today or later in Asia/Manila. Legacy follow-up records without a valid `followUpDate` are skipped rather than treated as due on their visit date. Follow-up reminders include the saved date; recurring-visit review reminders are deduplicated monthly. Reminder notification keys are unique in PostgreSQL, preventing duplicate sends for the same patient and reminder across overlapping jobs or app instances. Each instance still scans and audits the sweep; SMTP failures after acceptance can have ambiguous delivery and are not automatically retried.
+Before opening access, use fictional staging accounts and test a delivered OTP, invalid and expired codes, password reset, login throttling, session idle expiry, 12-hour absolute expiry, three-session cap, per-session revocation, and sign-out-everywhere. Verify that account/session APIs return only the signed-in user's sessions. Check `/api/health` for configuration, then send and receive an actual staging email; a `configured` health value does not prove delivery.
 
-## 5. Deployment verification
+Session policy is server-enforced: 15 minutes idle, 12 hours absolute, and at most three active sessions per account. “Keep me signed in” creates a persistent cookie only up to that same 12-hour limit; it is not trusted-device recognition. Failed-password counters are durable in PostgreSQL. The additional IP throttles are in-memory per app process and are supplemental; they do not replace the durable counter or provider edge protections and may not be shared across app instances.
 
-1. Run migrations before starting a new schema version.
-2. Confirm `/api/health` returns `database: connected`.
-3. Sign in as the bootstrap administrator and send a test invitation.
-4. Verify student and guardian accounts see only linked patients.
-5. Confirm unauthorized `/api/admin/*` requests return 403.
-6. Generate and save a report snapshot.
-7. Export a JSON/CSV backup and verify the database provider's automated backup policy.
+## 4. Verify background work on the selected plan
 
-For PostgreSQL on Hostinger managed Web/Cloud, use an external provider such as Supabase. Direct Hostinger PostgreSQL requires a VPS.
+Reminder and report-archive schedulers run inside the persistent `npm start` process. Hostinger documents server capabilities by plan, but this repository has not verified that the selected Business or Cloud process stays alive long enough for the configured intervals or restarts cleanly after deployment. Verify process persistence, restart behavior, logs, time zone, and duplicate handling in staging before enabling either scheduler. Do not treat in-process timers as a reliable cron service.
+
+Both schedulers are disabled by default. Only enable `CLINIC_REMINDER_SCHEDULER_ENABLED=true` after SMTP and delivery behavior pass staging checks. Only enable `REPORT_ARCHIVE_SCHEDULER_ENABLED=true` after migration, retention approval, and staging checks for daily, weekly, monthly, and duplicate snapshots. No past report history is synthesized.
+
+## 5. Production verification record
+
+Record the selected Hostinger plan, runtime version, Supabase project identity, migration versions, database TLS result, SMTP test result, trusted proxy hop count and observed `req.ip`, session/OTP checks, backup/restore rehearsal, and scheduler persistence results before claiming launch readiness. Confirm the production project is separate from development and contains no seeded development account identities or registry. Keep live patient records out of development screenshots and automated tests.

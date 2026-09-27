@@ -97,7 +97,21 @@ export function validateVisitPayload(payload = {}, { now = new Date() } = {}) {
   if (!followUp && payload.followUpDate !== undefined && payload.followUpDate !== null && payload.followUpDate !== '') {
     fields.followUpDate = 'A follow-up date can only be saved when follow-up is scheduled.';
   }
-  if (payload.clinicianRedFlag !== undefined && typeof payload.clinicianRedFlag !== 'boolean') fields.clinicianRedFlag = 'Urgent warning sign must be true or false.';
+  if (payload.clinicianRedFlagAssessed !== undefined && typeof payload.clinicianRedFlagAssessed !== 'boolean') {
+    fields.clinicianRedFlagAssessed = 'Complete the clinician warning-sign screen before saving.';
+  }
+  if (payload.clinicianRedFlag !== undefined && payload.clinicianRedFlag !== null && typeof payload.clinicianRedFlag !== 'boolean') {
+    fields.clinicianRedFlag = 'Urgent warning sign must be true or false.';
+  }
+  const clinicianRedFlagAssessed = payload.clinicianRedFlagAssessed === undefined
+    ? typeof payload.clinicianRedFlag === 'boolean'
+    : payload.clinicianRedFlagAssessed;
+  if (clinicianRedFlagAssessed && payload.clinicianRedFlagAssessed !== undefined && typeof payload.clinicianRedFlag !== 'boolean') {
+    fields.clinicianRedFlag = 'Record whether an urgent warning sign was observed.';
+  }
+  if (!clinicianRedFlagAssessed && payload.clinicianRedFlag === true) {
+    fields.clinicianRedFlagAssessed = 'An observed urgent warning sign must be recorded as assessed.';
+  }
 
   const summaryDraft = boundedText(payload.summaryDraft, 2000);
   if (summaryDraft === null) fields.summaryDraft = 'Summary must be 2,000 characters or fewer.';
@@ -118,6 +132,7 @@ export function validateVisitPayload(payload = {}, { now = new Date() } = {}) {
       temperature,
       pulse,
       clinicianRedFlag: Boolean(payload.clinicianRedFlag),
+      clinicianRedFlagAssessed,
       riskAcknowledgement: acknowledgement,
       medicineId,
       medicineQuantity,
@@ -135,42 +150,9 @@ export function validateVisitPayload(payload = {}, { now = new Date() } = {}) {
 export function visitRiskInput(visit, recentVisitCount) {
   return {
     painScore: visit.painScore,
-    clinicianRedFlag: visit.clinicianRedFlag,
+    clinicianRedFlag: visit.clinicianRedFlagAssessed === false ? null : visit.clinicianRedFlag,
     recentVisitCount,
     temperature: visit.temperature,
     pulse: visit.pulse,
   };
-}
-
-export function riskPriority(category) {
-  return ({ high: 3, moderate: 2, low: 1 })[category] || 0;
-}
-
-export function validateQueueTriage(payload = {}) {
-  const triagePriority = String(payload.triagePriority || 'unclassified').trim().toLowerCase();
-  const triageReason = String(payload.triageReason || '').trim();
-  if (!['unclassified', 'low', 'moderate', 'high'].includes(triagePriority)) return { valid: false, message: 'Choose a valid triage priority.' };
-  if (triagePriority !== 'unclassified' && (!triageReason || triageReason.length > 240)) return { valid: false, message: 'Add a concise triage reason of 1–240 characters.' };
-  return {
-    valid: true,
-    value: {
-      triagePriority,
-      triageReason: triagePriority === 'unclassified' ? '' : triageReason,
-      prioritySource: triagePriority === 'unclassified' ? 'unclassified' : 'nurse_triage',
-    },
-  };
-}
-
-export function sortQueueEntries(entries = []) {
-  return [...entries].sort((left, right) => {
-    const priorityDifference = Number(right.priority || 0) - Number(left.priority || 0);
-    if (priorityDifference) return priorityDifference;
-    const leftArrival = new Date(left.arrivalAt || left.createdAt || 0).getTime();
-    const rightArrival = new Date(right.arrivalAt || right.createdAt || 0).getTime();
-    return leftArrival - rightArrival;
-  });
-}
-
-export function queueStatusConflict(_currentStatus, nextStatus, hasOtherActiveEntry) {
-  return nextStatus !== 'Released' && Boolean(hasOtherActiveEntry);
 }

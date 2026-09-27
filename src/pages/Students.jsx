@@ -13,11 +13,13 @@ export default function Students({ data, setData }) {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [sortAscending, setSortAscending] = useState(true);
-  const students = data.students.filter((student) =>
-    `${student.name} ${student.studentId} ${student.gradeLevel} ${student.section}`
-      .toLowerCase()
-      .includes(query.toLowerCase()),
-  ).sort((first, second) => sortAscending ? first.name.localeCompare(second.name) : second.name.localeCompare(first.name));
+  const [patientType, setPatientType] = useState('all');
+  const patients = (data.students || []).filter((record) => {
+    const type = record.patientType === 'faculty' ? 'faculty' : 'student';
+    return (patientType === 'all' || patientType === type)
+      && `${record.name} ${record.studentId || record.facultyId} ${record.gradeLevel || ''} ${record.section || ''} ${record.department || ''} ${record.position || ''}`.toLowerCase().includes(query.toLowerCase());
+  }).sort((first, second) => sortAscending ? first.name.localeCompare(second.name) : second.name.localeCompare(first.name));
+  const totalPatientRecords = (data.students || []).length;
   const latestVisits = new Map();
   data.visits.forEach((visit) => {
     const studentId = String(visit.studentId || visit.patientId || '');
@@ -26,12 +28,14 @@ export default function Students({ data, setData }) {
   });
   const exportStudents = () => {
     const studentRows = data.students.map((student) => ({
-      "Record Type": "Student",
-      "Student ID": student.studentId,
+      "Record Type": student.patientType === 'faculty' ? 'Faculty' : 'Student',
+      "Student ID": student.patientType === 'faculty' ? student.facultyId || student.studentId : student.studentId,
       "Full Name": student.name,
       "Grade Level": student.gradeLevel,
       Section: student.section,
       Adviser: student.adviser,
+      Department: student.department,
+      Position: student.position,
       "Birth Date": student.birthDate,
       Gender: student.gender,
       "Guardian Name": student.guardianName,
@@ -53,50 +57,44 @@ export default function Students({ data, setData }) {
       "Follow-up": visit.followUp ? "Yes" : "No",
       Nurse: visit.nurseName,
     }));
-    const immunizationRows = (data.immunizations || []).map((record) => ({
-      "Record Type": "Immunization",
-      "Student ID": data.students.find((student) => student.id === record.studentId)?.studentId || record.studentId,
-      Vaccine: record.vaccineName,
-      Dose: record.doseNumber,
-      "Date Administered": record.dateAdministered,
-      "Next Due Date": record.nextDueDate,
-      Remarks: record.remarks,
-    }));
     downloadCsv(
       `healthmate-student-records-${new Date().toISOString().slice(0, 10)}.csv`,
-      [...studentRows, ...visitRows, ...immunizationRows],
+      [...studentRows, ...visitRows],
     );
   };
   return (
     <div className="students-page">
       <div className="page-intro">
         <div>
-          <p className="section-kicker">Student directory</p>
+          <p className="section-kicker">Clinic directory</p>
           <h2>
-            Students{" "}
-            <span className="soft-count">{data.students.length} active</span>
+            Patients{" "}
+            <span className="soft-count">{data.students.length} records</span>
           </h2>
-          <p>Every student record, thoughtfully kept in one place.</p>
+          <p>Student and faculty clinic records in one place.</p>
         </div>
-        <div className="intro-actions"><button className="secondary-btn" onClick={exportStudents}><Download size={16} /> Export CSV</button><button className="primary-btn" onClick={() => navigate('/students/new')}><Plus size={17} /> Register student</button></div>
+        <div className="intro-actions"><button type="button" className="secondary-btn" onClick={exportStudents}><Download size={16} /> Export CSV</button><button type="button" className="secondary-btn" onClick={() => navigate('/faculty/new')}><Plus size={17} /> Register faculty</button><button type="button" className="primary-btn" onClick={() => navigate('/students/new')}><Plus size={17} /> Register student</button></div>
       </div>
-      <div className="toolbar">
+      <div className="patient-toolbar">
         <div className="search-box">
-          <Search size={18} />
+          <Search size={18} aria-hidden="true" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search by name, ID, grade or section..."
+            placeholder="Search by name, ID, grade, section or department..."
+            aria-label="Search patient records"
           />
         </div>
-        <button type="button" className="filter-btn" onClick={() => setSortAscending((value) => !value)} aria-label={`Sort names ${sortAscending ? 'descending' : 'ascending'}`}>
-          <ArrowUpDown size={16} /> Sort: Name {sortAscending ? 'A–Z' : 'Z–A'}
+        <button type="button" className="filter-btn patient-sort" onClick={() => setSortAscending((value) => !value)} aria-label={`Sort names ${sortAscending ? 'descending' : 'ascending'}`}>
+          <ArrowUpDown size={16} aria-hidden="true" /> Name {sortAscending ? 'A–Z' : 'Z–A'}
         </button>
+        <label className="directory-filter">Record type<select value={patientType} onChange={(event) => setPatientType(event.target.value)}><option value="all">All patients</option><option value="student">Students</option><option value="faculty">Faculty</option></select></label>
       </div>
+      <p className="field-hint" aria-live="polite">Showing {patients.length} of {totalPatientRecords} patient records.</p>
       <div className="student-grid">
-        {students.map((student, index) => (
+        {patients.map((student, index) => (
           <Link
-            to={`/students/${student.id}`}
+            to={`/students/${encodeURIComponent(student.id)}`}
             className="student-card"
             key={student.id}
           >
@@ -110,16 +108,14 @@ export default function Students({ data, setData }) {
                   .join("")
                   .slice(0, 2)}
               </div>
-              <span className="grade-badge">{student.gradeLevel}</span>
+              <span className="grade-badge">{student.patientType === 'faculty' ? 'Faculty' : student.gradeLevel || 'Student'}</span>
             </div>
             <h3>{student.name}</h3>
             <p className="student-id">
-              {student.studentId} <span>·</span> {student.section}
+              {student.patientType === 'faculty' ? student.facultyId || student.studentId : student.studentId} <span>·</span> {student.patientType === 'faculty' ? student.department || student.position || 'Faculty' : student.section || 'Student'}
             </p>
             <div className="student-meta">
-              <span>
-                Adviser <b>{student.adviser}</b>
-              </span>
+              <span>{student.patientType === 'faculty' ? 'Position' : 'Adviser'} <b>{student.patientType === 'faculty' ? student.position || 'Not recorded' : student.adviser || 'Not recorded'}</b></span>
               {student.allergies && (
                 <span className="allergy">
                   <ShieldAlert size={13} /> {student.allergies}
@@ -135,8 +131,14 @@ export default function Students({ data, setData }) {
           </Link>
         ))}
       </div>
-      {!students.length && (
-        <div className="no-results">No students match “{query}”.</div>
+      {!patients.length && (
+        <div className="no-results" role="status">
+          {totalPatientRecords === 0 ? (
+            <><strong>No patient records yet.</strong><p>Register a student or faculty member to begin the clinic directory.</p><button type="button" className="primary-btn" onClick={() => navigate('/students/new')}><Plus size={16} /> Register student</button></>
+          ) : (
+            <><strong>No patient records match this view.</strong><p>Try another search term or record type.</p><button type="button" className="secondary-btn" onClick={() => { setQuery(''); setPatientType('all'); }}>Clear search and filters</button></>
+          )}
+        </div>
       )}
     </div>
   );

@@ -7,6 +7,8 @@ related_targets: ["src/pages/NewVisit.jsx","src/pages/Appointments.jsx","src/pag
 
 # HealthMate Clinical Operations Completion
 
+> Archived scope: PTHI has one school nurse and no walk-in queue workflow. The queue screen and this implementation direction are retired; preserve the file only as design history.
+
 Mode: Operate. Scope: the existing authenticated clinic surfaces for visits, risk rules, queue, appointments, inventory, reports, and notifications. The school nurse must understand state and reach the next safe action within seconds; administrators need oversight without displacing clinical work. Existing HealthMate+ identity and navigation remain unchanged.
 
 ## Direction contract

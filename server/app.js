@@ -14,14 +14,19 @@ import {
   consumeOtp,
   createOtpChallenge,
   createRawToken,
+  currentSessionTokenHash,
   findUser,
   hashPassword,
   hashSecret,
   issueSession,
+  loginFailureKeyFor,
+  listUserSessions,
   loadSession,
   normalizeIdentifier,
   publicUser,
   recordFailedLogin,
+  revokeAllUserSessions,
+  revokeUserSession,
   requireAuth,
   requireRoles,
   validEmail,
@@ -29,20 +34,22 @@ import {
   verifyPassword,
 } from './auth.js';
 import { emailConfigured, escapeHtml, sendEmail } from './email.js';
-import { approveDraftRiskRule, assessRisk, getDemonstrationRules, validateRiskRules } from './domain/risk.js';
+import { approveDraftRiskRule, assessRisk, ensureConservativeCandidateDraft, getConservativeCandidateRuleDraft, getDemonstrationRules, riskAllowsAcknowledgedIncomplete, riskNeedsNurseAcknowledgement, validateRiskRules } from './domain/risk.js';
 import { buildClinicReport, reportForRole, reportSnapshotForStorage } from './domain/reporting.js';
 import { applyStockAdjustment, validateInventoryArchive, validateInventoryItem, validateStockAdjustment } from './domain/inventory.js';
 import { persistVisitAndDispensations, resolveInventoryDispensations } from './domain/dispensing.js';
 import { validateChangedClinicalRecords } from './domain/clinical-records.js';
 import { sanitizeAuditLogs } from './domain/audit.js';
 import { summarizeEncounter } from './ai.js';
-import { clinicCalendarDate, queueStatusConflict, riskPriority, validateQueueTriage, validateVisitPayload, visitRiskInput } from './domain/visit.js';
+import { clinicCalendarDate, validateVisitPayload, visitRiskInput } from './domain/visit.js';
 import { appointmentSettings, clinicDateTime, generateAppointmentSlots, isAppointmentTransitionAllowed, isValidAppointmentDate, normalizeAppointmentStatus, rankAppointmentSlots } from './domain/scheduling.js';
 import { clinicalWriteRoles, reportReadRoles } from './domain/authorization.js';
 import { broadcastBatchId, validateBroadcastPayload, validateConsentUpdate } from './domain/communications.js';
 import { clinicDataTransaction, linkUserToPatient, listUsers, loadClinicData, saveClinicData, validateVersionAfterAdvance } from './repository.js';
 import { runClinicReminderSweep } from './reminders.js';
-import { ensureSameOrigin, loginOtpRequired, requestOriginAllowed } from './security.js';
+import { canRollbackImport, normalizeImportRows, selectedImportRows } from './domain/imports.js';
+import { ensureSameOrigin, loginOtpRequired, rateLimit, requestOriginAllowed, trustProxyHops } from './security.js';
+import { buildInvitationActivationUrl } from './invitationUrl.js';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const distDir = join(currentDir, '..', 'dist');
@@ -151,10 +158,55 @@ function formatAppointmentLabel(recordOrValue) {
     : date.toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' });
 }
 
+async function inspectImportRows(type, rows, client = { query }) {
+  const batch = normalizeImportRows(type, rows);
+  if (!batch.validType || batch.invalidBatch) return batch;
+  for (const row of batch.normalizedRows) {
+    if (row.status !== 'ready') continue;
+    if (type === 'students' || type === 'faculty') {
+      const identifier = type === 'faculty' ? row.record.facultyId : row.record.studentId;
+      const existing = await client.query(
+        "SELECT id FROM patients WHERE LOWER(COALESCE(data->>'studentId',data->>'facultyId',''))=LOWER($1) LIMIT 1",
+        [identifier],
+      );
+      if (existing.rowCount) {
+        row.duplicate = true;
+        row.duplicateReason = 'An existing patient already uses this ID.';
+        row.status = 'duplicate';
+        row.defaultAction = 'skip';
+      }
+      continue;
+    }
+
+    const patient = await client.query(
+      "SELECT id FROM patients WHERE id=$1 OR LOWER(COALESCE(data->>'studentId',data->>'facultyId',''))=LOWER($1) LIMIT 1",
+      [row.record.patientId],
+    );
+    if (!patient.rowCount) {
+      row.errors.push('Patient ID was not found.');
+      row.status = 'invalid';
+      row.defaultAction = 'skip';
+      continue;
+    }
+    row.patientId = patient.rows[0].id;
+    const duplicate = await client.query(
+      "SELECT 1 FROM visits WHERE patient_id=$1 AND data->>'date'=$2 AND LOWER(data->>'chiefComplaint')=LOWER($3) LIMIT 1",
+      [row.patientId, row.record.date, row.record.chiefComplaint],
+    );
+    if (duplicate.rowCount) {
+      row.duplicate = true;
+      row.duplicateReason = 'A visit with this patient, date, and complaint already exists.';
+      row.status = 'duplicate';
+      row.defaultAction = 'skip';
+    }
+  }
+  return batch;
+}
+
 export function createApp() {
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', 1);
+  app.set('trust proxy', trustProxyHops());
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -164,8 +216,29 @@ export function createApp() {
     next();
   });
   app.use(cors({ origin: (origin, callback) => callback(null, requestOriginAllowed(origin)), credentials: true }));
+  app.use('/api/auth', express.json({ limit: '16kb' }));
   app.use(express.json({ limit: '5mb' }));
   app.use(ensureSameOrigin);
+
+  const authIpLimiter = rateLimit({ limit: 300, windowMs: 15 * 60 * 1000 });
+  const loginIdentityLimiter = rateLimit({
+    limit: 20,
+    windowMs: 15 * 60 * 1000,
+    key: (req) => {
+      const identifier = typeof (req.body?.identifier ?? req.body?.username) === 'string'
+        ? (req.body.identifier ?? req.body.username).trim().toLowerCase().slice(0, 254)
+        : '';
+      return `${req.ip || req.socket?.remoteAddress || 'unknown'}:${identifier}`;
+    },
+  });
+  const resetRequestLimiter = rateLimit({ limit: 60, windowMs: 60 * 60 * 1000 });
+  const resetConfirmLimiter = rateLimit({ limit: 60, windowMs: 15 * 60 * 1000 });
+  const otpVerifyLimiter = rateLimit({ limit: 120, windowMs: 15 * 60 * 1000 });
+  const reauthLimiter = rateLimit({
+    limit: 20,
+    windowMs: 15 * 60 * 1000,
+    key: (req) => `${req.ip || req.socket?.remoteAddress || 'unknown'}:${req.user?.id || 'unauthenticated'}`,
+  });
 
   app.get('/api/health', async (_req, res) => {
     if (!databaseConfigured) return res.status(503).json({ ok: false, service: 'healthmate-api', database: 'not-configured' });
@@ -179,35 +252,40 @@ export function createApp() {
 
   app.use('/api', loadSession);
 
-  app.post('/api/auth/login', async (req, res) => {
-    const identifier = normalizeIdentifier(req.body?.identifier || req.body?.username);
-    const password = String(req.body?.password || '');
+  app.post('/api/auth/login', authIpLimiter, loginIdentityLimiter, async (req, res) => {
+    const rawIdentifier = req.body?.identifier ?? req.body?.username;
+    const password = req.body?.password;
+    if (typeof rawIdentifier !== 'string' || rawIdentifier.length > 254 || typeof password !== 'string' || password.length > 1024) {
+      return errorResponse(res, 400, 'VALIDATION_ERROR', 'Email/username or password is invalid.');
+    }
+    const identifier = normalizeIdentifier(rawIdentifier);
     if (!identifier || !password) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Email/username and password are required.');
-    const lockedUntil = await checkLoginLock(identifier);
-    if (lockedUntil) return errorResponse(res, 429, 'ACCOUNT_LOCKED', `Too many attempts. Try again after ${new Date(lockedUntil).toLocaleTimeString()}.`);
     const user = await findUser(identifier);
+    const failureKey = loginFailureKeyFor(user, identifier);
+    const lockedUntil = await checkLoginLock(failureKey, identifier);
+    if (lockedUntil) return errorResponse(res, 429, 'ACCOUNT_LOCKED', 'Too many failed sign-in attempts. Try again later.');
     const valid = user ? await verifyPassword(password, user.password_hash) : false;
     if (!user || !valid) {
-      const attemptsRemaining = await recordFailedLogin(identifier);
+      const attemptsRemaining = await recordFailedLogin(failureKey);
       await audit(req, 'LOGIN_FAILED', { identifier, attemptsRemaining });
-      return res.status(401).json({ error: { code: 'INVALID_CREDENTIALS', message: 'Invalid credentials.', attemptsRemaining } });
+      return errorResponse(res, 401, 'INVALID_CREDENTIALS', 'Invalid credentials.');
     }
+    await clearFailedLogin(failureKey, identifier);
     if (user.status !== 'active') return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'This account is not active. Contact an administrator.');
-    await clearFailedLogin(identifier);
     const requireOtp = loginOtpRequired();
     if (requireOtp) {
-      const challengeId = await createOtpChallenge(user, 'login', { remember: Boolean(req.body?.remember) });
+      const challengeId = await createOtpChallenge(user, 'login', { remember: req.body?.remember === true });
       await audit(req, 'LOGIN_OTP_SENT', { userId: user.id });
       return res.status(202).json({ data: { mfaRequired: true, challengeId, username: user.username, message: 'A verification code was sent to your email.' } });
     }
-    await issueSession(req, res, user, Boolean(req.body?.remember));
+    await issueSession(req, res, user, req.body?.remember === true);
     await query('UPDATE users SET last_login_at=NOW() WHERE id=$1', [user.id]);
     req.user = user;
     await audit(req, 'LOGIN_SUCCESS');
     return res.json({ data: { user: publicUser(user) } });
   });
 
-  app.post('/api/auth/otp/verify', async (req, res) => {
+  app.post('/api/auth/otp/verify', otpVerifyLimiter, async (req, res) => {
     const challenge = await consumeOtp(req.body?.challengeId, req.body?.code, 'login');
     if (!challenge) return errorResponse(res, 400, 'INVALID_OTP', 'The verification code is invalid or expired.');
     const result = await query("SELECT * FROM users WHERE id=$1 AND status='active'", [challenge.user_id]);
@@ -222,16 +300,46 @@ export function createApp() {
 
   app.get('/api/auth/me', requireAuth, (req, res) => res.json({ data: { user: publicUser(req.user) } }));
 
+  app.get('/api/auth/sessions', requireAuth, async (req, res) => {
+    const sessions = await listUserSessions(req.user.id, currentSessionTokenHash(req));
+    return res.json({ data: { sessions } });
+  });
+
+  app.delete('/api/auth/sessions/:sessionId', requireAuth, async (req, res) => {
+    const sessionId = req.params.sessionId;
+    if (!/^[0-9a-f]{64}$/i.test(sessionId)) return errorResponse(res, 400, 'INVALID_SESSION', 'The session identifier is invalid.');
+    const result = await revokeUserSession(req.user.id, sessionId);
+    if (!result.rowCount) return errorResponse(res, 404, 'SESSION_NOT_FOUND', 'That session is no longer active.');
+    const current = sessionId === currentSessionTokenHash(req);
+    if (current) await clearSession(req, res);
+    await audit(req, 'SESSION_REVOKED', { current }, 'session', sessionId);
+    return res.json({ data: { success: true, current } });
+  });
+
+  app.post('/api/auth/sessions/logout-all', requireAuth, reauthLimiter, async (req, res) => {
+    const currentPassword = req.body?.currentPassword;
+    if (typeof currentPassword !== 'string' || currentPassword.length > 1024
+      || !(await verifyPassword(currentPassword, req.user.password_hash))) {
+      return errorResponse(res, 400, 'INVALID_CURRENT_PASSWORD', 'Current password is incorrect.');
+    }
+    await revokeAllUserSessions(req.user.id);
+    await audit(req, 'SESSIONS_REVOKED_ALL', {}, 'user', req.user.id);
+    await clearSession(req, res);
+    return res.json({ data: { success: true, message: 'All sessions were signed out.' } });
+  });
+
   app.post('/api/auth/logout', requireAuth, async (req, res) => {
     await audit(req, 'LOGOUT');
     await clearSession(req, res);
     return res.json({ data: { success: true } });
   });
 
-  app.post('/api/auth/password/change', requireAuth, async (req, res) => {
+  app.post('/api/auth/password/change', requireAuth, reauthLimiter, async (req, res) => {
     const passwordError = validatePassword(req.body?.newPassword);
     if (passwordError) return errorResponse(res, 400, 'WEAK_PASSWORD', passwordError);
-    if (!(await verifyPassword(String(req.body?.currentPassword || ''), req.user.password_hash))) {
+    const currentPassword = req.body?.currentPassword;
+    if (typeof currentPassword !== 'string' || currentPassword.length > 1024
+      || !(await verifyPassword(currentPassword, req.user.password_hash))) {
       return errorResponse(res, 400, 'INVALID_CURRENT_PASSWORD', 'Current password is incorrect.');
     }
     await transaction(async (client) => {
@@ -243,22 +351,22 @@ export function createApp() {
     return res.json({ data: { success: true, message: 'Password changed. Sign in again with the new password.' } });
   });
 
-  app.patch('/api/me/mfa', requireAuth, async (req, res) => {
-    const enabled = Boolean(req.body?.enabled);
-    await query('UPDATE users SET mfa_enabled=$1,updated_at=NOW() WHERE id=$2', [enabled, req.user.id]);
-    await audit(req, 'MFA_SETTING_UPDATED', { enabled });
-    return res.json({ data: { success: true, enabled } });
-  });
-
-  app.post('/api/auth/password-reset/request', async (req, res) => {
-    const user = await findUser(req.body?.identifier);
+  app.post('/api/auth/password-reset/request', resetRequestLimiter, async (req, res) => {
+    const identifier = req.body?.identifier;
+    if (typeof identifier !== 'string' || identifier.length > 254) {
+      return errorResponse(res, 400, 'VALIDATION_ERROR', 'Email/username is invalid.');
+    }
+    const user = await findUser(identifier);
     let challengeId = crypto.randomUUID();
     if (user?.status === 'active') challengeId = await createOtpChallenge(user, 'password_reset');
     await audit(req, 'PASSWORD_RESET_REQUESTED', { accountFound: Boolean(user) });
     return res.json({ data: { challengeId, message: 'If the account exists, a reset code was sent.' } });
   });
 
-  app.post('/api/auth/password-reset/confirm', async (req, res) => {
+  app.post('/api/auth/password-reset/confirm', resetConfirmLimiter, async (req, res) => {
+    if (typeof req.body?.password !== 'string' || req.body.password.length > 1024) {
+      return errorResponse(res, 400, 'VALIDATION_ERROR', 'Password is invalid.');
+    }
     const passwordError = validatePassword(req.body?.password);
     if (passwordError) return errorResponse(res, 400, 'WEAK_PASSWORD', passwordError);
     const challenge = await consumeOtp(req.body?.challengeId, req.body?.code, 'password_reset');
@@ -321,7 +429,7 @@ export function createApp() {
       );
     });
     if (req.body?.patientId) await linkUserToPatient(userId, req.body.patientId, role, req.body?.relationship);
-    const activationUrl = `${process.env.APP_URL || 'http://localhost:5173'}/?activate=${encodeURIComponent(rawToken)}`;
+    const activationUrl = buildInvitationActivationUrl(rawToken);
     try {
       await sendEmail({
         to: email,
@@ -353,7 +461,7 @@ export function createApp() {
         [crypto.randomUUID(), hashSecret(rawToken), account.email, account.role, req.user.id],
       );
     });
-    const activationUrl = `${process.env.APP_URL || 'http://localhost:5173'}/?activate=${encodeURIComponent(rawToken)}`;
+    const activationUrl = buildInvitationActivationUrl(rawToken);
     try {
       await sendEmail({
         to: account.email,
@@ -439,7 +547,7 @@ export function createApp() {
       await notifyLinkedUsers(visit.studentId || visit.patientId, {
         type: 'clinic_visit',
         subject: 'Clinic visit recorded',
-        body: `A clinic visit was recorded on ${visit.date || 'the current date'}.`,
+        body: `A clinic visit was recorded on ${visit.date || 'the current date'}${visit.time ? ` at ${visit.time}` : ''}.`,
         dedupeKey: `visit:${visit.id}`,
       });
     }
@@ -449,14 +557,6 @@ export function createApp() {
         subject: 'Clinic appointment update',
         body: `A clinic appointment is ${appointment.status || 'pending'} for ${formatAppointmentLabel(appointment)}.`,
         dedupeKey: `appointment:${appointment.id}`,
-      });
-    }
-    for (const immunization of newRecords(before.immunizations, after.immunizations)) {
-      await notifyLinkedUsers(immunization.studentId || immunization.patientId, {
-        type: 'immunization',
-        subject: 'Immunization record updated',
-        body: `An immunization record was updated${immunization.nextDueDate ? `; next due date: ${immunization.nextDueDate}` : ''}.`,
-        dedupeKey: `immunization:${immunization.id}`,
       });
     }
     await audit(req, 'CLINIC_DATA_UPDATED', { version });
@@ -647,6 +747,34 @@ export function createApp() {
     }
   });
 
+  app.post('/api/patients/faculty', requireRoles('school_nurse'), async (req, res) => {
+    const batch = normalizeImportRows('faculty', [req.body || {}]);
+    const row = batch.normalizedRows?.[0];
+    if (!row || row.errors.length) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Review the faculty record fields.', { fields: row?.errors || [batch.message] });
+    const id = crypto.randomUUID();
+    const record = { ...row.record, id };
+    try {
+      await clinicDataTransaction(async (client) => {
+        const duplicate = await client.query(
+          "SELECT id FROM patients WHERE LOWER(COALESCE(data->>'studentId',data->>'facultyId',''))=LOWER($1) LIMIT 1",
+          [record.facultyId],
+        );
+        if (duplicate.rowCount) {
+          const error = new Error('A patient record already uses this faculty ID.');
+          error.status = 409;
+          error.code = 'DUPLICATE_RECORD';
+          throw error;
+        }
+        await client.query('INSERT INTO patients(id,patient_type,data) VALUES($1,\'faculty\',$2::jsonb)', [id, JSON.stringify(record)]);
+        await audit(req, 'FACULTY_PATIENT_CREATED', {}, 'patient', id, client);
+      });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code, error.message);
+      throw error;
+    }
+    return res.status(201).json({ data: { patient: record } });
+  });
+
   app.post('/api/risk/assess', requireRoles(...clinicalWriteRoles), async (req, res) => {
     const rules = await latestRules();
     const result = assessRisk(req.body || {}, rules);
@@ -672,9 +800,18 @@ export function createApp() {
     const rules = await latestRules();
     const recent = await query('SELECT COUNT(*)::int AS count FROM visits WHERE patient_id=$1', [input.patientId]);
     const assessment = assessRisk(visitRiskInput(input, recent.rows[0]?.count || 0), rules);
-    if (assessment.status !== 'complete') return errorResponse(res, 400, 'RISK_INPUT_INCOMPLETE', assessment.rationale, { missingFields: assessment.missingFields });
-    if (assessment.category === 'high' && !input.riskAcknowledgement) {
-      return errorResponse(res, 400, 'HIGH_RISK_ACKNOWLEDGEMENT_REQUIRED', 'Document the nurse acknowledgement before saving a high-risk visit.', { riskAcknowledgement: 'Required for high-risk results.' });
+    if (assessment.status === 'incomplete' && !riskAllowsAcknowledgedIncomplete(assessment)) {
+      return errorResponse(res, 400, 'RISK_INPUT_INCOMPLETE', assessment.rationale, { missingFields: assessment.missingFields });
+    }
+    if (riskNeedsNurseAcknowledgement(assessment) && !input.riskAcknowledgement) {
+      const isHighRisk = assessment.category === 'high';
+      return errorResponse(
+        res,
+        400,
+        isHighRisk ? 'HIGH_RISK_ACKNOWLEDGEMENT_REQUIRED' : 'RISK_REVIEW_ACKNOWLEDGEMENT_REQUIRED',
+        isHighRisk ? 'Document the nurse acknowledgement before saving a high-risk visit.' : 'Document the nurse review and action before saving this assessment.',
+        { riskAcknowledgement: isHighRisk ? 'Required for high-risk results.' : 'Required for incomplete or review-required results.' },
+      );
     }
     if (input.summaryApproved && !input.summaryDraft) return errorResponse(res, 400, 'SUMMARY_REQUIRED', 'A nurse-approved summary must contain text.');
 
@@ -728,7 +865,7 @@ export function createApp() {
             );
             await client.query(
               'INSERT INTO risk_assessments(id,visit_id,rule_version,result,acknowledged_by,acknowledged_at,override_reason) VALUES($1,$2,$3,$4::jsonb,$5,CASE WHEN $6 THEN NOW() ELSE NULL END,$7)',
-              [crypto.randomUUID(), visitId, Number(assessment.ruleVersion || 0), JSON.stringify(assessment), assessment.category === 'high' ? req.user.id : null, assessment.category === 'high' && Boolean(input.riskAcknowledgement), assessment.category === 'high' ? (input.riskAcknowledgement || null) : null],
+              [crypto.randomUUID(), visitId, Number(assessment.ruleVersion || 0), JSON.stringify(assessment), riskNeedsNurseAcknowledgement(assessment) ? req.user.id : null, riskNeedsNurseAcknowledgement(assessment) && Boolean(input.riskAcknowledgement), riskNeedsNurseAcknowledgement(assessment) ? (input.riskAcknowledgement || null) : null],
             );
           },
           resolved: resolvedDispensations,
@@ -747,7 +884,7 @@ export function createApp() {
       await notifyLinkedUsers(input.patientId, {
         type: 'clinic_visit',
         subject: 'Clinic visit recorded',
-        body: `A ${input.visitType.toLowerCase()} clinic visit was recorded on ${visit.date}.`,
+        body: `A ${input.visitType.toLowerCase()} clinic visit was recorded on ${visit.date}${visit.time ? ` at ${visit.time}` : ''}.`,
         dedupeKey: `visit:${visitId}`,
       });
     } catch (error) {
@@ -758,7 +895,24 @@ export function createApp() {
 
   app.get('/api/risk/rules', requireRoles(...reportReadRoles), async (_req, res) => {
     const result = await query('SELECT id,version,name,status,rules,approved_by,approved_at,created_at FROM risk_rules ORDER BY version DESC');
-    return res.json({ data: { rules: result.rows, demonstrationRules: getDemonstrationRules() } });
+    return res.json({ data: { rules: result.rows, demonstrationRules: getDemonstrationRules(), candidateRuleDraft: getConservativeCandidateRuleDraft() } });
+  });
+
+  app.post('/api/risk/rules/conservative-candidate', requireRoles('system_administrator'), async (req, res) => {
+    let candidate;
+    try {
+      candidate = await transaction((client) => ensureConservativeCandidateDraft(client));
+    } catch (error) {
+      if (error.code !== '23505') throw error;
+      try {
+        candidate = await transaction((client) => ensureConservativeCandidateDraft(client));
+      } catch (retryError) {
+        if (retryError.code === '23505') return errorResponse(res, 409, 'VERSION_EXISTS', 'A rule version was created at the same time. Try again to create the next version.');
+        throw retryError;
+      }
+    }
+    if (candidate.created) await audit(req, 'RISK_RULE_CREATED', { version: candidate.version, status: candidate.status, candidate: 'conservative_triage_v1' }, 'risk_rule', candidate.id);
+    return res.status(candidate.created ? 201 : 200).json({ data: candidate });
   });
 
   app.post('/api/risk/rules', requireRoles('system_administrator'), async (req, res) => {
@@ -767,7 +921,7 @@ export function createApp() {
     const rules = req.body?.rules;
     const status = 'draft';
     if (!Number.isInteger(version) || version < 1 || !name || !rules || !Array.isArray(rules.indicators) || !validateRiskRules(rules).valid) {
-      return errorResponse(res, 400, 'VALIDATION_ERROR', 'Version, name, thresholds, and indicators are required.');
+      return errorResponse(res, 400, 'VALIDATION_ERROR', 'Version, name, and a supported rule definition are required.');
     }
     const id = crypto.randomUUID();
     try {
@@ -804,194 +958,182 @@ export function createApp() {
     const reason = String(req.body?.overrideReason || '').trim();
     const result = await query('SELECT result FROM risk_assessments WHERE id=$1', [req.params.id]);
     if (!result.rowCount) return errorResponse(res, 404, 'NOT_FOUND', 'Risk assessment not found.');
-    if (result.rows[0].result?.category === 'high' && !reason) return errorResponse(res, 400, 'OVERRIDE_REASON_REQUIRED', 'Document the acknowledgement or override reason for a high-risk result.');
+    if (riskNeedsNurseAcknowledgement(result.rows[0].result) && !reason) return errorResponse(res, 400, 'OVERRIDE_REASON_REQUIRED', 'Document the nurse review and action for this result.');
     await query('UPDATE risk_assessments SET acknowledged_by=$1,acknowledged_at=NOW(),override_reason=$2 WHERE id=$3', [req.user.id, reason || null, req.params.id]);
     await audit(req, 'RISK_ASSESSMENT_ACKNOWLEDGED', { overrideReason: reason }, 'risk_assessment', req.params.id);
     return res.json({ data: { success: true } });
   });
 
-  app.get('/api/queue', requireRoles(...clinicalWriteRoles), async (req, res) => {
-    const search = String(req.query.search || '').trim().slice(0, 120);
-    const result = await query(
-      `SELECT q.id,q.patient_id,q.status,q.priority,q.data,q.created_at,q.updated_at,p.data AS patient
-       FROM queue_entries q JOIN patients p ON p.id=q.patient_id
-       WHERE ($1='' OR LOWER(COALESCE(p.data->>'name','')) LIKE LOWER('%' || $1 || '%') OR LOWER(q.patient_id) LIKE LOWER('%' || $1 || '%'))
-       ORDER BY q.priority DESC,q.created_at ASC`,
-      [search],
-    );
-    return res.json({ data: { queue: result.rows.map((row) => ({ ...row.data, id: row.id, patientId: row.patient_id, status: row.status, priority: row.priority, arrivalAt: row.created_at, patient: row.patient })) } });
-  });
+  app.all('/api/queue', (_req, res) => errorResponse(res, 410, 'FEATURE_REMOVED', 'The walk-in queue feature is no longer available. Begin a visit or use appointments.'));
+  app.all('/api/queue/:id', (_req, res) => errorResponse(res, 410, 'FEATURE_REMOVED', 'The walk-in queue feature is no longer available. Begin a visit or use appointments.'));
 
-  app.post('/api/queue', requireRoles(...clinicalWriteRoles), async (req, res) => {
-    const patientId = String(req.body?.patientId || '').trim();
-    const triage = validateQueueTriage(req.body || {});
-    if (!triage.valid) return errorResponse(res, 400, 'TRIAGE_REASON_REQUIRED', triage.message);
-    const priority = riskPriority(triage.value.triagePriority);
-    if (!patientId) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Select a patient to add to the queue.');
-    const id = crypto.randomUUID();
-    try {
-      await clinicDataTransaction(async (client) => {
-        const patient = await client.query('SELECT id FROM patients WHERE id=$1', [patientId]);
-        if (!patient.rowCount) {
-          const error = new Error('The selected patient was not found.');
-          error.status = 404;
-          error.code = 'PATIENT_NOT_FOUND';
-          throw error;
-        }
-        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`queue:${patientId}`]);
-        const active = await client.query("SELECT 1 FROM queue_entries WHERE patient_id=$1 AND status <> 'Released' LIMIT 1", [patientId]);
-        if (active.rowCount) {
-          const error = new Error('This patient is already active in the queue.');
-          error.status = 409;
-          error.code = 'ALREADY_QUEUED';
-          throw error;
-        }
-        const arrivalAt = new Date();
-        const data = { id, patientId, status: 'Waiting', priority, triagePriority: triage.value.triagePriority, triageReason: triage.value.triageReason, prioritySource: triage.value.prioritySource, arrivalAt: arrivalAt.toISOString() };
-        await client.query('INSERT INTO queue_entries(id,patient_id,status,priority,data) VALUES($1,$2,$3,$4,$5::jsonb)', [id, patientId, 'Waiting', priority, JSON.stringify(data)]);
-        await audit(req, 'QUEUE_ENTRY_CREATED', { triagePriority: triage.value.triagePriority, triageReason: triage.value.triageReason, prioritySource: triage.value.prioritySource, priority }, 'queue_entry', id, client);
-      });
-    } catch (error) {
-      if (error.status) return errorResponse(res, error.status, error.code, error.message);
-      throw error;
-    }
-    return res.status(201).json({ data: { id, patientId, status: 'Waiting', priority, ...triage.value } });
-  });
+  const previewImport = (type) => async (req, res) => {
+    const preview = await inspectImportRows(type, req.body?.rows);
+    if (!preview.validType) return errorResponse(res, 404, 'IMPORT_TYPE_UNSUPPORTED', preview.message);
+    if (preview.invalidBatch) return errorResponse(res, 400, 'VALIDATION_ERROR', preview.message);
+    return res.json({ data: { rows: preview.normalizedRows } });
+  };
 
-  app.patch('/api/queue/:id', requireRoles(...clinicalWriteRoles), async (req, res) => {
-    const status = String(req.body?.status || '').trim();
-    const statuses = new Set(['Waiting', 'Being Seen', 'Treated', 'Released']);
-    if (!statuses.has(status)) return errorResponse(res, 400, 'INVALID_STATUS', 'Choose a valid queue status.');
-    let response;
+  const commitImport = (type) => async (req, res) => {
+    const rows = req.body?.rows;
+    const selectedIndices = req.body?.selectedIndices;
+    let result;
     try {
-      await clinicDataTransaction(async (client) => {
-        const identity = await client.query('SELECT patient_id FROM queue_entries WHERE id=$1', [req.params.id]);
-        if (!identity.rowCount) {
-          const error = new Error('Queue entry not found.');
-          error.status = 404;
-          error.code = 'NOT_FOUND';
+      result = await clinicDataTransaction(async (client) => {
+        const preview = await inspectImportRows(type, rows, client);
+        if (!preview.validType || preview.invalidBatch) {
+          const error = new Error(preview.message || 'The import batch is invalid.');
+          error.status = 400;
+          error.code = 'VALIDATION_ERROR';
           throw error;
         }
-        const patientId = identity.rows[0].patient_id;
-        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`queue:${patientId}`]);
-        const current = await client.query('SELECT id,patient_id,status,priority,data FROM queue_entries WHERE id=$1 FOR UPDATE', [req.params.id]);
-        if (!current.rowCount) {
-          const error = new Error('Queue entry not found.');
-          error.status = 404;
-          error.code = 'NOT_FOUND';
+        const selection = selectedImportRows(preview.normalizedRows, selectedIndices);
+        if (!selection.valid) {
+          const error = new Error(selection.message);
+          error.status = selection.code === 'DUPLICATE_RECORD' ? 409 : 400;
+          error.code = selection.code || 'VALIDATION_ERROR';
+          error.fields = { rows: selection.rows || [] };
           throw error;
         }
-        if (status !== 'Released') {
-          const active = await client.query("SELECT 1 FROM queue_entries WHERE patient_id=$1 AND id<>$2 AND status <> 'Released' LIMIT 1 FOR UPDATE", [patientId, req.params.id]);
-          if (queueStatusConflict(current.rows[0].status, status, active.rowCount > 0)) {
-            const error = new Error('This patient already has another active queue entry.');
-            error.status = 409;
-            error.code = 'ALREADY_QUEUED';
-            throw error;
+
+        const batchId = crypto.randomUUID();
+        await client.query('INSERT INTO import_batches(id,import_type,created_by) VALUES($1,$2,$3)', [batchId, type, req.user.id]);
+        for (const row of selection.selected) {
+          const id = crypto.randomUUID();
+          if (type === 'students' || type === 'faculty') {
+            const record = { ...row.record, id };
+            await client.query(
+              'INSERT INTO patients(id,patient_type,data) VALUES($1,$2,$3::jsonb)',
+              [id, type === 'faculty' ? 'faculty' : 'student', JSON.stringify(record)],
+            );
+            await client.query(
+              `INSERT INTO import_batch_items(batch_id,entity_type,entity_id,original_data_hash)
+               SELECT $1,'patient',$2,md5(data::text) FROM patients WHERE id=$2`,
+              [batchId, id],
+            );
+          } else {
+            const record = {
+              ...row.record,
+              id,
+              studentId: row.patientId,
+              patientId: row.patientId,
+              historicalImport: true,
+              riskAssessment: null,
+            };
+            await client.query(
+              'INSERT INTO visits(id,patient_id,data,created_by) VALUES($1,$2,$3::jsonb,$4)',
+              [id, row.patientId, JSON.stringify(record), req.user.id],
+            );
+            await client.query(
+              `INSERT INTO import_batch_items(batch_id,entity_type,entity_id,original_data_hash)
+               SELECT $1,'visit',$2,md5(data::text) FROM visits WHERE id=$2`,
+              [batchId, id],
+            );
           }
         }
-        const data = { ...current.rows[0].data, status, updatedAt: new Date().toISOString() };
-        await client.query('UPDATE queue_entries SET status=$1,data=$2::jsonb,updated_at=NOW() WHERE id=$3', [status, JSON.stringify(data), req.params.id]);
-        await audit(req, 'QUEUE_ENTRY_UPDATED', { status }, 'queue_entry', req.params.id, client);
-        response = { ...data, id: req.params.id, patientId, priority: current.rows[0].priority };
+        const imported = selection.selected.length;
+        const action = type === 'visits' ? 'HISTORICAL_VISITS_IMPORTED' : `${type.toUpperCase()}_IMPORTED`;
+        await audit(req, action, { batchId, imported, skipped: rows.length - imported }, `${type}_import`, batchId, client);
+        return { batchId, imported, skipped: rows.length - imported };
       });
     } catch (error) {
-      if (error.status) return errorResponse(res, error.status, error.code, error.message);
+      if (error.status) return errorResponse(res, error.status, error.code || 'IMPORT_FAILED', error.message, error.fields);
       throw error;
     }
-    return res.json({ data: response });
-  });
+    return res.status(201).json({ data: result });
+  };
 
-  app.post('/api/import/students', requireRoles('system_administrator'), async (req, res) => {
-    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
-    if (!rows.length || rows.length > 1000) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Import between 1 and 1,000 fictional students.');
-    const field = (row, key, max) => String(row?.[key] || '').trim().slice(0, max);
-    const normalized = rows.map((row) => ({
-      studentId: field(row, 'studentId', 80),
-      name: field(row, 'name', 160),
-      gradeLevel: field(row, 'gradeLevel', 40),
-      section: field(row, 'section', 80),
-      adviser: field(row, 'adviser', 160),
-      birthDate: field(row, 'birthDate', 10),
-      gender: field(row, 'gender', 30),
-      guardianName: field(row, 'guardianName', 160),
-      guardianPhone: field(row, 'guardianPhone', 40),
-      guardianRelation: field(row, 'guardianRelation', 80),
-    }));
-    const keys = new Set();
-    let duplicate = -1;
-    for (let index = 0; index < normalized.length; index += 1) {
-      const key = normalized[index].studentId.toLowerCase();
-      if (!normalized[index].studentId || !normalized[index].name || keys.has(key)) { duplicate = index; break; }
-      keys.add(key);
+  app.post('/api/import/students/preview', requireRoles('system_administrator'), previewImport('students'));
+  app.post('/api/import/students', requireRoles('system_administrator'), commitImport('students'));
+  app.post('/api/import/faculty/preview', requireRoles('school_nurse', 'system_administrator'), previewImport('faculty'));
+  app.post('/api/import/faculty', requireRoles('school_nurse', 'system_administrator'), commitImport('faculty'));
+  app.post('/api/import/visits/preview', requireRoles(...clinicalWriteRoles), previewImport('visits'));
+  app.post('/api/import/visits', requireRoles(...clinicalWriteRoles), commitImport('visits'));
+
+  app.post('/api/import/batches/:id/rollback', requireRoles('school_nurse', 'system_administrator'), async (req, res) => {
+    const batchId = String(req.params.id || '');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(batchId)) return errorResponse(res, 400, 'INVALID_BATCH_ID', 'A valid import batch ID is required.');
+    let result;
+    try {
+      result = await clinicDataTransaction(async (client) => {
+        const batch = await client.query('SELECT id,import_type,rolled_back_at FROM import_batches WHERE id=$1 FOR UPDATE', [batchId]);
+        if (!batch.rowCount) {
+          const error = new Error('Import batch not found.');
+          error.status = 404;
+          error.code = 'IMPORT_BATCH_NOT_FOUND';
+          throw error;
+        }
+        const { import_type: type, rolled_back_at: rolledBackAt } = batch.rows[0];
+        if (!canRollbackImport(req.user.role, type)) {
+          const error = new Error('This account cannot roll back that import type.');
+          error.status = 403;
+          error.code = 'FORBIDDEN';
+          throw error;
+        }
+        if (rolledBackAt) {
+          const error = new Error('This import batch has already been rolled back.');
+          error.status = 409;
+          error.code = 'IMPORT_ALREADY_ROLLED_BACK';
+          throw error;
+        }
+        const items = await client.query('SELECT entity_type,entity_id,original_data_hash FROM import_batch_items WHERE batch_id=$1 ORDER BY entity_type,entity_id', [batchId]);
+        if (!items.rowCount) {
+          const error = new Error('This import batch has no records to roll back.');
+          error.status = 409;
+          error.code = 'IMPORT_BATCH_EMPTY';
+          throw error;
+        }
+        for (const item of items.rows) {
+          if (item.entity_type === 'visit') {
+            const visit = await client.query(
+              `SELECT md5(data::text) AS current_hash,
+                EXISTS(SELECT 1 FROM dispense_logs WHERE visit_id=visits.id) AS has_dispensations,
+                EXISTS(SELECT 1 FROM risk_assessments WHERE visit_id=visits.id) AS has_risk_assessment
+               FROM visits WHERE id=$1 FOR UPDATE`,
+              [item.entity_id],
+            );
+            if (!visit.rowCount || visit.rows[0].current_hash !== item.original_data_hash || visit.rows[0].has_dispensations || visit.rows[0].has_risk_assessment) {
+              const error = new Error('Rollback stopped because an imported visit was edited or linked clinic activity depends on it. No rows were removed.');
+              error.status = 409;
+              error.code = 'IMPORT_ROLLBACK_CONFLICT';
+              throw error;
+            }
+          } else {
+            const patient = await client.query(
+              `SELECT md5(p.data::text) AS current_hash,
+                p.user_id IS NOT NULL AS has_user,
+                EXISTS(SELECT 1 FROM guardian_patient_links WHERE patient_id=p.id) AS has_guardians,
+                EXISTS(SELECT 1 FROM invitations WHERE patient_id=p.id) AS has_invitations,
+                EXISTS(SELECT 1 FROM visits WHERE patient_id=p.id)
+                  OR EXISTS(SELECT 1 FROM screenings WHERE patient_id=p.id)
+                  OR EXISTS(SELECT 1 FROM immunizations WHERE patient_id=p.id)
+                  OR EXISTS(SELECT 1 FROM incidents WHERE patient_id=p.id)
+                  OR EXISTS(SELECT 1 FROM appointments WHERE patient_id=p.id)
+                  OR EXISTS(SELECT 1 FROM queue_entries WHERE patient_id=p.id) AS has_clinic_activity
+               FROM patients p WHERE p.id=$1 FOR UPDATE`,
+              [item.entity_id],
+            );
+            if (!patient.rowCount || patient.rows[0].current_hash !== item.original_data_hash || patient.rows[0].has_user || patient.rows[0].has_guardians || patient.rows[0].has_invitations || patient.rows[0].has_clinic_activity) {
+              const error = new Error('Rollback stopped because an imported patient was edited, linked to an account, or has clinic activity. No rows were removed.');
+              error.status = 409;
+              error.code = 'IMPORT_ROLLBACK_CONFLICT';
+              throw error;
+            }
+          }
+        }
+        const visits = items.rows.filter((item) => item.entity_type === 'visit');
+        const patients = items.rows.filter((item) => item.entity_type === 'patient');
+        for (const item of visits) await client.query('DELETE FROM visits WHERE id=$1', [item.entity_id]);
+        for (const item of patients) await client.query('DELETE FROM patients WHERE id=$1', [item.entity_id]);
+        await client.query('UPDATE import_batches SET rolled_back_at=NOW() WHERE id=$1', [batchId]);
+        await audit(req, 'IMPORT_BATCH_ROLLED_BACK', { batchId, deleted: items.rowCount }, 'import_batch', batchId, client);
+        return { batchId, deleted: items.rowCount };
+      });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'IMPORT_ROLLBACK_FAILED', error.message);
+      throw error;
     }
-    if (duplicate >= 0) return errorResponse(res, 400, 'VALIDATION_ERROR', `Student import row ${duplicate + 1} needs a unique Student ID and Name.`);
-    let imported = 0;
-    await clinicDataTransaction(async (client) => {
-      for (const row of normalized) {
-        const existing = await client.query("SELECT 1 FROM patients WHERE data->>'studentId'=$1 LIMIT 1", [row.studentId]);
-        if (existing.rowCount) {
-          const error = new Error(`Student ID ${row.studentId} already exists.`);
-          error.status = 409;
-          error.code = 'DUPLICATE_RECORD';
-          throw error;
-        }
-        const id = crypto.randomUUID();
-        await client.query("INSERT INTO patients(id,patient_type,data) VALUES($1,'student',$2::jsonb)", [id, JSON.stringify({ ...row, id })]);
-        imported += 1;
-      }
-      await audit(req, 'STUDENTS_IMPORTED', { imported }, 'student_import', crypto.randomUUID(), client);
-    });
-    return res.status(201).json({ data: { imported } });
-  });
-
-  app.post('/api/import/visits', requireRoles(...clinicalWriteRoles), async (req, res) => {
-    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
-    if (!rows.length || rows.length > 1000) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Import between 1 and 1,000 historical visits.');
-    const normalized = rows.map((row) => ({
-      patientId: String(row.patientId || row.studentId || '').trim(),
-      date: String(row.date || '').trim(),
-      type: String(row.type || 'Illness').trim().slice(0, 40),
-      chiefComplaint: String(row.chiefComplaint || row.complaint || '').trim().slice(0, 300),
-      treatment: String(row.treatment || '').trim().slice(0, 300),
-      disposition: String(row.disposition || '').trim().slice(0, 120),
-      notes: String(row.notes || '').trim().slice(0, 2000),
-    }));
-    const invalid = normalized.findIndex((row) => !row.patientId || !/^\d{4}-\d{2}-\d{2}$/.test(row.date) || !row.chiefComplaint || !row.treatment);
-    if (invalid >= 0) return errorResponse(res, 400, 'VALIDATION_ERROR', `Historical visit row ${invalid + 1} needs patient ID, date, complaint, and treatment.`);
-    const duplicateKeys = new Set();
-    const duplicateRow = normalized.findIndex((row) => {
-      const key = `${row.patientId.toLowerCase()}|${row.date}|${row.chiefComplaint.toLowerCase()}`;
-      if (duplicateKeys.has(key)) return true;
-      duplicateKeys.add(key);
-      return false;
-    });
-    if (duplicateRow >= 0) return errorResponse(res, 409, 'DUPLICATE_RECORD', `Historical visit row ${duplicateRow + 1} duplicates another row in this file.`);
-    let imported = 0;
-    await clinicDataTransaction(async (client) => {
-      for (const row of normalized) {
-        const patient = await client.query("SELECT id FROM patients WHERE id=$1 OR data->>'studentId'=$1 LIMIT 1", [row.patientId]);
-        if (!patient.rowCount) {
-          const error = new Error(`Patient ${row.patientId} was not found.`);
-          error.status = 400;
-          error.code = 'PATIENT_NOT_FOUND';
-          throw error;
-        }
-        const existing = await client.query("SELECT 1 FROM visits WHERE patient_id=$1 AND data->>'date'=$2 AND LOWER(data->>'chiefComplaint')=LOWER($3) LIMIT 1", [patient.rows[0].id, row.date, row.chiefComplaint]);
-        if (existing.rowCount) {
-          const error = new Error(`A visit for ${row.patientId} on ${row.date} already exists.`);
-          error.status = 409;
-          error.code = 'DUPLICATE_RECORD';
-          throw error;
-        }
-        const id = crypto.randomUUID();
-        const data = { id, studentId: patient.rows[0].id, patientId: patient.rows[0].id, date: row.date, type: row.type, chiefComplaint: row.chiefComplaint, treatment: row.treatment, disposition: row.disposition, notes: row.notes, historicalImport: true, riskAssessment: null };
-        await client.query('INSERT INTO visits(id,patient_id,data,created_by) VALUES($1,$2,$3::jsonb,$4)', [id, patient.rows[0].id, JSON.stringify(data), req.user.id]);
-        imported += 1;
-      }
-      await audit(req, 'HISTORICAL_VISITS_IMPORTED', { imported }, 'visit_import', crypto.randomUUID(), client);
-    });
-    return res.status(201).json({ data: { imported } });
+    return res.json({ data: result });
   });
 
   app.post('/api/visits/:id/summary', requireRoles(...clinicalWriteRoles), async (req, res) => {
@@ -1048,16 +1190,16 @@ export function createApp() {
       [id, type, start, end, JSON.stringify(reportSnapshotForStorage(report)), req.user.id],
     );
     await audit(req, 'REPORT_SNAPSHOT_CREATED', { type, start, end }, 'report', id);
-    return res.status(201).json({ data: { id, ...visibleReport(report, req.user) } });
+    return res.status(201).json({ data: { id, source: 'manual', ...visibleReport(report, req.user) } });
   });
 
   app.get('/api/reports/snapshots', requireRoles(...reportReadRoles), async (req, res) => {
-    const result = await query('SELECT id,report_type,period_start,period_end,data,created_at FROM report_snapshots ORDER BY created_at DESC LIMIT 100');
+    const result = await query('SELECT id,report_type,period_start,period_end,source,data,created_at FROM report_snapshots ORDER BY created_at DESC LIMIT 100');
     return res.json({ data: { snapshots: result.rows.map((snapshot) => ({ ...snapshot, data: visibleReport(reportSnapshotForStorage(snapshot.data || {}), req.user) })) } });
   });
 
   app.get('/api/notifications', requireAuth, async (req, res) => {
-    const result = await query('SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100', [req.user.id]);
+    const result = await query("SELECT * FROM notifications WHERE user_id=$1 AND type NOT IN ('immunization','immunization_reminder') ORDER BY created_at DESC LIMIT 100", [req.user.id]);
     return res.json({ data: { notifications: result.rows } });
   });
 

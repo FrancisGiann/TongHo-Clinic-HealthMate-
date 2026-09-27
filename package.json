@@ -11,6 +11,9 @@
     "server": "node server.js",
     "db:migrate": "node server/migrate.js",
     "db:seed-demo": "node server/seed-demo.js",
+    "db:seed-demo-additive": "node server/seed-demo-additive.js",
+    "db:preflight-dev-accounts": "node server/seed-dev-role-accounts.js --preflight",
+    "db:seed-dev-accounts": "node server/seed-dev-role-accounts.js --apply",
     "test": "node --test server/*.test.js server/**/*.test.js src/utils/*.test.js",
     "check": "node --check server.js && node --check server/app.js && npm test && npm run build"
   },

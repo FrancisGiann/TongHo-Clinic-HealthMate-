@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 const DEMONSTRATION_RULES = Object.freeze({
   version: 0,
   name: 'Demonstration rules — clinician approval required',
@@ -12,11 +14,70 @@ const DEMONSTRATION_RULES = Object.freeze({
   ],
 });
 
+const CONSERVATIVE_TRIAGE_MODE = 'conservative_triage_v1';
+const CONSERVATIVE_TRIAGE_DRAFT = Object.freeze({
+  name: 'WHO IITT-informed partial screening (draft)',
+  rules: Object.freeze({
+    mode: CONSERVATIVE_TRIAGE_MODE,
+    requiredFields: ['temperature', 'clinicianRedFlag'],
+    requireReviewOnNoMatch: true,
+    indicators: [
+      { field: 'clinicianRedFlag', operator: 'equals', value: true, outcome: 'urgent', label: 'Clinician-observed urgent warning sign' },
+      { field: 'temperature', operator: 'lt', value: 36, outcome: 'review', label: 'Temperature below 36 °C — nurse review / up-triage' },
+      { field: 'temperature', operator: 'gt', value: 39, outcome: 'review', label: 'Temperature above 39 °C — nurse review / up-triage' },
+    ],
+  }),
+  sources: [
+    { label: 'WHO Interagency Integrated Triage Tool (IITT)', url: 'https://www.who.int/tools/triage' },
+    { label: 'WHO IITT, age 12 and older', url: 'https://cdn.who.int/media/docs/default-source/integrated-health-services-(ihs)/csy/iitt/iitt_adult.pdf' },
+    { label: 'WHO IITT, under age 12', url: 'https://cdn.who.int/media/docs/default-source/integrated-health-services-(ihs)/csy/iitt/iitt_pediatric.pdf' },
+  ],
+  limitations: [
+    'This is a partial school-clinic screening prompt, not a complete IITT triage assessment or a validated prediction rule.',
+    'It uses the same temperature signs for all students and does not apply a pulse cutoff; pulse interpretation depends on age and clinical context.',
+    'A temperature within these bounds and no marked warning sign never means the student is safe: every result without an urgent sign requires nurse review.',
+    'Pain severity is not scored because the available form does not define a clinically supported cutoff. Other danger signs, age-specific assessment, and disposition remain the nurse’s responsibility.',
+  ],
+});
+
 const allowedFields = new Set(['painScore', 'clinicianRedFlag', 'recentVisitCount', 'temperature', 'pulse']);
-const allowedOperators = new Set(['equals', 'gte', 'lte']);
+const allowedOperators = new Set(['equals', 'gte', 'lte', 'lt', 'gt']);
+
+function validateConservativeTriageRules(rules) {
+  if (rules.requireReviewOnNoMatch !== true
+    || !Array.isArray(rules.requiredFields)
+    || rules.requiredFields.length !== 2
+    || new Set(rules.requiredFields).size !== 2
+    || !rules.requiredFields.includes('temperature')
+    || !rules.requiredFields.includes('clinicianRedFlag')
+    || !Array.isArray(rules.indicators)
+    || rules.indicators.length !== 3) {
+    return { valid: false, message: 'Conservative triage rules must require temperature and clinician review when no indicator matches.' };
+  }
+
+  const expected = [
+    { field: 'clinicianRedFlag', operator: 'equals', value: true, outcome: 'urgent' },
+    { field: 'temperature', operator: 'lt', value: 36, outcome: 'review' },
+    { field: 'temperature', operator: 'gt', value: 39, outcome: 'review' },
+  ];
+  const sameConditions = (condition) => rules.indicators.some((indicator) => indicator
+    && indicator.field === condition.field
+    && indicator.operator === condition.operator
+    && indicator.value === condition.value
+    && indicator.outcome === condition.outcome
+    && typeof indicator.label === 'string'
+    && Boolean(indicator.label.trim())
+    && indicator.label.trim().length <= 120);
+  if (!expected.every(sameConditions)) {
+    return { valid: false, message: 'Conservative triage indicators must retain the clinician warning sign and WHO temperature boundaries.' };
+  }
+  return { valid: true };
+}
 
 export function validateRiskRules(rules) {
   if (!rules || typeof rules !== 'object' || Array.isArray(rules)) return { valid: false, message: 'Rules must be an object.' };
+  if (rules.mode === CONSERVATIVE_TRIAGE_MODE) return validateConservativeTriageRules(rules);
+  if (rules.mode !== undefined) return { valid: false, message: 'The risk-rule mode is not supported.' };
   const thresholds = rules.thresholds;
   if (!thresholds || !Number.isFinite(Number(thresholds.moderate)) || !Number.isFinite(Number(thresholds.high))
     || Number(thresholds.moderate) < 1 || Number(thresholds.high) <= Number(thresholds.moderate) || Number(thresholds.high) > 100) {
@@ -36,7 +97,7 @@ export function validateRiskRules(rules) {
     }
     if (indicator.field === 'clinicianRedFlag') {
       if (indicator.operator !== 'equals' || typeof indicator.value !== 'boolean') return { valid: false, message: 'Clinician warning indicators must compare a boolean value.' };
-    } else if (!['gte', 'lte'].includes(indicator.operator) || !Number.isFinite(Number(indicator.value))) {
+    } else if (!['gte', 'lte', 'lt', 'gt'].includes(indicator.operator) || !Number.isFinite(Number(indicator.value))) {
       return { valid: false, message: 'Numeric indicators must use a numeric threshold.' };
     }
   }
@@ -83,12 +144,80 @@ function compare(actual, operator, expected) {
   if (operator === 'equals') return actual === expected;
   if (operator === 'gte') return Number.isFinite(Number(actual)) && Number(actual) >= Number(expected);
   if (operator === 'lte') return Number.isFinite(Number(actual)) && Number(actual) <= Number(expected);
+  if (operator === 'lt') return Number.isFinite(Number(actual)) && Number(actual) < Number(expected);
+  if (operator === 'gt') return Number.isFinite(Number(actual)) && Number(actual) > Number(expected);
   if (operator === 'includes') return Array.isArray(actual) && actual.includes(expected);
   return false;
 }
 
+const decisionDisclaimer = 'Decision support only. This result is not a diagnosis and does not replace clinical judgment.';
+
+function missingConservativeTriageFields(input) {
+  const missing = [];
+  const rawTemperature = input?.temperature;
+  if (rawTemperature === undefined || rawTemperature === null || rawTemperature === '') {
+    missing.push('temperature');
+  } else {
+    const temperature = Number(rawTemperature);
+    if (!Number.isFinite(temperature) || temperature < 30 || temperature > 45) missing.push('validTemperature');
+  }
+  if (input?.clinicianRedFlag === undefined || input?.clinicianRedFlag === null) missing.push('clinicianRedFlag');
+  else if (typeof input.clinicianRedFlag !== 'boolean') missing.push('validClinicianRedFlag');
+  return missing;
+}
+
+function assessConservativeTriage(input, rules) {
+  const missingFields = missingConservativeTriageFields(input);
+  const temperatureIsUsable = !missingFields.includes('temperature') && !missingFields.includes('validTemperature');
+  const normalizedInput = { ...input, temperature: temperatureIsUsable ? Number(input.temperature) : Number.NaN };
+  const components = (rules.indicators || []).filter((indicator) => compare(
+    normalizedInput[indicator.field], indicator.operator, indicator.value,
+  )).map(({ field, label, outcome }) => ({ field, label, outcome }));
+  const hasUrgentFinding = components.some((component) => component.outcome === 'urgent');
+  const requiresReview = missingFields.length > 0 || components.some((component) => component.outcome === 'review')
+    || (!components.length && rules.requireReviewOnNoMatch);
+  const status = missingFields.length ? 'incomplete' : !components.length && rules.requireReviewOnNoMatch ? 'review_required' : 'complete';
+  const missingDescriptions = {
+    temperature: 'temperature is missing',
+    validTemperature: 'temperature must be a valid reading from 30 to 45 °C',
+    clinicianRedFlag: 'the clinician warning-sign screen is unanswered',
+    validClinicianRedFlag: 'the clinician warning-sign screen must record yes or no',
+  };
+  const rationale = [
+    ...components.map((item) => item.label),
+    ...(missingFields.length ? [`Assessment incomplete: ${missingFields.map((field) => missingDescriptions[field] || field).join('; ')}. A nurse must review this assessment.`] : []),
+    ...(!components.length && !missingFields.length ? ['No configured warning sign matched. This remains unclassified and requires a nurse to complete the clinical assessment; no-match does not mean low risk.'] : []),
+  ].join('; ');
+
+  return {
+    status,
+    total: null,
+    category: hasUrgentFinding ? 'high' : 'unclassified',
+    priority: hasUrgentFinding ? 'urgent' : requiresReview ? 'requires-review' : 'routine',
+    components,
+    missingFields: [...new Set(missingFields)],
+    rationale,
+    ruleVersion: rules.version,
+    ruleStatus: rules.status,
+    decisionSupportMode: CONSERVATIVE_TRIAGE_MODE,
+    disclaimer: decisionDisclaimer,
+  };
+}
+
+export function riskNeedsNurseAcknowledgement(result) {
+  return result?.category === 'high' || result?.priority === 'requires-review' || result?.status === 'incomplete';
+}
+
+export function riskAllowsAcknowledgedIncomplete(result) {
+  return result?.decisionSupportMode === CONSERVATIVE_TRIAGE_MODE
+    && Array.isArray(result.missingFields)
+    && result.missingFields.length === 1
+    && result.missingFields[0] === 'temperature';
+}
+
 export function assessRisk(input, configuredRules = DEMONSTRATION_RULES) {
   const rules = configuredRules || DEMONSTRATION_RULES;
+  if (rules.mode === CONSERVATIVE_TRIAGE_MODE) return assessConservativeTriage(input, rules);
   const missingFields = (rules.requiredFields || []).filter((field) => {
     const value = input?.[field];
     return value === undefined || value === null || value === '';
@@ -121,7 +250,7 @@ export function assessRisk(input, configuredRules = DEMONSTRATION_RULES) {
       rationale: 'Required clinical inputs are missing or invalid. A nurse must complete the assessment.',
       ruleVersion: rules.version,
       ruleStatus: rules.status,
-      disclaimer: 'Decision support only. This result is not a diagnosis and does not replace clinical judgment.',
+      disclaimer: decisionDisclaimer,
     };
   }
 
@@ -136,10 +265,33 @@ export function assessRisk(input, configuredRules = DEMONSTRATION_RULES) {
     rationale: components.length ? components.map((item) => item.label).join('; ') : 'No configured indicators matched.',
     ruleVersion: rules.version,
     ruleStatus: rules.status,
-    disclaimer: 'Decision support only. This result is not a diagnosis and does not replace clinical judgment.',
+    disclaimer: decisionDisclaimer,
   };
 }
 
 export function getDemonstrationRules() {
   return JSON.parse(JSON.stringify(DEMONSTRATION_RULES));
+}
+
+export function getConservativeCandidateRuleDraft() {
+  return JSON.parse(JSON.stringify(CONSERVATIVE_TRIAGE_DRAFT));
+}
+
+export async function ensureConservativeCandidateDraft(client) {
+  await client.query("SELECT pg_advisory_xact_lock(hashtext('risk-rule-conservative-candidate'))");
+  const existing = await client.query(
+    "SELECT id,version,name,status FROM risk_rules WHERE rules->>'mode'=$1 ORDER BY version DESC LIMIT 1",
+    [CONSERVATIVE_TRIAGE_MODE],
+  );
+  if (existing.rowCount) return { ...existing.rows[0], created: false };
+
+  const latest = await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM risk_rules');
+  const version = Number(latest.rows[0]?.version || 0) + 1;
+  const candidate = getConservativeCandidateRuleDraft();
+  const id = crypto.randomUUID();
+  await client.query(
+    "INSERT INTO risk_rules(id,version,name,rules,status,approved_by,approved_at) VALUES($1,$2,$3,$4::jsonb,'draft',NULL,NULL)",
+    [id, version, candidate.name, JSON.stringify(candidate.rules)],
+  );
+  return { id, version, name: candidate.name, status: 'draft', created: true };
 }

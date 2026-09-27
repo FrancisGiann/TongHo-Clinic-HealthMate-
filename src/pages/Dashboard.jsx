@@ -2,29 +2,21 @@ import {
   ArrowUpRight,
   CalendarDays,
   ChevronRight,
+  ClipboardCheck,
   Clock3,
   Heart,
   LockKeyhole,
-  MoreHorizontal,
   Package,
   Plus,
+  Siren,
   ShieldAlert,
   Stethoscope,
   Users,
 } from "lucide-react";
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import TodaysSummary from "../components/TodaysSummary";
-import RecentPatientsWidget from "../components/RecentPatientsWidget";
+import { Link, useNavigate } from "react-router-dom";
 import { getUsersForAdmin } from "../utils/auth";
 import { formatManilaDateTime } from "../utils/dateTime";
-
-const day = new Intl.DateTimeFormat("en-US", {
-  weekday: "long",
-  month: "long",
-  day: "numeric",
-}).format(new Date());
-const studentColors = ["coral", "teal", "amber", "violet", "blue"];
 
 const toDateKey = (date) => {
   const direct = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}/.test(date) ? date.slice(0, 10) : null;
@@ -35,371 +27,154 @@ const toDateKey = (date) => {
   return `${parts.year}-${parts.month}-${parts.day}`;
 };
 
-const todayKey = toDateKey(new Date());
-const isToday = (visit) => toDateKey(visit.date || visit.createdAt) === todayKey;
-
 export default function Dashboard({ data, user }) {
   const navigate = useNavigate();
-  const [trendRange, setTrendRange] = useState("week");
   const isAdmin = user?.role === "system_administrator";
-  const userFirstName = (user?.name || data.settings.nurseName).replace(/^Nurse\s+/i, "").split(" ")[0] || "Admin";
+  const userFirstName = (user?.name || "Administrator").replace(/^Nurse\s+/i, "").split(" ")[0] || "Admin";
   const [adminUsers, setAdminUsers] = useState([]);
-  const [pendingInvites, setPendingInvites] = useState([]);
+  const [adminUsersLoading, setAdminUsersLoading] = useState(false);
+  const [adminUsersError, setAdminUsersError] = useState('');
+  const [adminUsersRetry, setAdminUsersRetry] = useState(0);
 
   useEffect(() => {
-    if (isAdmin) {
-      getUsersForAdmin().then((accounts) => {
-        setAdminUsers(accounts);
-        setPendingInvites(accounts.filter((account) => account.status === 'invited'));
+    if (!isAdmin) return undefined;
+    let current = true;
+    setAdminUsersLoading(true);
+    setAdminUsersError('');
+    getUsersForAdmin({ throwOnError: true })
+      .then((accounts) => {
+        if (current) setAdminUsers(accounts);
+      })
+      .catch((error) => {
+        if (current) setAdminUsersError(error.message || 'Unable to load system accounts.');
+      })
+      .finally(() => {
+        if (current) setAdminUsersLoading(false);
       });
-    }
-  }, [isAdmin]);
+    return () => { current = false; };
+  }, [isAdmin, adminUsersRetry]);
+  const pendingInvites = adminUsers.filter((account) => account.status === 'invited');
 
-  const getStudent = (id) =>
-    data.students.find((student) => String(student.id) === String(id)) || {};
-  const todayVisits = data.visits.filter(isToday);
-  const todayStudentCount = new Set(todayVisits.map((visit) => String(visit.studentId || visit.patientId))).size;
-  const lowStock = data.inventory.filter(
-    (item) => !item.archived && item.quantity <= item.reorderLevel,
-  ).length;
-  
-  // Calculate pending follow-ups from appointments
-  const pendingFollowUps = (data.appointments || []).filter((appointment) => {
-    if (!['Requested', 'Pending', 'Scheduled'].includes(appointment.status)) return false;
-    const startsAt = appointment.startsAt || (appointment.date ? `${appointment.date}T${appointment.time || '00:00'}+08:00` : '');
-    const timestamp = Date.parse(startsAt);
-    return Number.isFinite(timestamp) && timestamp >= Date.now();
-  }).length;
+  if (user?.role === 'school_nurse') {
+    return <NurseDashboard data={data} user={user} />;
+  }
+
   const currentHour = new Date().getHours();
   let greeting = "Good morning";
   if (currentHour >= 12 && currentHour < 18) greeting = "Good afternoon";
   else if (currentHour >= 18) greeting = "Good evening";
-
-  // Generate clinic alerts dynamically
-  const clinicAlerts = [];
-  
-  // Low stock alerts
-  if (!isAdmin) {
-    const lowStockItems = data.inventory.filter(item => !item.archived && item.quantity <= item.reorderLevel);
-    lowStockItems.slice(0, 2).forEach(item => {
-      clinicAlerts.push({
-        icon: Package,
-        title: `${item.name} stock is low`,
-        text: `${item.quantity} ${item.unit} remaining · reorder at ${item.reorderLevel}`,
-        tone: "rose",
-        onClick: () => navigate('/inventory'),
-      });
-    });
-  }
-  
-  // Upcoming appointments/follow-ups
-  const upcomingAppointments = (data.appointments || []).filter((appointment) => {
-    if (appointment.status !== 'Scheduled') return false;
-    const startsAt = appointment.startsAt || (appointment.date ? `${appointment.date}T${appointment.time || '00:00'}+08:00` : '');
-    const timestamp = Date.parse(startsAt);
-    return Number.isFinite(timestamp) && timestamp >= Date.now();
-  }).sort((first, second) => Date.parse(first.startsAt || `${first.date}T${first.time || '00:00'}+08:00`) - Date.parse(second.startsAt || `${second.date}T${second.time || '00:00'}+08:00`)).slice(0, 2);
-  upcomingAppointments.forEach(apt => {
-    const student = getStudent(apt.studentId || apt.patientId);
-    if (student.name) {
-      clinicAlerts.push({
-        icon: CalendarDays,
-        title: `${student.name} has an appointment`,
-        text: `${apt.reason} · ${formatManilaDateTime(apt.startsAt || apt.date, apt.time)}`,
-        tone: "amber",
-        onClick: () => navigate('/appointments'),
-      });
-    }
-  });
-  
-  // Empty state for whole dashboard if no students
-  if (data.students.length === 0) {
-    return (
-      <div className="dashboard">
-        <section className="welcome-band">
-          <div>
-            <p className="eyebrow light">
-              {day} · {data.settings.schoolYear}
-            </p>
-            <h2>{greeting}, {userFirstName}</h2>
-            <p className="welcome-copy">
-              A clear view of today’s clinic activity.
-            </p>
-          </div>
-        </section>
-        <div className="panel" style={{ textAlign: 'center', padding: '50px 20px', marginTop: '20px' }}>
-          <div className="empty-state-icon"><Users size={32} /></div>
-          <h3 style={{ font: '600 20px Outfit', marginBottom: '8px' }}>Welcome to HealthMate+ PRO</h3>
-          <p style={{ color: 'var(--muted)', maxWidth: '400px', margin: '0 auto 20px', lineHeight: '1.5', fontSize: '13px' }}>
-            Your school clinic management system is ready. Let's start by adding your first student to the records.
-          </p>
-          <button className="full-btn" onClick={() => navigate(isAdmin ? '/settings?tab=data' : '/students')} style={{ width: 'auto', display: 'inline-flex', padding: '11px 24px' }}>
-            <Plus size={17} /> {isAdmin ? 'Import student roster' : 'Add a Student'}
-          </button>
-        </div>
-        <div className="dashboard-footer">
-          {data.settings.schoolYear} · <Heart size={12} aria-hidden="true" /> HealthMate+
-        </div>
-      </div>
-    );
-  }
-
-  // Generate daily visits for chart
-  const chartDays = Array.from({ length: trendRange === "month" ? 4 : 7 }, (_, index) => {
-    const date = new Date();
-    date.setHours(0, 0, 0, 0);
-    date.setDate(date.getDate() - (trendRange === "month" ? (3 - index) * 7 : 6 - index));
-    return date;
-  });
-  const dailyVisits = chartDays.map((date) => {
-    if (trendRange === "month") {
-      const weekEnd = new Date(date);
-      weekEnd.setDate(weekEnd.getDate() + 7);
-      return data.visits.filter((visit) => {
-        const visitDate = new Date(visit.date || new Date());
-        return visitDate >= date && visitDate < weekEnd;
-      }).length;
-    }
-    const dateKey = toDateKey(date);
-    return data.visits.filter((visit) => !visit.date
-      ? dateKey === todayKey
-      : toDateKey(visit.date) === dateKey).length;
-  });
-  const todayIndex = dailyVisits.length - 1;
-
-  const maxDailyVisits = Math.max(...dailyVisits, 1);
-
-  // Top complaints
-  const complaintsMap = {};
-  data.visits.forEach(v => {
-    if (v.chiefComplaint) {
-      complaintsMap[v.chiefComplaint] = (complaintsMap[v.chiefComplaint] || 0) + 1;
-    }
-  });
-  const topComplaints = Object.entries(complaintsMap)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3);
-  const maxComplaintCount = topComplaints.length > 0 ? topComplaints[0][1] : 1;
-
-  // Recent students
-  const recentStudents = [...data.students].reverse().slice(0, 3);
 
   return (
     <div className="dashboard">
       <section className="welcome-band">
         <div>
           <p className="eyebrow light">
-            {isAdmin ? "Administrator overview" : day} · {data.settings.schoolYear}
+            Administrator overview · {data.settings.schoolYear}
           </p>
           <h2>{greeting}, {userFirstName}</h2>
           <p className="welcome-copy">
-            {isAdmin ? "Manage accounts, clinic settings, reports, and system activity from one place." : "A clear view of today’s clinic activity."}
+            Manage accounts, clinic settings, reports, and system activity from one place.
           </p>
         </div>
-        <button className="date-pill" onClick={() => navigate('/reports')}>
+        <button className="date-pill" onClick={() => navigate('/reports?period=daily')}>
           <CalendarDays size={16} /> Today <ChevronRight size={15} />
         </button>
       </section>
       
-      {!isAdmin && (
-        <>
-          {/* Today's Summary Widget */}
-          <TodaysSummary data={data} />
-          
-          {/* Recent Patients Widget */}
-          <RecentPatientsWidget data={data} />
-        </>
-      )}
+      {isAdmin && adminUsersLoading && <p className="field-hint" role="status">Loading administrator account counts…</p>}
+      {isAdmin && adminUsersError && <div className="error-banner admin-dashboard-error" role="alert">
+        <span>Administrator account counts could not be loaded. {adminUsersError}</span>
+        <button type="button" className="secondary-btn" onClick={() => setAdminUsersRetry((count) => count + 1)}>Retry</button>
+      </div>}
       
-      {isAdmin ? (
-        <section className="stats-grid">
-          <Stat icon={Users} label="Total Users" value={adminUsers.length} change="System accounts" tone="teal" />
-          <Stat icon={Users} label="Active Users" value={adminUsers.filter(u => u.status === 'active').length} change="Active accounts" tone="teal" />
-          <Stat icon={Users} label="Pending Invites" value={pendingInvites.length} change="Awaiting approval" tone="amber" />
-          <Stat icon={ShieldAlert} label="Nurse accounts" value={adminUsers.filter(u => u.role === 'school_nurse').length} change="Clinical access holders" tone="violet" />
-          <Stat icon={LockKeyhole} label="Restricted accounts" value={adminUsers.filter(u => u.status !== 'active').length} change="Review access status" tone="rose" />
-        </section>
-      ) : (
-        <section className="stats-grid">
-          <Stat
-            icon={Users}
-            label="Students seen today"
-            value={todayStudentCount}
-            change={todayStudentCount > 0 ? `+${todayStudentCount} today` : "No visits yet"}
-            tone="teal"
-          />
-          <Stat
-            icon={Clock3}
-            label="Upcoming appointments"
-            value={pendingFollowUps}
-            change={pendingFollowUps > 0 ? `${pendingFollowUps} upcoming` : "No upcoming appointments"}
-            tone="amber"
-          />
-          <Stat
-            icon={Package}
-            label="Low stock alerts"
-            value={lowStock}
-            change={lowStock > 0 ? "Review now" : "All stocked"}
-            tone="rose"
-          />
-          <Stat
-            icon={Users}
-            label="Total students"
-            value={data.students.length}
-            change="Enrolled"
-            tone="violet"
-          />
-        </section>
-      )}
+      <section className="stats-grid">
+          <Stat to="/users" icon={Users} label="Total Users" value={adminUsersLoading ? '…' : adminUsersError ? '—' : adminUsers.length} change="System accounts" tone="teal" />
+          <Stat to="/users?filter=active" icon={Users} label="Active Users" value={adminUsersLoading ? '…' : adminUsersError ? '—' : adminUsers.filter((account) => account.status === 'active').length} change="Active accounts" tone="teal" />
+          <Stat to="/users?filter=invited" icon={Users} label="Pending Invites" value={adminUsersLoading ? '…' : adminUsersError ? '—' : pendingInvites.length} change="Awaiting approval" tone="amber" />
+          <Stat to="/users?filter=nurses" icon={ShieldAlert} label="Nurse accounts" value={adminUsersLoading ? '…' : adminUsersError ? '—' : adminUsers.filter((account) => account.role === 'school_nurse').length} change="Clinical access holders" tone="violet" />
+          <Stat to="/users?filter=restricted" icon={LockKeyhole} label="Restricted accounts" value={adminUsersLoading ? '…' : adminUsersError ? '—' : adminUsers.filter((account) => account.status !== 'active').length} change="Review access status" tone="rose" />
+      </section>
       <div className="content-grid">
         <section className="panel timeline-panel">
           <div className="panel-heading">
             <div>
-              <p className="section-kicker">{isAdmin ? "System access" : "Live activity"}</p>
+              <p className="section-kicker">System access</p>
               <h3>
-                {isAdmin ? "User access overview" : "Today’s visits"} {!isAdmin && <span className="live-dot" />}
+                User access overview
               </h3>
             </div>
-            <button className="text-btn" onClick={() => navigate(isAdmin ? '/settings?tab=users' : '/new-visit')}>
+            <button className="text-btn" onClick={() => navigate('/users')}>
               View all <ArrowUpRight size={15} />
             </button>
           </div>
-          {isAdmin ? (
             <div className="admin-table-wrap">
-              <table className="admin-table">
-                <caption className="sr-only">Accounts, assigned roles, and access status</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Account</th>
-                    <th scope="col">Role</th>
-                    <th scope="col">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {adminUsers.slice(0, 5).map(account => (
-                    <tr key={account.id}>
-                      <td className="admin-account-cell"><strong>{account.name}</strong><small>{account.email}</small></td>
-                      <td className="admin-role-cell">{account.role === 'school_nurse' ? 'School nurse' : account.role === 'system_administrator' ? 'Administrator' : account.role}</td>
-                      <td className="admin-status-cell"><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {!adminUsers.length && <div className="empty-state">No system accounts are available yet.</div>}
-              <button className="full-btn admin-table-review" onClick={() => navigate('/settings?tab=users')}>
-                Review user access
-              </button>
+              {adminUsersLoading ? <p className="empty-state" role="status">Loading system accounts…</p>
+                : adminUsersError ? <p className="empty-state">The account list is unavailable. Use Retry above to load it again.</p>
+                  : adminUsers.length === 0 ? <p className="empty-state">No system accounts are available yet.</p>
+                    : <table className="admin-table">
+                      <caption className="sr-only">Accounts, assigned roles, and access status</caption>
+                      <thead>
+                        <tr>
+                          <th scope="col">Account</th>
+                          <th scope="col">Role</th>
+                          <th scope="col">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adminUsers.slice(0, 5).map(account => (
+                          <tr key={account.id}>
+                            <td className="admin-account-cell"><strong>{account.name}</strong><small>{account.email}</small></td>
+                            <td className="admin-role-cell">{account.role === 'school_nurse' ? 'School nurse' : account.role === 'system_administrator' ? 'Administrator' : account.role}</td>
+                            <td className="admin-status-cell"><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>}
+              {!adminUsersLoading && !adminUsersError && adminUsers.length > 0 && <Link className="full-btn admin-table-review" to="/users">Review user access</Link>}
             </div>
-          ) : todayVisits.length > 0 ? (
-            <>
-              <div className="timeline">
-                {todayVisits.map((visit, index) => {
-                  const student = getStudent(visit.studentId || visit.patientId);
-                  return (
-                    <div className="timeline-item" key={visit.id}>
-                      <time>{visit.time}</time>
-                      <div className={`timeline-line ${studentColors[index % studentColors.length]}`}>
-                        <span />
-                      </div>
-                      <div className="visit-copy">
-                        <div className="visit-top">
-                          <strong>{student.name}</strong>
-                          <span
-                            className={`status-chip ${visit.disposition === "Sent home" ? "warn" : "success"}`}
-                          >
-                            {visit.disposition}
-                          </span>
-                        </div>
-                        <p>
-                          {visit.chiefComplaint} <span>·</span> {visit.type}
-                        </p>
-                      </div>
-                      <button className="more-btn" onClick={() => navigate(`/students/${student.id}`)} aria-label={`Open ${student.name}`}><MoreHorizontal size={17} /></button>
-                    </div>
-                  );
-                })}
-              </div>
-              <button className="full-btn" onClick={() => navigate('/new-visit')}>
-                <Plus size={17} /> Log a new visit
-              </button>
-            </>
-          ) : (
-            <div className="empty-state" style={{ textAlign: 'center', padding: '3rem 1rem' }}>
-              <div className="empty-state-icon"><Stethoscope size={30} /></div>
-              <h4 style={{ margin: '0 0 0.5rem', fontSize: '1.1rem' }}>No visits yet</h4>
-              <p style={{ color: 'var(--text-2)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>It's a quiet day in the clinic.</p>
-              <button className="full-btn" onClick={() => navigate('/new-visit')} style={{ width: 'auto', display: 'inline-flex', padding: '0.5rem 1rem', margin: '0 auto' }}>
-                <Plus size={17} /> Log a new visit
-              </button>
-            </div>
-          )}
         </section>
         <section className="panel actions-panel">
           <div className="panel-heading">
             <div>
-              <p className="section-kicker">{isAdmin ? "Management" : "Shortcuts"}</p>
-              <h3>{isAdmin ? "Admin shortcuts" : "Quick actions"}</h3>
+              <p className="section-kicker">Management</p>
+              <h3>Admin shortcuts</h3>
             </div>
           </div>
           <div className="action-list">
             <Action
               icon={Plus}
-              label={isAdmin ? "Manage settings" : "New visit"}
-              text={isAdmin ? "Update school and clinic details" : "Log a student visit"}
+              label="School & clinic"
+              text="Update school identity and clinic details"
               tone="teal"
-              onClick={() => navigate(isAdmin ? '/settings?tab=school' : '/new-visit')}
+              onClick={() => navigate('/school-clinic')}
             />
-            {isAdmin && <Action
-              icon={ShieldAlert}
-              label="Manage access"
-              text="Review staff and permissions"
+            <Action
+              icon={Siren}
+              label="Manage users"
+              text="Review accounts and invitations"
               tone="rose"
-              onClick={() => navigate('/settings')}
-            />}
-            {isAdmin && <Action
+              onClick={() => navigate('/users')}
+            />
+            <Action
               icon={CalendarDays}
               label="Generate report"
               text="Open school health analytics"
               tone="amber"
               onClick={() => navigate('/reports')}
-            />}
+            />
             <Action
-              icon={isAdmin ? LockKeyhole : Package}
-              label={isAdmin ? "Security controls" : "Check inventory"}
-              text={isAdmin ? "Review MFA and account protection" : "Review clinic supplies"}
+              icon={LockKeyhole}
+              label="Audit history"
+              text="Review recent access and admin events"
               tone="violet"
-              onClick={() => navigate(isAdmin ? '/settings?tab=security' : '/inventory')}
+              onClick={() => navigate('/security')}
             />
           </div>
           
-          {!isAdmin && recentStudents.length > 0 && (
-            <div className="recent-students">
-              <h4>Recent students</h4>
-              <div className="student-chips">
-                {recentStudents.map((s) => {
-                  const initials = s.name.split(' ').map(n=>n[0]).join('').substring(0,2).toUpperCase();
-                  return (
-                    <button 
-                      key={s.id} 
-                      className="student-chip"
-                      onClick={() => navigate(`/students/${s.id}`)}
-                    >
-                      <div className="chip-avatar">
-                        {initials}
-                      </div>
-                      <span>{s.name.split(' ')[0]}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-          
-          {isAdmin && (
              <div className="recent-students">
                <h4>Pending invitations</h4>
-               {pendingInvites.length > 0 ? (
+               {adminUsersLoading ? <p role="status" className="field-hint">Loading invitations…</p> : adminUsersError ? <p className="field-hint">Invitation status is unavailable. Retry above to refresh it.</p> : pendingInvites.length > 0 ? (
                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '1rem' }}>
                    {pendingInvites.slice(0, 3).map(entry => (
                      <div key={entry.username} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', background: 'var(--surface-2)', borderRadius: '8px' }}>
@@ -407,7 +182,7 @@ export default function Dashboard({ data, user }) {
                          <strong style={{ fontSize: '0.85rem' }}>{entry.name}</strong><br/>
                          <small style={{ color: 'var(--text-2)', fontSize: '0.75rem' }}>{entry.email}</small>
                        </div>
-                       <button className="text-btn" onClick={() => navigate('/settings?tab=users')} style={{ fontSize: '0.8rem' }}>Review</button>
+                       <button className="text-btn" onClick={() => navigate('/users?filter=invited')} style={{ fontSize: '0.8rem' }}>Review</button>
                      </div>
                    ))}
                  </div>
@@ -415,94 +190,8 @@ export default function Dashboard({ data, user }) {
                  <p style={{ color: 'var(--text-2)', fontSize: '0.85rem', marginTop: '1rem' }}>No pending invitations.</p>
                )}
              </div>
-          )}
         </section>
       </div>
-      {!isAdmin && (
-        <div className="bottom-grid">
-          <section className="panel trend-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="section-kicker">This week</p>
-                <h3>Clinic pulse</h3>
-              </div>
-              <select value={trendRange} onChange={(event) => setTrendRange(event.target.value)}>
-                <option value="week">Last 7 days</option>
-                <option value="month">Last 4 weeks</option>
-              </select>
-            </div>
-            <div className="chart-area" style={{ marginBottom: topComplaints.length > 0 ? '1.5rem' : '0' }}>
-              <div className="chart-y">
-                <span>{Math.ceil(maxDailyVisits)}</span>
-                <span>{Math.ceil(maxDailyVisits * 0.75)}</span>
-                <span>{Math.ceil(maxDailyVisits * 0.5)}</span>
-                <span>{Math.ceil(maxDailyVisits * 0.25)}</span>
-                <span>0</span>
-              </div>
-              <div className="bars">
-                {dailyVisits.map((count, i) => (
-                  <div className="bar-column" key={i}>
-                    <div
-                      className={`bar ${i === todayIndex ? "highlight" : ""}`}
-                      style={{ height: `${(count / maxDailyVisits) * 100}%`, minHeight: count > 0 ? '4px' : '0' }}
-                    >
-                      <b>{count}</b>
-                    </div>
-                    <span>
-                      {trendRange === "month" ? `Week ${i + 1}` : new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(chartDays[i])}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            
-            {topComplaints.length > 0 && (
-              <div style={{ paddingTop: '1.5rem', borderTop: '1px solid var(--border)' }}>
-                <p className="section-kicker" style={{ marginBottom: '1rem' }}>Top complaints</p>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
-                  {topComplaints.map(([complaint, count]) => (
-                    <div key={complaint}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '0.35rem', color: 'var(--text-1)' }}>
-                        <span style={{ fontWeight: 500 }}>{complaint}</span>
-                        <strong>{count}</strong>
-                      </div>
-                      <div style={{ background: 'var(--surface-2)', height: '6px', borderRadius: '3px', overflow: 'hidden' }}>
-                        <div style={{ background: 'var(--brand-teal)', height: '100%', width: `${(count / maxComplaintCount) * 100}%`, borderRadius: '3px' }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </section>
-          <section className="panel alerts-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="section-kicker">Needs attention</p>
-                <h3>Clinic alerts</h3>
-              </div>
-              <span className="alert-count">{clinicAlerts.length}</span>
-            </div>
-            {clinicAlerts.length > 0 ? (
-              clinicAlerts.map((alert, index) => (
-                <Alert
-                  key={index}
-                  icon={alert.icon}
-                  title={alert.title}
-                  text={alert.text}
-                  tone={alert.tone}
-                  onClick={alert.onClick}
-                />
-              ))
-            ) : (
-              <div className="empty-state">
-                <p>All clear!</p>
-                <small>No alerts at this time. Everything is running smoothly.</small>
-              </div>
-            )}
-          </section>
-        </div>
-      )}
       <footer style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-3)', padding: '2rem 0 1rem' }}>
         {data.settings.schoolYear} · <Heart size={12} aria-hidden="true" /> HealthMate+
       </footer>
@@ -510,20 +199,20 @@ export default function Dashboard({ data, user }) {
   );
 }
 
-function Stat({ icon: Icon, label, value, change, tone }) {
+function Stat({ to, icon: Icon, label, value, change, tone }) {
   return (
-    <div className={`stat-card ${tone}`}>
+    <Link to={to} className={`stat-card ${tone}`}>
       <div className="stat-icon">
-        <Icon size={19} />
+        <Icon size={19} aria-hidden="true" />
       </div>
       <div>
         <span>{label}</span>
         <strong>{value}</strong>
         <small>
-          <ArrowUpRight size={12} /> {change}
+          <ChevronRight size={12} aria-hidden="true" /> {change}
         </small>
       </div>
-    </div>
+    </Link>
   );
 }
 
@@ -542,15 +231,174 @@ function Action({ icon: Icon, label, text, tone, onClick }) {
   );
 }
 
-function Alert({ icon: Icon, title, text, tone, onClick }) {
+function NurseDashboard({ data, user }) {
+  const now = new Date();
+  const today = toDateKey(now);
+  const patients = data.students || [];
+  const getPatient = (id) => patients.find((patient) => String(patient.id) === String(id));
+  const getAppointmentTime = (appointment) => {
+    const value = appointment.startsAt || (appointment.date
+      ? `${appointment.date}T${appointment.time || '00:00'}+08:00`
+      : '');
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) ? timestamp : null;
+  };
+  const appointmentRequests = (data.appointments || []).filter((appointment) =>
+    ['Requested', 'Pending'].includes(appointment.status),
+  );
+  const scheduledAppointments = (data.appointments || [])
+    .filter((appointment) => appointment.status === 'Scheduled')
+    .map((appointment) => ({ appointment, timestamp: getAppointmentTime(appointment) }))
+    .filter(({ timestamp }) => timestamp !== null && timestamp >= now.getTime())
+    .sort((first, second) => first.timestamp - second.timestamp);
+  const todayAppointments = scheduledAppointments
+    .filter(({ timestamp }) => toDateKey(new Date(timestamp)) === today)
+    .slice(0, 4);
+  const recentVisits = [...(data.visits || [])]
+    .sort((first, second) => Date.parse(second.date || second.createdAt || 0) - Date.parse(first.date || first.createdAt || 0))
+    .slice(0, 4);
+
+  const inventoryAlerts = (data.inventory || [])
+    .filter((item) => !item.archived && Number(item.quantity) <= Number(item.reorderLevel))
+    .slice(0, 3);
+  const userFirstName = (user?.name || data.settings?.nurseName || 'Nurse')
+    .replace(/^Nurse\s+/i, '').trim().split(/\s+/)[0] || 'Nurse';
+  const hour = now.getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  const todayLabel = new Intl.DateTimeFormat('en-PH', {
+    timeZone: 'Asia/Manila', weekday: 'long', month: 'long', day: 'numeric',
+  }).format(now);
+
+  const alerts = [
+    ...inventoryAlerts.map((item) => ({
+      key: `stock-${item.id}`,
+      title: `${item.name} is below reorder level`,
+      detail: `${item.quantity} ${item.unit} remaining · reorder at ${item.reorderLevel}`,
+      to: '/inventory',
+    })),
+  ];
+
   return (
-    <button type="button" className="alert-item" onClick={onClick}>
-      <div className={`alert-icon ${tone}`}><Icon size={16} /></div>
-      <div>
-        <strong>{title}</strong>
-        <p>{text}</p>
+    <div className="nurse-dashboard">
+      <header className="nurse-dashboard-header">
+        <div>
+          <p className="nurse-dashboard-date">{todayLabel} · {data.settings?.schoolYear || 'School clinic'}</p>
+          <h2>{greeting}, {userFirstName}</h2>
+          <p>Here’s what needs your attention at the clinic today.</p>
+        </div>
+        <div className="nurse-dashboard-actions">
+          <Link className="primary-btn" to="/new-visit"><Plus size={17} aria-hidden="true" /> New visit</Link>
+        </div>
+      </header>
+
+      <section className="nurse-worklinks" aria-label="Clinic work overview">
+        <NurseWorkLink
+          to="/appointments"
+          icon={CalendarDays}
+          label="Appointment requests"
+          value={`${appointmentRequests.length} to review`}
+          detail={appointmentRequests.length ? 'Confirm or reschedule' : 'No requests waiting'}
+        />
+        <NurseWorkLink
+          to="/appointments"
+          icon={Clock3}
+          label="Upcoming appointments"
+          value={`${scheduledAppointments.length} scheduled`}
+          detail={todayAppointments.length ? `${todayAppointments.length} scheduled today` : 'View the clinic schedule'}
+        />
+      </section>
+
+      <div className="nurse-dashboard-columns">
+        <section className="panel nurse-dashboard-panel">
+          <div className="panel-heading">
+            <div><h3>Today’s appointments</h3><p>Scheduled visits for today</p></div>
+            <Link className="nurse-section-link" to="/appointments">Open schedule <ChevronRight size={15} aria-hidden="true" /></Link>
+          </div>
+          {todayAppointments.length ? (
+            <div className="nurse-dashboard-list">
+              {todayAppointments.map(({ appointment, timestamp }) => {
+                const patient = getPatient(appointment.studentId || appointment.patientId);
+                return (
+                  <div className="nurse-dashboard-row" key={appointment.id}>
+                    <time>{formatManilaDateTime(new Date(timestamp))}</time>
+                    <div><strong>{patient?.name || 'Patient record unavailable'}</strong><span>{appointment.reason || 'Appointment'}</span></div>
+                    <span className="status-chip success">Scheduled</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="nurse-dashboard-empty">
+              <CalendarDays size={20} aria-hidden="true" />
+              <p>No appointments scheduled for today.</p>
+              <Link to="/appointments">View all appointments</Link>
+            </div>
+          )}
+        </section>
+
+        <section className="panel nurse-dashboard-panel">
+          <div className="panel-heading">
+            <div><h3>Needs attention</h3><p>Items with a clear next step</p></div>
+            <span className="nurse-alert-count" aria-label={`${alerts.length} alerts`}>{alerts.length}</span>
+          </div>
+          {alerts.length ? (
+            <div className="nurse-dashboard-alerts">
+              {alerts.map((alert) => (
+                <Link className="nurse-dashboard-alert" key={alert.key} to={alert.to}>
+                  <span><strong>{alert.title}</strong><small>{alert.detail}</small></span>
+                  <ChevronRight size={16} aria-hidden="true" />
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <div className="nurse-dashboard-empty">
+              <ClipboardCheck size={20} aria-hidden="true" />
+              <p>No clinic alerts need action.</p>
+            </div>
+          )}
+        </section>
       </div>
-      <ChevronRight size={15} />
-    </button>
+
+      <section className="panel nurse-dashboard-panel nurse-recent-visits">
+        <div className="panel-heading">
+          <div><h3>Recent clinic visits</h3><p>Latest records across the clinic</p></div>
+          <Link className="nurse-section-link" to="/reports?period=daily">Daily report <ChevronRight size={15} aria-hidden="true" /></Link>
+        </div>
+        {recentVisits.length ? (
+          <div className="nurse-dashboard-list">
+            {recentVisits.map((visit) => {
+              const patient = getPatient(visit.studentId || visit.patientId);
+              const name = patient?.name || 'Patient record unavailable';
+              const row = (
+                <>
+                  <time>{formatManilaDateTime(visit.date || visit.createdAt, visit.time)}</time>
+                  <div><strong>{name}</strong><span>{visit.chiefComplaint || visit.type || 'Clinic visit'}</span></div>
+                  <span className={`status-chip ${visit.disposition === 'Sent home' ? 'warn' : 'neutral'}`}>{visit.disposition || 'Visit recorded'}</span>
+                </>
+              );
+              return patient
+                ? <Link className="nurse-dashboard-row nurse-visit-link" key={visit.id} to={`/students/${encodeURIComponent(patient.id)}`}>{row}</Link>
+                : <div className="nurse-dashboard-row" key={visit.id}>{row}</div>;
+            })}
+          </div>
+        ) : (
+          <div className="nurse-dashboard-empty">
+            <Stethoscope size={20} aria-hidden="true" />
+            <p>No clinic visits have been recorded yet.</p>
+            <Link to="/new-visit">Start a visit record</Link>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function NurseWorkLink({ to, icon: Icon, label, value, detail }) {
+  return (
+    <Link className="nurse-worklink" to={to}>
+      <span className="nurse-worklink-icon"><Icon size={19} aria-hidden="true" /></span>
+      <span className="nurse-worklink-copy"><strong>{label}</strong><b>{value}</b><small>{detail}</small></span>
+      <ChevronRight size={17} aria-hidden="true" />
+    </Link>
   );
 }
