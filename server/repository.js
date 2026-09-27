@@ -3,9 +3,7 @@ import { query, transaction } from './db.js';
 
 const collectionMap = {
   visits: { table: 'visits', patient: true },
-  screenings: { table: 'screenings', patient: true },
   immunizations: { table: 'immunizations', patient: true },
-  incidents: { table: 'incidents', patient: true },
   appointments: { table: 'appointments', patient: true },
   queue: { table: 'queue_entries', patient: true },
   inventory: { table: 'inventory_items', staffOnly: true },
@@ -14,9 +12,9 @@ const collectionMap = {
 };
 
 const staffRoles = new Set(['school_nurse', 'system_administrator']);
-const clinicalCollections = new Set(['visits', 'screenings', 'immunizations', 'incidents', 'appointments', 'queue', 'dispenseLogs', 'stockAdjustments']);
+const clinicalCollections = new Set(['visits', 'immunizations', 'appointments', 'queue', 'dispenseLogs', 'stockAdjustments']);
 const adminRestrictedCollections = new Set([...clinicalCollections, 'inventory']);
-const snapshotWritableCollections = ['screenings', 'immunizations', 'incidents'];
+const snapshotWritableCollections = ['immunizations'];
 
 function recordId(record) {
   const value = record?.id;
@@ -219,10 +217,11 @@ export async function syncPatients(client, records) {
 }
 
 export async function syncCollection(client, key, records, actorId) {
+  if (!collectionMap[key]) return;
   for (const record of records) {
     const id = recordId(record);
     const json = JSON.stringify(record);
-    if (['visits', 'screenings', 'immunizations', 'incidents'].includes(key)) {
+    if (['visits', 'immunizations'].includes(key)) {
       const table = collectionMap[key].table;
       const pid = patientId(record);
       if (!pid) throw new Error(`${key} record ${id} is missing a patient id.`);

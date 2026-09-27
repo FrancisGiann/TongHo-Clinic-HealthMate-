@@ -37,18 +37,10 @@ const seed = {
     { id: 304, name: 'Oral rehydration salts', category: 'Supplies', quantity: 18, unit: 'sachets', expiryDate: '2027-06-30', reorderLevel: 10 },
     { id: 305, name: 'Instant cold pack', category: 'First Aid', quantity: 12, unit: 'pieces', expiryDate: '2028-04-30', reorderLevel: 8 },
   ],
-  screenings: [
-    { id: 401, studentId: 101, schoolYear: '2025–2026', date: isoDate(12), vision: '20/20', hearing: 'Pass', bmi: 'Normal', nutritionalStatus: 'Normal' },
-    { id: 402, studentId: 102, schoolYear: '2025–2026', date: isoDate(14), vision: '20/30', hearing: 'Pass', bmi: 'Normal', nutritionalStatus: 'Normal' },
-    { id: 403, studentId: 104, schoolYear: '2025–2026', date: isoDate(18), vision: '20/20', hearing: 'Pass', bmi: 'Normal', nutritionalStatus: 'Normal' },
-  ],
   immunizations: [
     { id: 501, studentId: 101, vaccineName: 'MMR', doseNumber: '2nd', dateAdministered: '2025-09-10', nextDueDate: '', remarks: 'Up to date' },
     { id: 502, studentId: 102, vaccineName: 'Td', doseNumber: '1st', dateAdministered: '2025-09-12', nextDueDate: isoDate(-30), remarks: 'Schedule booster' },
     { id: 503, studentId: 103, vaccineName: 'MMR', doseNumber: '1st', dateAdministered: '2025-09-08', nextDueDate: '2026-10-08', remarks: 'Follow-up due' },
-  ],
-  incidents: [
-    { id: 601, studentId: 104, date: isoDate(1), location: 'Covered court', type: 'Sports injury', severity: 'Moderate', description: 'Minor knee injury during PE.', actionTaken: 'Cold pack applied; guardian notified.', parentNotified: true },
   ],
   appointments: [
     { id: 701, studentId: 103, date: isoDate(-2), time: '02:30 PM', reason: 'Asthma follow-up', status: 'Scheduled' },
@@ -61,9 +53,7 @@ const collectionKeys = [
   'students',
   'visits',
   'inventory',
-  'screenings',
   'immunizations',
-  'incidents',
   'appointments',
   'queue',
   'dispenseLogs',
@@ -97,6 +87,9 @@ function normalizeData(value) {
     ...source,
     settings: { ...(source.settings || {}) },
   };
+
+  delete normalized.screenings;
+  delete normalized.incidents;
 
   collectionKeys.forEach((key) => {
     normalized[key] = Array.isArray(source[key]) ? source[key] : [];

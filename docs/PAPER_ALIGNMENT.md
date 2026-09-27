@@ -13,3 +13,7 @@ HealthMate+ will be a web-based application deployed on an internet-accessible h
 ## AI-assisted clinical automation scope
 
 HealthMate+ supports nurse-reviewed consultation summary drafts based on structured encounter data. An external AI service may draft the text when configured; a structured template remains available if that service is unavailable. Risk scores are calculated separately from approved weighted clinical rules and are not determined by AI-generated text. For appointments, the system suggests available times using recent clinic visit patterns and falls back to time order when the history is insufficient. It also identifies recurring visits and generates follow-up and immunization reminders from recorded dates. The school nurse remains responsible for reviewing clinical summaries and acting on risk or recurring-visit alerts.
+
+## Health screening and incident reporting scope
+
+Health screening and incident reporting are outside the current prototype scope and intended revised proposal scope. The active application no longer exposes either workflow; normal clinic-data responses omit their historical collections, reports and exports omit their metrics and records, and writes to these collections return `410 FEATURE_REMOVED`. Existing database tables and rows are retained. The original proposal has not yet been revised and still contains a passage about manual student incident self-reporting. Revise that passage before describing incident reporting as outside the intended proposal scope.

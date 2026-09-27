@@ -6,9 +6,7 @@ import Students from './pages/Students';
 import StudentProfile from './pages/StudentProfile';
 import StudentRegistration from './pages/StudentRegistration';
 import NewVisit from './pages/NewVisit';
-import HealthScreening from './pages/HealthScreening';
 import Immunizations from './pages/Immunizations';
-import IncidentReport from './pages/IncidentReport';
 import Queue from './pages/Queue';
 import Inventory from './pages/Inventory';
 import Reports from './pages/Reports';
@@ -77,19 +75,17 @@ export default function App() {
               <Route path="/students/new" element={<StudentRegistration data={data} commitData={clinic.commitData} />} />
               <Route path="/students/:studentId" element={<StudentProfile data={data} commitData={clinic.commitData} reload={clinic.reload} />} />
               <Route path="/new-visit" element={<NewVisit data={data} user={user} reload={clinic.reload} />} />
-              <Route path="/health-screening" element={<HealthScreening data={data} commitData={clinic.commitData} />} />
               <Route path="/immunizations" element={<Immunizations data={data} commitData={clinic.commitData} />} />
-              <Route path="/incident-reports" element={<IncidentReport data={data} commitData={clinic.commitData} />} />
               <Route path="/queue" element={<Queue data={data} reload={clinic.reload} />} />
               <Route path="/inventory" element={<Inventory data={data} applyServerData={clinic.applyServerData} reload={clinic.reload} saving={clinic.saving} />} />
-              <Route path="/reports" element={<Reports data={data} user={user} />} />
+              <Route path="/reports" element={<Reports user={user} />} />
               <Route path="/appointments" element={<Appointments data={data} user={user} reload={clinic.reload} />} />
               <Route path="/settings" element={<Settings data={data} user={user} reload={clinic.reload} />} />
             </>
           ) : isAdmin ? (
             <>
               <Route path="/" element={<Dashboard data={data} user={user} />} />
-              <Route path="/reports" element={<Reports data={data} user={user} />} />
+              <Route path="/reports" element={<Reports user={user} />} />
               <Route path="/settings" element={<Settings data={data} user={user} reload={clinic.reload} />} />
             </>
           ) : (
@@ -98,6 +94,8 @@ export default function App() {
               <Route path="/appointments" element={<Appointments data={data} user={user} reload={clinic.reload} />} />
             </>
           )}
+          <Route path="/health-screening" element={<Navigate to="/" replace />} />
+          <Route path="/incident-reports" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

@@ -4,7 +4,6 @@ import {
   Activity,
   Bell,
   CalendarDays,
-  ClipboardList,
   FileBarChart,
   HeartPulse,
   Home,
@@ -17,7 +16,6 @@ import {
   PanelLeftOpen,
   Search,
   Settings,
-  ShieldAlert,
   Stethoscope,
   Sun,
   Syringe,
@@ -31,9 +29,7 @@ const nurseNav = [
   { to: "/", label: "Dashboard", icon: Home },
   { to: "/students", label: "Students", icon: Users },
   { to: "/new-visit", label: "New Visit", icon: Stethoscope },
-  { to: "/health-screening", label: "Health Screening", icon: ClipboardList },
   { to: "/immunizations", label: "Immunizations", icon: Syringe },
-  { to: "/incident-reports", label: "Incident Reports", icon: ShieldAlert },
   { to: "/queue", label: "Queue", icon: Activity },
   { to: "/inventory", label: "Inventory", icon: Package },
   { to: "/reports", label: "Reports", icon: FileBarChart },
@@ -49,14 +45,6 @@ const portalNav = [
   { to: "/", label: "My Health Portal", icon: Home },
   { to: "/appointments", label: "Appointments", icon: CalendarDays },
 ];
-
-function schoolYearScreeningCount(data) {
-  const rosterIds = new Set((data.students || []).map((student) => String(student.id)));
-  return new Set((data.screenings || [])
-    .filter((record) => String(record.schoolYear || '') === String(data.settings.schoolYear || ''))
-    .map((record) => String(record.studentId || record.patientId))
-    .filter((id) => rosterIds.has(id))).size;
-}
 
 export default function MainLayout({ settings, dark, setDark, user, onLogout, data }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -106,15 +94,6 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
       }
     });
     
-    // Screening reminder
-    const studentsWithRecords = schoolYearScreeningCount(data);
-    const noRecordCount = Math.max(0, data.students.length - studentsWithRecords);
-    if (noRecordCount > 0) {
-      clinicAlerts.push({
-        title: "Screening records missing",
-        text: `${noRecordCount} student${noRecordCount !== 1 ? 's' : ''} have no record for ${data.settings.schoolYear || 'the current school year'}`
-      });
-    }
   }
   serverNotifications.filter((item) => item.status !== 'read').slice(0, 5).forEach((item) => {
     clinicAlerts.push({ title: item.subject, text: item.body, id: item.id });

@@ -8,14 +8,18 @@ test('report includes only records inside the requested period', () => {
       { id: 1, studentId: 10, date: '2026-09-01', chiefComplaint: 'Headache', type: 'Illness', treatment: 'Rest' },
       { id: 2, studentId: 11, date: '2026-10-01', chiefComplaint: 'Cough', type: 'Illness', treatment: 'Hydration' },
     ],
-    incidents: [{ id: 3, date: '2026-09-15' }],
+    incidents: [{ id: 3, date: '2026-09-15', severity: 'Critical' }],
+    screenings: [{ id: 5, studentId: 10, date: '2026-09-15', visionFinding: '20/20' }],
     appointments: [],
     dispenseLogs: [{ id: 4, date: '2026-09-01', medicineName: 'Bandage', quantity: 2 }],
     students: [{ id: 10, gradeLevel: 'Grade 4' }],
   }, '2026-09-01', '2026-09-30');
   assert.equal(report.totals.visits, 1);
   assert.equal(report.totals.uniquePatients, 1);
-  assert.equal(report.totals.incidents, 1);
+  assert.equal(Object.hasOwn(report.totals, 'incidents'), false);
+  assert.equal(Object.hasOwn(report.totals, 'screenedPatients'), false);
+  assert.equal(Object.hasOwn(report, 'incidentSeverities'), false);
+  assert.equal(Object.hasOwn(report, 'screeningVisionFindings'), false);
   assert.equal(report.totals.medicinesDispensed, 2);
   assert.deepEqual(report.complaints, { Headache: 1 });
   assert.deepEqual(report.grades, { 'Grade 4': 1 });
@@ -50,17 +54,15 @@ test('administrator aggregate view suppresses small cells across all categories 
   assert.deepEqual(adminView.medicines, {});
   assert.deepEqual(adminView.riskCategories, { moderate: 10 });
   assert.deepEqual(adminView.grades, {});
-  assert.deepEqual(adminView.incidentSeverities, {});
   assert.equal(adminView.totals.visits, null);
   assert.ok(adminView.suppressedTotals.includes('visits'));
   assert.equal(adminView.totals.uniquePatients, 12);
-  assert.equal(adminView.totals.incidents, null);
+  assert.equal(Object.hasOwn(adminView.totals, 'incidents'), false);
   assert.ok(adminView.suppressedAggregates.includes('complaints'));
   assert.ok(adminView.suppressedAggregates.includes('medicines'));
-  assert.ok(adminView.suppressedTotals.includes('incidents'));
   assert.equal(adminView.timeSeries['2026-09-01'], null);
   assert.equal(adminView.timeSeriesSuppressed, true);
-  assert.equal(report.totals.incidents, 1, 'suppression does not mutate the stored/full report');
+  assert.equal(Object.hasOwn(report.totals, 'incidents'), false, 'historical incidents do not enter current reports');
 });
 
 test('empty report categories remain distinguishable from suppressed categories', () => {
@@ -139,4 +141,31 @@ test('stored report snapshots omit patient-level vaccine tracking detail', () =>
   assert.deepEqual(stored, { totals: { vaccineDueRecords: 3 } });
   assert.equal(Object.hasOwn(reportForRole(stored, 'system_administrator'), 'vaccineTracking'), false);
   assert.equal(reportForRole(report, 'school_nurse').vaccineTracking[0].studentId, 'patient-1', 'the on-demand nurse report retains authorized detail');
+});
+
+test('legacy report snapshots omit health screening and incident metrics for every role', () => {
+  const legacy = {
+    totals: { visits: 8, incidents: 2, screenedPatients: 4, vaccineDueRecords: 5 },
+    incidentSeverities: { Critical: 2 },
+    screeningVisionFindings: { '20/20': 4 },
+    screeningHearingFindings: { Pass: 4 },
+    suppressedAggregates: ['incidentSeverities', 'screeningVisionFindings', 'screeningHearingFindings', 'grades'],
+    suppressedTotals: ['incidents', 'screenedPatients', 'vaccineDueRecords'],
+    vaccineTracking: [{ studentId: 'patient-1', vaccineName: 'MMR', nextDueDate: '2026-09-30' }],
+  };
+  const stored = reportSnapshotForStorage(legacy);
+  assert.deepEqual(stored.totals, { visits: 8, vaccineDueRecords: 5 });
+  assert.deepEqual(stored.suppressedAggregates, ['grades']);
+  assert.deepEqual(stored.suppressedTotals, ['vaccineDueRecords']);
+  for (const key of ['incidentSeverities', 'screeningVisionFindings', 'screeningHearingFindings', 'vaccineTracking']) {
+    assert.equal(Object.hasOwn(stored, key), false);
+  }
+  for (const role of ['school_nurse', 'system_administrator']) {
+    const visible = reportForRole(legacy, role);
+    assert.equal(Object.hasOwn(visible.totals, 'incidents'), false);
+    assert.equal(Object.hasOwn(visible.totals, 'screenedPatients'), false);
+    assert.equal(Object.hasOwn(visible, 'incidentSeverities'), false);
+    assert.equal(Object.hasOwn(visible, 'screeningVisionFindings'), false);
+  }
+  assert.equal(stored.totals.vaccineDueRecords, 5, 'immunization reporting remains available');
 });

@@ -11,8 +11,8 @@ function increment(target, key) {
 }
 
 const smallCellThreshold = 5;
-const aggregateMaps = ['complaints', 'consultationTypes', 'treatments', 'medicines', 'medications', 'supplies', 'unclassifiedItems', 'screeningVisionFindings', 'screeningHearingFindings', 'riskCategories', 'grades', 'incidentSeverities'];
-const aggregateTotals = ['visits', 'uniquePatients', 'incidents', 'appointments', 'medicinesDispensed', 'medicationUnitsDispensed', 'supplyUnitsDispensed', 'unclassifiedUnitsDispensed', 'followUps', 'screenedPatients', 'vaccineDueRecords'];
+const aggregateMaps = ['complaints', 'consultationTypes', 'treatments', 'medicines', 'medications', 'supplies', 'unclassifiedItems', 'riskCategories', 'grades'];
+const aggregateTotals = ['visits', 'uniquePatients', 'appointments', 'medicinesDispensed', 'medicationUnitsDispensed', 'supplyUnitsDispensed', 'unclassifiedUnitsDispensed', 'followUps', 'vaccineDueRecords'];
 
 export function suppressSmallCellAggregates(report, threshold = smallCellThreshold) {
   const suppressed = { ...report, totals: { ...report.totals }, timeSeries: { ...report.timeSeries } };
@@ -65,7 +65,6 @@ export function suppressSmallCellAggregates(report, threshold = smallCellThresho
   if (suppressedAggregates.includes('medications')) addSuppressedTotal('medicationUnitsDispensed');
   if (suppressedAggregates.includes('supplies')) addSuppressedTotal('supplyUnitsDispensed');
   if (suppressedAggregates.includes('unclassifiedItems')) addSuppressedTotal('unclassifiedUnitsDispensed');
-  if (suppressedAggregates.includes('incidentSeverities')) addSuppressedTotal('incidents');
   suppressed.suppressedAggregates = suppressedAggregates;
   suppressed.suppressedTotals = suppressedTotals;
   suppressed.timeSeriesSuppressed = hiddenDates.size > 0;
@@ -73,15 +72,34 @@ export function suppressSmallCellAggregates(report, threshold = smallCellThresho
   return suppressed;
 }
 
-export function reportForRole(report, role) {
-  if (role !== 'system_administrator') return report;
+const retiredReportAggregates = ['incidentSeverities', 'screeningVisionFindings', 'screeningHearingFindings'];
+const retiredReportTotals = ['incidents', 'screenedPatients'];
+
+function stripRetiredWorkflowMetrics(report) {
   const safeReport = { ...report };
+  if (report.totals && typeof report.totals === 'object') {
+    safeReport.totals = { ...report.totals };
+    for (const key of retiredReportTotals) delete safeReport.totals[key];
+  }
+  for (const key of retiredReportAggregates) delete safeReport[key];
+  if (Array.isArray(report.suppressedAggregates)) {
+    safeReport.suppressedAggregates = report.suppressedAggregates.filter((key) => !retiredReportAggregates.includes(key));
+  }
+  if (Array.isArray(report.suppressedTotals)) {
+    safeReport.suppressedTotals = report.suppressedTotals.filter((key) => !retiredReportTotals.includes(key));
+  }
+  return safeReport;
+}
+
+export function reportForRole(report, role) {
+  const safeReport = stripRetiredWorkflowMetrics(report);
+  if (role !== 'system_administrator') return safeReport;
   delete safeReport.vaccineTracking;
   return suppressSmallCellAggregates(safeReport);
 }
 
 export function reportSnapshotForStorage(report) {
-  const aggregateSnapshot = { ...report };
+  const aggregateSnapshot = stripRetiredWorkflowMetrics(report);
   delete aggregateSnapshot.vaccineTracking;
   return aggregateSnapshot;
 }
@@ -94,10 +112,8 @@ export function buildClinicReport(data, startDate, endDate) {
     return key && key >= start && key <= end;
   };
   const visits = (data.visits || []).filter((visit) => inPeriod(visit.date || visit.createdAt));
-  const incidents = (data.incidents || []).filter((incident) => inPeriod(incident.date || incident.createdAt));
   const appointments = (data.appointments || []).filter((appointment) => inPeriod(appointment.date || appointment.startsAt));
   const dispenseLogs = (data.dispenseLogs || []).filter((entry) => inPeriod(entry.date || entry.createdAt));
-  const screenings = (data.screenings || []).filter((entry) => inPeriod(entry.date || entry.createdAt));
   const immunizations = (data.immunizations || []).filter((entry) => inPeriod(entry.date || entry.createdAt));
   const complaints = {};
   const consultationTypes = {};
@@ -106,14 +122,10 @@ export function buildClinicReport(data, startDate, endDate) {
   const medications = {};
   const supplies = {};
   const unclassifiedItems = {};
-  const screeningVisionFindings = {};
-  const screeningHearingFindings = {};
   const riskCategories = {};
   const grades = {};
-  const incidentSeverities = {};
   const timeSeries = {};
   const uniquePatients = new Set();
-  const screenedPatients = new Set(screenings.map((record) => String(record.studentId || record.patientId || record.id)));
   const students = new Map((data.students || []).map((student) => [String(student.id), student]));
 
   visits.forEach((visit) => {
@@ -125,13 +137,6 @@ export function buildClinicReport(data, startDate, endDate) {
     increment(grades, students.get(String(visit.studentId || visit.patientId))?.gradeLevel || 'Not recorded');
     const key = dateKey(visit.date || visit.createdAt);
     if (key) timeSeries[key] = (timeSeries[key] || 0) + 1;
-  });
-  incidents.forEach((incident) => increment(incidentSeverities, incident.severity || 'Not recorded'));
-  screenings.forEach((record) => {
-    const vision = String(record.visionFinding ?? record.vision ?? '').trim();
-    const hearing = String(record.hearingFinding ?? record.hearing ?? '').trim();
-    if (vision) increment(screeningVisionFindings, vision);
-    if (hearing) increment(screeningHearingFindings, hearing);
   });
   let medicationUnitsDispensed = 0;
   let supplyUnitsDispensed = 0;
@@ -178,14 +183,12 @@ export function buildClinicReport(data, startDate, endDate) {
     totals: {
       visits: visits.length,
       uniquePatients: uniquePatients.size,
-      incidents: incidents.length,
       appointments: appointments.length,
       medicinesDispensed: dispenseLogs.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0),
       medicationUnitsDispensed,
       supplyUnitsDispensed,
       unclassifiedUnitsDispensed,
       followUps: visits.filter((visit) => visit.followUp).length,
-      screenedPatients: screenedPatients.size,
       vaccineDueRecords,
     },
     complaints,
@@ -195,12 +198,9 @@ export function buildClinicReport(data, startDate, endDate) {
     medications,
     supplies,
     unclassifiedItems,
-    screeningVisionFindings,
-    screeningHearingFindings,
     vaccineTracking,
     riskCategories,
     grades,
-    incidentSeverities,
     timeSeries: Object.fromEntries(Array.from({ length: Math.max(0, Math.round((new Date(`${end}T00:00:00Z`) - new Date(`${start}T00:00:00Z`)) / 86400000) + 1) }, (_, index) => {
       const date = new Date(`${start}T00:00:00Z`);
       date.setUTCDate(date.getUTCDate() + index);

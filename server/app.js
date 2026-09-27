@@ -432,7 +432,7 @@ export function createApp() {
   app.put('/api/data', requireRoles(...clinicalWriteRoles), async (req, res) => {
     const before = await loadClinicData(req.user);
     const clinicalValidation = validateChangedClinicalRecords(before, req.body?.data || {});
-    if (!clinicalValidation.valid) return errorResponse(res, 400, 'VALIDATION_ERROR', clinicalValidation.message);
+    if (!clinicalValidation.valid) return errorResponse(res, clinicalValidation.status || 400, clinicalValidation.code || 'VALIDATION_ERROR', clinicalValidation.message);
     const version = await saveClinicData(req.body?.data, req.user, req.body?.version);
     const after = await loadClinicData(req.user);
     for (const visit of newRecords(before.visits, after.visits)) {

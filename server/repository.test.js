@@ -65,7 +65,8 @@ test('immunization hydration adds authoritative patient and creation timestamps'
 test('bulk sync validation is complete and upsert-only writes preserve omitted records', async () => {
   const complete = { settings: {}, students: [], visits: [], screenings: [], immunizations: [], incidents: [], appointments: [], queue: [], inventory: [], dispenseLogs: [], stockAdjustments: [] };
   assert.equal(validateClinicDataPayload(complete, 3).valid, true);
-  assert.equal(validateClinicDataPayload({ ...complete, screenings: undefined }, 3).valid, false);
+  assert.equal(validateClinicDataPayload({ ...complete, screenings: undefined, incidents: undefined }, 3).valid, true);
+  assert.equal(validateClinicDataPayload({ ...complete, immunizations: undefined }, 3).valid, false);
   assert.equal(validateClinicDataPayload({ settings: {}, students: [], screenings: [], immunizations: [], incidents: [] }, 3).valid, true);
   await assert.rejects(
     () => saveClinicData(complete, { role: 'system_administrator' }, 3),
@@ -78,6 +79,14 @@ test('bulk sync validation is complete and upsert-only writes preserve omitted r
   await syncCollection(client, 'visits', [{ id: 'visit-1', patientId: 'student-1', chiefComplaint: 'Headache' }], 'nurse-1');
   assert.equal(queries.some(([sql]) => /\bDELETE\b/i.test(sql)), false);
   assert.match(queries.at(-1)[0], /INSERT INTO visits\(/);
+});
+
+test('removed screening and incident collections are not written by repository sync', async () => {
+  const queries = [];
+  const client = { query: async (...args) => { queries.push(args); return { rows: [] }; } };
+  await syncCollection(client, 'screenings', [{ id: 'legacy-screen', patientId: 'student-1' }], 'nurse-1');
+  await syncCollection(client, 'incidents', [{ id: 'legacy-incident', patientId: 'student-1' }], 'nurse-1');
+  assert.deepEqual(queries, []);
 });
 
 test('snapshot writes reject versions made stale by a transactional API write', async () => {

@@ -2,14 +2,12 @@ import {
   ArrowUpRight,
   CalendarDays,
   ChevronRight,
-  ClipboardCheck,
   Clock3,
   Heart,
   LockKeyhole,
   MoreHorizontal,
   Package,
   Plus,
-  Siren,
   ShieldAlert,
   Stethoscope,
   Users,
@@ -72,16 +70,6 @@ export default function Dashboard({ data, user }) {
     const timestamp = Date.parse(startsAt);
     return Number.isFinite(timestamp) && timestamp >= Date.now();
   }).length;
-  const incidentCount = (data.incidents || []).length;
-  const rosterIds = new Set(data.students.map((student) => String(student.id)));
-  const screenedStudents = new Set((data.screenings || [])
-    .filter((record) => String(record.schoolYear || '') === String(data.settings.schoolYear || ''))
-    .map((record) => String(record.studentId || record.patientId))
-    .filter((id) => rosterIds.has(id))).size;
-  const screeningProgress = data.students.length > 0
-    ? `${screenedStudents} of ${data.students.length} students have a record for ${data.settings.schoolYear || 'the current school year'}`
-    : "No students yet";
-  
   const currentHour = new Date().getHours();
   let greeting = "Good morning";
   if (currentHour >= 12 && currentHour < 18) greeting = "Good afternoon";
@@ -123,31 +111,6 @@ export default function Dashboard({ data, user }) {
       });
     }
   });
-  
-  // Show the absence of a current-year record without implying a clinical result.
-  const studentsWithoutScreeningRecord = Math.max(0, data.students.length - screenedStudents);
-  if (studentsWithoutScreeningRecord > 0) {
-    clinicAlerts.push({
-      icon: ClipboardCheck,
-      title: "Screening records missing",
-      text: `${studentsWithoutScreeningRecord} student${studentsWithoutScreeningRecord !== 1 ? 's' : ''} have no record for ${data.settings.schoolYear || 'the current school year'}`,
-      tone: "teal",
-      onClick: () => navigate('/health-screening'),
-    });
-  }
-
-  const urgentIncidents = (data.incidents || []).filter(
-    (incident) => incident.severity === 'Severe' || incident.severity === 'Critical',
-  );
-  if (urgentIncidents.length > 0) {
-    clinicAlerts.unshift({
-      icon: ShieldAlert,
-      title: `${urgentIncidents.length} urgent incident${urgentIncidents.length === 1 ? '' : 's'} need review`,
-      text: "Severe or critical safety record",
-      tone: "rose",
-      onClick: () => navigate('/reports'),
-    });
-  }
   
   // Empty state for whole dashboard if no students
   if (data.students.length === 0) {
@@ -286,20 +249,6 @@ export default function Dashboard({ data, user }) {
             change="Enrolled"
             tone="violet"
           />
-          <Stat
-            icon={ShieldAlert}
-            label="Incident reports"
-            value={incidentCount}
-            change={incidentCount > 0 ? "Review records" : "No incidents recorded"}
-            tone="rose"
-          />
-          <Stat
-            icon={ClipboardCheck}
-            label="Health screenings"
-            value={screenedStudents}
-            change={screeningProgress}
-            tone="teal"
-          />
         </section>
       )}
       <div className="content-grid">
@@ -401,20 +350,20 @@ export default function Dashboard({ data, user }) {
               tone="teal"
               onClick={() => navigate(isAdmin ? '/settings?tab=school' : '/new-visit')}
             />
-            <Action
-              icon={Siren}
-              label={isAdmin ? "Manage access" : "Incident report"}
-              text={isAdmin ? "Review staff and permissions" : "Document an incident"}
+            {isAdmin && <Action
+              icon={ShieldAlert}
+              label="Manage access"
+              text="Review staff and permissions"
               tone="rose"
-              onClick={() => navigate(isAdmin ? '/settings' : '/incident-reports')}
-            />
-            <Action
+              onClick={() => navigate('/settings')}
+            />}
+            {isAdmin && <Action
               icon={CalendarDays}
-              label={isAdmin ? "Generate report" : "Health screening"}
-              text={isAdmin ? "Open school health analytics" : "Record screening results"}
+              label="Generate report"
+              text="Open school health analytics"
               tone="amber"
-              onClick={() => navigate(isAdmin ? '/reports' : '/health-screening')}
-            />
+              onClick={() => navigate('/reports')}
+            />}
             <Action
               icon={isAdmin ? LockKeyhole : Package}
               label={isAdmin ? "Security controls" : "Check inventory"}

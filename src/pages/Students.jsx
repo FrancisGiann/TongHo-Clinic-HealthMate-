@@ -53,16 +53,6 @@ export default function Students({ data, setData }) {
       "Follow-up": visit.followUp ? "Yes" : "No",
       Nurse: visit.nurseName,
     }));
-    const screeningRows = (data.screenings || []).map((record) => ({
-      "Record Type": "Screening",
-      "Student ID": data.students.find((student) => student.id === record.studentId)?.studentId || record.studentId,
-      "School Year": record.schoolYear,
-      Date: record.date,
-      Vision: record.vision,
-      Hearing: record.hearing,
-      BMI: record.bmi,
-      "Nutritional Status": record.nutritionalStatus,
-    }));
     const immunizationRows = (data.immunizations || []).map((record) => ({
       "Record Type": "Immunization",
       "Student ID": data.students.find((student) => student.id === record.studentId)?.studentId || record.studentId,
@@ -72,20 +62,9 @@ export default function Students({ data, setData }) {
       "Next Due Date": record.nextDueDate,
       Remarks: record.remarks,
     }));
-    const incidentRows = (data.incidents || []).map((record) => ({
-      "Record Type": "Incident",
-      "Student ID": data.students.find((student) => student.id === record.studentId)?.studentId || record.studentId,
-      Date: record.date,
-      Location: record.location,
-      Type: record.type,
-      Severity: record.severity,
-      Description: record.description,
-      "Action Taken": record.actionTaken,
-      "Parent Notified": record.parentNotified ? "Yes" : "No",
-    }));
     downloadCsv(
       `healthmate-student-records-${new Date().toISOString().slice(0, 10)}.csv`,
-      [...studentRows, ...visitRows, ...screeningRows, ...immunizationRows, ...incidentRows],
+      [...studentRows, ...visitRows, ...immunizationRows],
     );
   };
   return (

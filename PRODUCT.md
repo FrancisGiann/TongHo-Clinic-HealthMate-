@@ -20,7 +20,7 @@ HealthMate+ combines PTHI-specific clinic workflows with explainable risk and pa
 
 ## Operating Context
 
-The application is used through standard desktop and laptop web browsers. It must support high-volume clinic intake, consultation documentation, follow-up work, appointment requests, walk-in queue management, school reporting, and account administration. The final deployment may run on Hostinger with Supabase PostgreSQL and SMTP email; it has no offline fallback and must not assume localhost or a school-only LAN.
+The application is used through standard desktop and laptop web browsers. It must support high-volume clinic intake, consultation documentation, follow-up work, appointment requests, walk-in queue management, school reporting, and account administration. Health screening and incident reporting are outside the current prototype scope and intended revised proposal scope. The original proposal has not yet been revised and still includes a manual student incident self-report passage. Historical screening and incident rows remain in the database, but the application no longer exposes those records, includes them in reports or exports, or accepts new or changed records. The final deployment may run on Hostinger with Supabase PostgreSQL and SMTP email; it has no offline fallback and must not assume localhost or a school-only LAN.
 
 ## Capabilities and Constraints
 

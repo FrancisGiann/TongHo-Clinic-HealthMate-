@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { BarChart3, Download, FileText, PieChart, Save } from "lucide-react";
 import { api } from "../utils/api";
-export default function Reports({ data, user }) {
+export default function Reports({ user }) {
   const exportReport = () => window.print();
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
   const [period, setPeriod] = useState('monthly');
@@ -54,20 +54,8 @@ export default function Reports({ data, user }) {
     "None";
   const gradeCounts = serverReport?.grades || {};
   
-  // Calculate screening statistics
-  const totalStudents = data.students.length;
-  const screenedStudents = serverReport?.totals?.screenedPatients || 0;
-  const screeningSuppressed = serverReport?.suppressedTotals?.includes('screenedPatients');
   const vaccineDueSuppressed = serverReport?.suppressedTotals?.includes('vaccineDueRecords');
   const vaccineDueRecords = serverReport?.totals?.vaccineDueRecords || 0;
-  const incidents = (data.incidents || []).filter((incident) => {
-    const value = new Date(incident.date || incident.createdAt || '');
-    const key = Number.isNaN(value.getTime()) ? '' : value.toISOString().slice(0, 10);
-    return key >= start && key <= end;
-  });
-  const getStudentName = (studentId) =>
-    data.students.find((student) => String(student.id) === String(studentId))?.name || "Unknown student";
-  
   return (
     <div className="form-page">
       <div className="page-intro">
@@ -88,11 +76,6 @@ export default function Reports({ data, user }) {
           <span>Top complaint</span>
           <strong className="report-word">{complaintSuppressed ? 'Withheld' : Object.entries(serverReport?.complaints || complaintCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || topComplaint}</strong>
           <small>{complaintSuppressed ? 'Small categories are suppressed' : 'Most recorded concern'}</small>
-        </div>
-        <div>
-          <span>Students with screening records</span>
-          <strong>{screeningSuppressed ? 'Withheld' : screenedStudents}</strong>
-          <small>{screeningSuppressed ? 'Small counts are suppressed' : `Unique students in this period · roster size ${totalStudents}`}</small>
         </div>
         <div>
           <span>Recorded vaccine due dates</span>
@@ -150,7 +133,7 @@ export default function Reports({ data, user }) {
         {!snapshots.length && <p className="empty-state">No saved snapshots yet.</p>}
       </section>
       <div className="reports-grid">
-        {[["Consultation types", "consultationTypes", serverReport?.consultationTypes], ["Treatments", "treatments", serverReport?.treatments], ["Medication use", "medications", serverReport?.medications], ["Supply use", "supplies", serverReport?.supplies], ["Unclassified historical items", "unclassifiedItems", serverReport?.unclassifiedItems], ["Vision findings recorded", "screeningVisionFindings", serverReport?.screeningVisionFindings], ["Hearing findings recorded", "screeningHearingFindings", serverReport?.screeningHearingFindings]].map(([title, key, values]) => {
+        {[["Consultation types", "consultationTypes", serverReport?.consultationTypes], ["Treatments", "treatments", serverReport?.treatments], ["Medication use", "medications", serverReport?.medications], ["Supply use", "supplies", serverReport?.supplies], ["Unclassified historical items", "unclassifiedItems", serverReport?.unclassifiedItems]].map(([title, key, values]) => {
           const entries = Object.entries(values || {});
           const suppressed = serverReport?.suppressedAggregates?.includes(key);
           return <section className="panel table-panel" key={key}><div className="panel-heading"><h3>{title}</h3></div>{entries.map(([label, count]) => <div className="queue-row" key={label}><span>{label}</span><strong>{count}</strong></div>)}{suppressed && <p className="field-hint" role="note">Small categories are suppressed to protect privacy.</p>}{!suppressed && !entries.length && <p className="empty-state">No records in this period.</p>}</section>;
@@ -191,43 +174,6 @@ export default function Reports({ data, user }) {
             {!Object.keys(gradeCounts).length && <tr><td colSpan="3" className={serverReport?.suppressedAggregates?.includes('grades') ? 'field-hint' : 'empty-state'}>{serverReport?.suppressedAggregates?.includes('grades') ? 'Small grade categories are suppressed to protect privacy.' : 'No grade-level visit records in this period.'}</td></tr>}
           </tbody>
         </table>
-      </section>
-      <section className="panel table-panel incident-report-summary">
-        <div className="panel-heading">
-          <div>
-            <p className="section-kicker">Safety & documentation</p>
-            <h3>Incident reports</h3>
-          </div>
-          <strong className="report-count">{serverReport?.suppressedTotals?.includes('incidents') ? 'Withheld' : `${serverReport?.totals?.incidents ?? incidents.length} recorded`}</strong>
-        </div>
-        {canViewClinicalDetails && incidents.length > 0 ? (
-          <table>
-            <thead>
-              <tr>
-                <th>Student</th>
-                <th>Date</th>
-                <th>Type</th>
-                <th>Location</th>
-                <th>Severity</th>
-                <th>Parent notified</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...incidents].reverse().map((incident) => (
-                <tr key={incident.id}>
-                  <td><strong>{getStudentName(incident.studentId)}</strong></td>
-                  <td>{incident.date ? new Date(incident.date).toLocaleString() : "—"}</td>
-                  <td>{incident.type || "—"}</td>
-                  <td>{incident.location || "—"}</td>
-                  <td><span className={`status-chip ${incident.severity === "Critical" || incident.severity === "Severe" ? "danger" : incident.severity === "Moderate" ? "warn" : "neutral"}`}>{incident.severity || "—"}</span></td>
-                  <td>{incident.parentNotified ? "Yes" : "No"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <p className="empty-state">{serverReport?.suppressedTotals?.includes('incidents') ? 'Incident counts are suppressed to protect privacy.' : serverReport?.totals?.incidents ? 'Incident details are restricted; the aggregate count is shown above.' : 'No incident reports have been recorded in this period.'}</p>
-        )}
       </section>
     </div>
   );
