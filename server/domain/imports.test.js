@@ -36,8 +36,8 @@ test('faculty health record fields enforce their storage limits', () => {
 
 test('import preview marks repeated identifiers and rejects selecting duplicates', () => {
   const preview = normalizeImportRows('students', [
-    { studentId: 'PTHI-1', name: 'Fictional Student' },
-    { studentId: 'pthi-1', name: 'Duplicate Student' },
+    { studentId: 'PTHI-1', name: 'Fictional Student', gradeLevel: 'Kindergarten' },
+    { studentId: 'pthi-1', name: 'Duplicate Student', gradeLevel: 'Grade 10' },
   ]);
   assert.equal(preview.normalizedRows[1].status, 'duplicate');
   assert.deepEqual(selectedImportRows(preview.normalizedRows, [0, 1]), {
@@ -47,6 +47,17 @@ test('import preview marks repeated identifiers and rejects selecting duplicates
     rows: [{ index: 1, errors: [], duplicateReason: 'This row repeats an earlier row in the file.' }],
   });
   assert.equal(selectedImportRows(preview.normalizedRows, [0]).valid, true);
+});
+
+test('student roster import accepts kindergarten through grade ten and stores only identity fields', () => {
+  const preview = normalizeImportRows('students', [{
+    studentId: 'PTHI-K-01', name: 'Fictional Kindergartener', gradeLevel: 'Kindergarten',
+    section: 'Sample Section', adviser: 'Fictional Adviser', guardianName: 'Must not import', birthDate: '2019-01-01',
+  }]);
+  assert.equal(preview.normalizedRows[0].status, 'ready');
+  assert.deepEqual(Object.keys(preview.normalizedRows[0].record).sort(), ['adviser', 'gradeLevel', 'name', 'patientType', 'section', 'studentId'].sort());
+  const invalidGrade = normalizeImportRows('students', [{ studentId: 'PTHI-X', name: 'Fictional Student', gradeLevel: 'Grade 11' }]);
+  assert.equal(invalidGrade.normalizedRows[0].status, 'invalid');
 });
 
 test('historical visit import validates real dates, required fields, and batch limits', () => {

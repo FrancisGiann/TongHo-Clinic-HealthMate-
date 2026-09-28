@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 const CONSENT_STATUSES = new Set(['unrecorded', 'pending', 'received', 'not_required']);
 const BROADCAST_TYPES = new Set(['announcement', 'emergency', 'consent_reminder']);
-const BROADCAST_ROLES = new Set(['student', 'guardian', 'school_nurse', 'system_administrator']);
+const BROADCAST_ROLES = new Set(['guardian', 'school_nurse', 'system_administrator']);
 
 function isIsoDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;

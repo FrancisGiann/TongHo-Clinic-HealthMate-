@@ -156,7 +156,7 @@ export async function loadSession(req, _res, next, queryFn = query) {
     const result = await queryFn(
       `UPDATE sessions s SET last_seen_at=NOW() FROM users u
        WHERE s.user_id=u.id AND s.token_hash=$1 AND s.expires_at>NOW()
-         AND s.last_seen_at>NOW()-($2::double precision * INTERVAL '1 millisecond') AND u.status='active'
+         AND s.last_seen_at>NOW()-($2::double precision * INTERVAL '1 millisecond') AND u.status='active' AND u.role<>'student'
        RETURNING u.*`,
       [hashSecret(token), SESSION_IDLE_TTL_MS],
     );

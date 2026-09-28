@@ -6313,6 +6313,52 @@ nav a.active,
 .portal-detail-field dt { margin-bottom: 3px; color: var(--muted); font-size: 10px; font-weight: 600; }
 .portal-detail-field dd { margin: 0; color: var(--ink); font-size: 13px; font-weight: 500; overflow-wrap: anywhere; white-space: pre-wrap; }
 .portal-account-note { margin: 12px 0 0; color: var(--muted); font-size: 12px; }
+.privacy-notice,
+.paper-signature-metadata {
+  padding: 13px 15px;
+  border: 1px solid color-mix(in srgb, var(--teal) 24%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--teal) 7%, var(--surface));
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.privacy-notice p { margin: 4px 0 0; color: var(--muted); }
+.review-notice {
+  padding: 13px 15px;
+  border: 1px solid #e8cc8e;
+  border-radius: 10px;
+  background: #fff8e8;
+  color: #604918;
+  font-size: 12px;
+}
+.review-notice p { margin: 4px 0 0; }
+.none-or-details { display: grid; gap: 5px; margin: 12px 0 18px; }
+.none-or-details .checkbox-label { margin: 0; }
+.none-or-details .field-hint { margin: 0; }
+fieldset.form-section { min-width: 0; border: 0; }
+.guardian-attestation { padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft, #f8faf9); }
+.review-submission-list,
+.review-history-list { display: grid; gap: 14px; }
+.review-submission { min-width: 0; padding: 17px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.review-submission > label { display: grid; gap: 6px; margin: 13px 0; }
+.review-submission details > summary,
+.review-history-item > summary { color: var(--teal-dark); font-size: 12px; font-weight: 700; cursor: pointer; }
+.review-answer-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 13px; }
+.review-answer-groups section { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 9px; }
+.review-answer-groups h4 { margin: 0 0 7px; color: var(--ink); font-size: 12px; }
+.review-answer-groups ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: var(--muted); font-size: 11px; }
+.review-history-item { padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+.review-history-item p { color: var(--muted); font-size: 11px; }
+.submission-history p { color: var(--muted); font-size: 12px; }
+.dark .privacy-notice,
+.dark .paper-signature-metadata { background: #1e3533; border-color: #355a55; }
+.dark .review-notice { background: #392f1c; border-color: #6b5528; color: #f3dfaa; }
+.dark .guardian-attestation,
+.dark .review-submission,
+.dark .review-history-item { background: #1e2929; }
+.dark .review-submission details > summary,
+.dark .review-history-item > summary { color: #9be3d7; }
 .portal-password-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; max-width: 820px; }
 .portal-password-form label:first-child,
 .portal-password-form .error-banner,
@@ -6333,7 +6379,8 @@ nav a.active,
   .portal-profile-row .portal-row-action { justify-self: start; min-height: 44px; }
   .portal-detail-panel { padding: 17px; }
   .portal-detail-grid,
-  .portal-password-form { grid-template-columns: minmax(0, 1fr); }
+  .portal-password-form,
+  .review-answer-groups { grid-template-columns: minmax(0, 1fr); }
   .portal-password-form label:first-child,
   .portal-password-form .error-banner,
   .portal-password-form .success-message,

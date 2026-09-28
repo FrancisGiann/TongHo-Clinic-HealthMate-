@@ -57,6 +57,46 @@ test('every inventory write route applies a nurse-only authorization guard', () 
   }
 });
 
+test('guardian health records are scoped to guardians, nurse review is nurse-only, and appointment requests remain available to guardians', () => {
+  const app = createApp();
+  const routes = [
+    { path: '/api/guardian/health-records', method: 'get', allow: 'guardian' },
+    { path: '/api/guardian/health-records/:patientId/draft', method: 'put', allow: 'guardian' },
+    { path: '/api/guardian/health-records/:patientId/submit', method: 'post', allow: 'guardian' },
+    { path: '/api/nurse/health-record-submissions', method: 'get', allow: 'school_nurse' },
+    { path: '/api/appointments', method: 'post', allow: 'guardian' },
+  ];
+  for (const expected of routes) {
+    const layer = app.router.stack.find((entry) => entry.route?.path === expected.path && entry.route.methods[expected.method]);
+    assert.ok(layer, `${expected.method.toUpperCase()} ${expected.path} exists`);
+    const guard = layer.route.stack[0].handle;
+    const invoke = (role) => {
+      let statusCode = 200;
+      let nextCalled = false;
+      const response = { status(code) { statusCode = code; return { json: () => response }; } };
+      guard({ user: { role } }, response, () => { nextCalled = true; });
+      return { statusCode, nextCalled };
+    };
+    assert.deepEqual(invoke(expected.allow), { statusCode: 200, nextCalled: true }, `${expected.allow} is allowed`);
+    assert.deepEqual(invoke('student'), { statusCode: 403, nextCalled: false }, 'student accounts cannot use online workflows');
+  }
+});
+
+test('guardian invitation requires an administrator and a student patient link', () => {
+  const app = createApp();
+  const route = app.router.stack.find((layer) => layer.route?.path === '/api/admin/users/invite' && layer.route.methods.post);
+  assert.ok(route);
+  const guard = route.route.stack[0].handle;
+  for (const [role, allowed] of [['system_administrator', true], ['guardian', false], ['school_nurse', false]]) {
+    let statusCode = 200;
+    let nextCalled = false;
+    const response = { status(code) { statusCode = code; return { json: () => response }; } };
+    guard({ user: { role } }, response, () => { nextCalled = true; });
+    assert.equal(nextCalled, allowed);
+    if (!allowed) assert.equal(statusCode, 403);
+  }
+});
+
 test('persisting the built-in candidate draft is administrator-only', () => {
   const app = createApp();
   const route = app.router.stack.find((layer) => layer.route?.path === '/api/risk/rules/conservative-candidate');

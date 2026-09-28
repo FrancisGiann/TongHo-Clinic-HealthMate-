@@ -14,8 +14,9 @@ import Home from './pages/Home';
 import Login from './pages/Login';
 import PortalDashboard from './pages/PortalDashboard';
 import PortalAccount from './pages/PortalAccount';
-import PortalProfiles from './pages/PortalProfiles';
 import PortalVisits from './pages/PortalVisits';
+import GuardianHealthRecords from './pages/GuardianHealthRecords';
+import HealthRecordReview from './pages/HealthRecordReview';
 import Appointments from './pages/Appointments';
 import { useClinicData } from './hooks/useClinicData';
 import { getCurrentUser, logoutUser } from './utils/auth';
@@ -62,7 +63,7 @@ export default function App() {
       />
     );
   }
-  if (!['student', 'guardian', 'school_nurse', 'system_administrator'].includes(user.role)) return <div className="loading-screen"><p role="alert">This account has no supported HealthMate+ role.</p><button className="primary-btn" onClick={handleLogout}>Sign out</button></div>;
+  if (!['guardian', 'school_nurse', 'system_administrator'].includes(user.role)) return <div className="loading-screen"><p role="alert">This account has no supported HealthMate+ role.</p><button className="primary-btn" onClick={handleLogout}>Sign out</button></div>;
   if (!clinic.ready) return (
     <div className="loading-screen">
       {clinic.error ? <><p role="alert">Authorized clinic records could not be loaded. {clinic.error}</p><button className="primary-btn" onClick={clinic.reload}>Try again</button></> : 'Loading authorized clinic records…'}
@@ -95,6 +96,7 @@ export default function App() {
               <Route path="/students/new" element={<StudentRegistration data={data} commitData={clinic.commitData} />} />
               <Route path="/faculty/new" element={<FacultyRegistration data={data} reload={clinic.reload} />} />
               <Route path="/students/:studentId" element={<StudentProfile data={data} commitData={clinic.commitData} reload={clinic.reload} />} />
+              <Route path="/health-record-review" element={<HealthRecordReview data={data} />} />
               <Route path="/new-visit" element={<NewVisit data={data} user={user} reload={clinic.reload} refreshInBackground={clinic.refreshInBackground} />} />
               <Route path="/inventory" element={<Inventory data={data} applyServerData={clinic.applyServerData} reload={clinic.reload} saving={clinic.saving} />} />
               <Route path="/reports" element={<Reports />} />
@@ -118,24 +120,27 @@ export default function App() {
           ) : (
             <>
               <Route path="/" element={<PortalDashboard data={data} user={user} />} />
-              <Route path="/profiles" element={<PortalProfiles data={data} user={user} />} />
-              <Route path="/profiles/:patientId" element={<PortalProfiles data={data} user={user} />} />
+              <Route path="/health-records" element={<GuardianHealthRecords />} />
+              <Route path="/health-records/:patientId" element={<GuardianHealthRecords />} />
+              <Route path="/profiles" element={<Navigate to="/health-records" replace />} />
+              <Route path="/profiles/:patientId" element={<GuardianHealthRecords />} />
               <Route path="/visits" element={<PortalVisits data={data} user={user} />} />
               <Route path="/visits/:visitId" element={<PortalVisits data={data} user={user} />} />
               <Route path="/appointments" element={<Appointments data={data} user={user} reload={clinic.reload} />} />
               <Route path="/settings" element={<PortalAccount user={user} onPasswordChanged={() => setUser(null)} />} />
             </>
           )}
-          <Route path="/immunizations" element={<Navigate to={isNurse ? '/students' : isAdmin ? '/' : '/profiles'} replace />} />
+          <Route path="/immunizations" element={<Navigate to={isNurse ? '/students' : isAdmin ? '/' : '/health-records'} replace />} />
           <Route path="/queue" element={<Navigate to={isNurse ? '/new-visit' : isAdmin ? '/' : '/appointments'} replace />} />
-          <Route path="/health-screening" element={<Navigate to={isNurse ? '/students' : isAdmin ? '/' : '/profiles'} replace />} />
-          <Route path="/incident-reports" element={<Navigate to={isNurse ? '/students' : isAdmin ? '/' : '/profiles'} replace />} />
+          <Route path="/health-screening" element={<Navigate to={isNurse ? '/students' : isAdmin ? '/' : '/health-records'} replace />} />
+          <Route path="/incident-reports" element={<Navigate to={isNurse ? '/students' : isAdmin ? '/' : '/health-records'} replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
     </>
   );
 }
+
 
 function AdminSettingsEntry({ data, user, reload }) {
   const location = useLocation();

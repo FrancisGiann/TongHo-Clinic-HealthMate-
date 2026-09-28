@@ -25,18 +25,15 @@ export default function PortalDashboard({ data, user }) {
       && timestamp >= now
       && ['Requested', 'Pending', 'Scheduled'].includes(appointment.status))
     .sort((first, second) => first.timestamp - second.timestamp);
-  const greetingName = user?.name || (user?.role === 'guardian' ? 'Guardian' : 'Student');
-  const isGuardian = user?.role === 'guardian';
+  const greetingName = user?.name || 'Guardian';
 
   return (
     <div className="portal-dashboard">
       <header className="portal-dashboard-header">
         <div>
-          <p className="portal-dashboard-context">{isGuardian ? 'Linked student records' : 'Your health records'}</p>
+          <p className="portal-dashboard-context">Linked student records</p>
           <h2>Welcome, {greetingName}</h2>
-          <p>{isGuardian
-            ? 'See the clinic information shared with your account and manage appointment requests.'
-            : 'See your clinic information and manage appointment requests.'}</p>
+          <p>See the clinic information shared with your guardian account and manage linked-student appointment requests.</p>
         </div>
         <Link className="primary-btn" to="/appointments">
           <CalendarDays size={16} aria-hidden="true" />
@@ -45,14 +42,14 @@ export default function PortalDashboard({ data, user }) {
       </header>
 
       <nav className="portal-summary" aria-label="Portal sections">
-        <PortalSummary icon={HeartPulse} label={isGuardian ? 'Linked profiles' : 'Your profile'} value={patients.length} to="/profiles" />
+        <PortalSummary icon={HeartPulse} label="Linked student profiles" value={patients.length} to="/health-records" />
         <PortalSummary icon={CalendarDays} label="Upcoming appointments" value={upcomingAppointments.length} to="/appointments" />
         <PortalSummary icon={ClipboardList} label="Recent visits" value={visits.length} to="/visits" />
       </nav>
 
       <section className="panel portal-panel" id="portal-profiles" aria-labelledby="portal-profiles-heading">
         <div className="panel-heading">
-          <div><h3 id="portal-profiles-heading">{isGuardian ? 'Linked health profiles' : 'Your health profile'}</h3><p>Information available to this signed-in account</p></div>
+          <div><h3 id="portal-profiles-heading">Linked health profiles</h3><p>Information available for students linked to this guardian account</p></div>
         </div>
         {patients.length ? (
           <div className="portal-profile-list">
@@ -104,7 +101,7 @@ export default function PortalDashboard({ data, user }) {
             <CalendarDays size={22} aria-hidden="true" />
             <div><strong>No upcoming appointments</strong><p>{patients.length
               ? 'Request a clinic appointment when a follow-up is needed.'
-              : 'Appointment requests become available after a student profile is linked.'}</p></div>
+              : 'Appointment requests become available after a student record is linked to your guardian account.'}</p></div>
           </div>
         )}
       </section>

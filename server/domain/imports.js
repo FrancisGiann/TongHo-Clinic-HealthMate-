@@ -38,23 +38,20 @@ function normalizeRosterRow(type, row) {
         conditions: bounded(row?.conditions, 2000, 'Medical conditions', errors),
         medications: bounded(row?.medications, 2000, 'Medications', errors),
       }
-    : {
+      : {
         patientType: 'student',
         studentId: bounded(row?.studentId, 80, 'Student ID', errors),
         name,
         gradeLevel: bounded(row?.gradeLevel, 40, 'Grade level', errors),
         section: bounded(row?.section, 80, 'Section', errors),
         adviser: bounded(row?.adviser, 160, 'Adviser', errors),
-        birthDate: bounded(row?.birthDate, 10, 'Birth date', errors),
-        gender: bounded(row?.gender, 30, 'Gender', errors),
-        guardianName: bounded(row?.guardianName, 160, 'Guardian name', errors),
-        guardianPhone: bounded(row?.guardianPhone, 40, 'Guardian phone', errors),
-        guardianRelation: bounded(row?.guardianRelation, 80, 'Guardian relationship', errors),
       };
 
   const identifier = type === 'faculty' ? record.facultyId : record.studentId;
   if (!identifier) errors.push(`${type === 'faculty' ? 'Faculty ID' : 'Student ID'} is required.`);
   if (!name) errors.push('Name is required.');
+  if (type === 'students' && !record.gradeLevel) errors.push('Grade level is required.');
+  if (type === 'students' && record.gradeLevel && !['Kindergarten', ...Array.from({ length: 10 }, (_, index) => `Grade ${index + 1}`)].includes(record.gradeLevel)) errors.push('Grade level must be Kindergarten or Grade 1 through Grade 10.');
   if (record.birthDate && !validDate(record.birthDate)) errors.push('Birth date must be a real date in YYYY-MM-DD format.');
   if (record.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(record.email)) errors.push('Email must be a valid email address.');
   if (type === 'faculty') record.studentId = record.facultyId;

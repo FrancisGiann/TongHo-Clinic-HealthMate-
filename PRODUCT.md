@@ -8,15 +8,15 @@ web
 
 ## Users
 
-The primary user is the Philippine Tong Ho Institute school nurse working on a desktop or laptop during active clinic hours, including high-volume periods. Secondary users are system administrators managing access and oversight, students viewing their own records and appointments, and parents or guardians viewing records and appointments for linked students.
+The primary user is the Philippine Tong Ho Institute school nurse working on a desktop or laptop during active clinic hours, including high-volume periods. Secondary users are system administrators managing access and oversight and parents or guardians viewing and submitting health information for linked students. Students from Kindergarten through Grade 10 are school-managed patient records and do not have accounts or sign in.
 
 ## Product Purpose
 
-HealthMate+ replaces fragmented paper clinic records and manual workflows with one secure clinic system for a single school nurse. It centralizes patient profiles, consultation history, appointments, risk indicators, notifications, inventory activity, and clinic reports. Success means clinic staff can record and retrieve accurate information quickly while each user sees only authorized data.
+HealthMate+ replaces fragmented paper clinic records and manual workflows with one secure clinic system for a single school nurse. It centralizes roster-managed patient profiles, guardian-submitted health records reviewed by a nurse, consultation history, guardian appointment requests, risk indicators, notifications, inventory activity, and clinic reports. Success means clinic staff can record and retrieve accurate information quickly while each user sees only authorized data.
 
 ## Positioning
 
-HealthMate+ combines PTHI-specific clinic workflows with explainable risk and pain scoring, role-specific health portals, automated reporting, and nurse-reviewed clinical automation. It assists clinical judgment and does not diagnose patients or replace the school nurse.
+HealthMate+ combines PTHI-specific clinic workflows with explainable risk and pain scoring, guardian-led health records, automated reporting, and nurse-reviewed clinical automation. It assists clinical judgment and does not diagnose patients or replace the school nurse.
 
 ## Operating Context
 
@@ -24,8 +24,9 @@ The application is used through standard desktop and laptop web browsers. It sup
 
 ## Capabilities and Constraints
 
-- Roles are student, guardian, school nurse, and system administrator.
-- Student and guardian access is limited to linked patient records and appointments.
+- Sign-in roles are guardian, school nurse, and system administrator. The legacy student database role remains only to preserve deactivated historical accounts.
+- Guardians can access only linked student records and request appointments for those students. They attest to health-record submissions; nurses review before answers update the patient profile.
+- Student roster imports are limited to student ID, name, grade, section, and adviser. Kindergarten and Grades 1–10 are supported. Student accounts, student portal access, and student appointment requests are removed.
 - Email OTP, expiring sessions, audit logs, and server-side authorization protect access.
 - Pain scores use the paper-defined 1–10 range and contribute to versioned risk rules.
 - Risk results are explainable decision support; demonstration rules remain visibly unapproved until a licensed PTHI clinician approves a version.

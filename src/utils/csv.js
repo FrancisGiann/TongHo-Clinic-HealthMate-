@@ -44,7 +44,8 @@ export function validateStudentImport(rows, existingStudents = []) {
   const headers = rows[0].map((header) => String(header).trim().toLowerCase());
   const studentIdIndex = headers.findIndex((header) => ['student id', 'studentid', 'id'].includes(header));
   const nameIndex = headers.findIndex((header) => ['name', 'full name', 'fullname'].includes(header));
-  if (studentIdIndex < 0 || nameIndex < 0) return { valid: false, errors: ['The CSV must include Student ID and Name columns.'] };
+  const gradeIndex = headers.findIndex((header) => ['grade', 'grade level', 'gradelevel'].includes(header));
+  if (studentIdIndex < 0 || nameIndex < 0 || gradeIndex < 0) return { valid: false, errors: ['The CSV must include Student ID, Name, and Grade columns.'] };
   const existing = new Set(existingStudents.map((student) => String(student.studentId || '').trim().toLowerCase()).filter(Boolean));
   const seen = new Set();
   const errors = [];
@@ -52,12 +53,14 @@ export function validateStudentImport(rows, existingStudents = []) {
   rows.slice(1).forEach((cells, index) => {
     const studentId = String(cells[studentIdIndex] || '').trim();
     const name = String(cells[nameIndex] || '').trim();
+    const gradeLevel = String(cells[gradeIndex] || '').trim();
     const key = studentId.toLowerCase();
     if (!studentId || !name) errors.push(`Row ${index + 2}: Student ID and Name are required.`);
+    else if (!['Kindergarten', ...Array.from({ length: 10 }, (_, grade) => `Grade ${grade + 1}`)].includes(gradeLevel)) errors.push(`Row ${index + 2}: Grade must be Kindergarten or Grade 1 through Grade 10.`);
     else if (seen.has(key) || existing.has(key)) errors.push(`Row ${index + 2}: duplicate Student ID ${studentId}.`);
     else {
       seen.add(key);
-      records.push({ studentId, name, gradeLevel: String(cells[headers.findIndex((header) => ['grade', 'gradelevel', 'grade level'].includes(header))] || '').trim(), section: String(cells[headers.indexOf('section')] || '').trim(), guardianName: String(cells[headers.findIndex((header) => ['guardian', 'guardianname', 'guardian name'].includes(header))] || '').trim(), guardianPhone: String(cells[headers.findIndex((header) => ['phone', 'guardianphone', 'guardian phone'].includes(header))] || '').trim() });
+      records.push({ studentId, name, gradeLevel, section: String(cells[headers.indexOf('section')] || '').trim(), adviser: String(cells[headers.indexOf('adviser')] || '').trim() });
     }
   });
   return { valid: errors.length === 0, errors, records };
@@ -69,8 +72,6 @@ const importHeaderAliases = {
   name: 'name', fullname: 'name', patientname: 'name',
   grade: 'gradeLevel', gradelevel: 'gradeLevel',
   section: 'section', adviser: 'adviser', birthdate: 'birthDate', gender: 'gender',
-  guardian: 'guardianName', guardianname: 'guardianName', guardianphone: 'guardianPhone', phone: 'guardianPhone',
-  guardianrelation: 'guardianRelation', relationship: 'guardianRelation',
   department: 'department', position: 'position', title: 'position', email: 'email', contact: 'contactNumber', contactnumber: 'contactNumber',
   patientid: 'patientId', visitdate: 'date', date: 'date', type: 'type', complaint: 'chiefComplaint', chiefcomplaint: 'chiefComplaint',
   treatment: 'treatment', disposition: 'disposition', notes: 'notes',
@@ -87,7 +88,7 @@ export function importCsvRecords(csvRows, type) {
   }
   return csvRows.slice(1).map((cells) => Object.fromEntries(headers
     .map((key, index) => [key, String(cells?.[index] || '').trim()])
-    .filter(([key]) => key)));
+    .filter(([key]) => key && (type !== 'students' || ['studentId', 'name', 'gradeLevel', 'section', 'adviser'].includes(key)))));
 }
 
 const serializeValue = (value) => {

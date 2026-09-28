@@ -139,13 +139,38 @@ test('internal demo snapshots do not write retired collections', async () => {
 
 test('roster bulk sync cannot set patient consent fields and preserves server values', async () => {
   const queries = [];
-  const client = { query: async (...args) => { queries.push(args); return { rows: [] }; } };
+  const client = { query: async (...args) => {
+    queries.push(args);
+    if (/SELECT data FROM patients/.test(args[0])) return { rows: [{ data: { guardianHealthRecord: { allergies: 'Peanuts', allergiesStatus: 'reported' } } }] };
+    return { rows: [] };
+  } };
   await syncPatients(client, [{ id: 'student-1', name: 'Fictional Patient', consentStatus: 'received', consentDueDate: '2099-01-01' }]);
-  const [sql, params] = queries[0];
+  const [sql, params] = queries.find(([statement]) => /INSERT INTO patients/.test(statement));
   assert.match(sql, /EXCLUDED\.data - 'consentStatus' - 'consentDueDate'/);
   assert.match(sql, /patients\.data->'consentStatus'/);
   assert.match(sql, /patients\.data->'consentDueDate'/);
-  assert.deepEqual(JSON.parse(params[2]), { id: 'student-1', name: 'Fictional Patient', consentStatus: 'received', consentDueDate: '2099-01-01' }, 'database expression, not client JSON, controls consent fields');
+  assert.deepEqual(JSON.parse(params[2]), {
+    id: 'student-1', name: 'Fictional Patient', consentStatus: 'received', consentDueDate: '2099-01-01',
+    allergies: 'Peanuts', allergiesStatus: 'reported',
+    guardianHealthRecord: { allergies: 'Peanuts', allergiesStatus: 'reported' },
+  }, 'canonical accepted answers come from the locked database row while SQL controls consent fields');
+});
+
+test('nurse clinic snapshots cannot overwrite accepted guardian health fields', async () => {
+  const queries = [];
+  const accepted = { allergies: 'Peanuts', allergiesStatus: 'reported', medicationAtHome: { pain: true, painName: 'Acetaminophen' } };
+  const client = { query: async (...args) => {
+    queries.push(args);
+    if (/SELECT data FROM patients/.test(args[0])) return { rows: [{ data: { guardianHealthRecord: accepted } }] };
+    return { rows: [] };
+  } };
+  await syncPatients(client, [{ id: 'student-1', patientType: 'student', name: 'Fictional Patient', allergies: '', allergiesStatus: 'none', medicationAtHome: { pain: false } }]);
+  const [, params] = queries.find(([statement]) => /INSERT INTO patients/.test(statement));
+  const stored = JSON.parse(params[2]);
+  assert.equal(stored.allergies, 'Peanuts');
+  assert.equal(stored.allergiesStatus, 'reported');
+  assert.deepEqual(stored.medicationAtHome, { pain: true, painName: 'Acetaminophen' });
+  assert.deepEqual(stored.guardianHealthRecord, accepted);
 });
 
 test('dedicated transactional writes reject a stale clinic snapshot version', async () => {

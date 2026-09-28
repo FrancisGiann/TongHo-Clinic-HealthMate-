@@ -51,10 +51,11 @@ import { canRollbackImport, normalizeImportRows, selectedImportRows } from './do
 import { ensureSameOrigin, loginOtpRequired, rateLimit, requestOriginAllowed, trustProxyHops } from './security.js';
 import { buildInvitationActivationUrl } from './invitationUrl.js';
 import { recordNurseLicenseVerification, validateNurseLicenseUpdate } from './domain/nurseLicense.js';
+import { acceptedProfileFields, normalizeDocumentReceiptStatus, normalizeHealthRecordAnswers, validatePaperSignatureForAcceptance } from './domain/health-records.js';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const distDir = join(currentDir, '..', 'dist');
-const allowedRoles = new Set(['student', 'guardian', 'school_nurse', 'system_administrator']);
+const allowedRoles = new Set(['guardian', 'school_nurse', 'system_administrator']);
 const staffRoles = reportReadRoles;
 
 function errorResponse(res, status, code, message, fields) {
@@ -92,11 +93,12 @@ async function latestRules() {
 
 async function canAccessPatient(user, patientId) {
   if (staffRoles.includes(user.role)) return true;
-  if (user.role === 'student') {
-    const result = await query('SELECT 1 FROM patients WHERE id=$1 AND user_id=$2', [String(patientId), user.id]);
-    return Boolean(result.rowCount);
-  }
-  const result = await query('SELECT 1 FROM guardian_patient_links WHERE guardian_user_id=$1 AND patient_id=$2', [user.id, String(patientId)]);
+  if (user.role !== 'guardian') return false;
+  const result = await query(
+    `SELECT 1 FROM guardian_patient_links l JOIN patients p ON p.id=l.patient_id
+     WHERE l.guardian_user_id=$1 AND l.patient_id=$2 AND p.patient_type='student'`,
+    [user.id, String(patientId)],
+  );
   return Boolean(result.rowCount);
 }
 
@@ -114,10 +116,8 @@ async function createNotification({ userId, channel = 'in_app', type, subject, b
 async function notifyLinkedUsers(patientId, { type, subject, body, dedupeKey }) {
   const users = await query(
     `SELECT DISTINCT u.id,u.email,u.name FROM users u
-     WHERE u.status='active' AND (
-       u.id=(SELECT user_id FROM patients WHERE id=$1)
-       OR u.id IN (SELECT guardian_user_id FROM guardian_patient_links WHERE patient_id=$1)
-     )`,
+     WHERE u.status='active' AND u.role='guardian'
+       AND u.id IN (SELECT guardian_user_id FROM guardian_patient_links WHERE patient_id=$1)`,
     [String(patientId)],
   );
   for (const user of users.rows) {
@@ -274,7 +274,7 @@ export function createApp() {
       return errorResponse(res, 401, 'INVALID_CREDENTIALS', 'Invalid credentials.');
     }
     await clearFailedLogin(failureKey, identifier);
-    if (user.status !== 'active') return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'This account is not active. Contact an administrator.');
+    if (user.status !== 'active' || user.role === 'student') return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'This account is not active. Contact an administrator.');
     const requireOtp = loginOtpRequired();
     if (requireOtp) {
       const challengeId = await createOtpChallenge(user, 'login', { remember: req.body?.remember === true });
@@ -291,7 +291,7 @@ export function createApp() {
   app.post('/api/auth/otp/verify', otpVerifyLimiter, async (req, res) => {
     const challenge = await consumeOtp(req.body?.challengeId, req.body?.code, 'login');
     if (!challenge) return errorResponse(res, 400, 'INVALID_OTP', 'The verification code is invalid or expired.');
-    const result = await query("SELECT * FROM users WHERE id=$1 AND status='active'", [challenge.user_id]);
+    const result = await query("SELECT * FROM users WHERE id=$1 AND status='active' AND role<>'student'", [challenge.user_id]);
     const user = result.rows[0];
     if (!user) return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'This account is not active.');
     await issueSession(req, res, user, Boolean(challenge.metadata?.remember));
@@ -361,7 +361,7 @@ export function createApp() {
     }
     const user = await findUser(identifier);
     let challengeId = crypto.randomUUID();
-    if (user?.status === 'active') challengeId = await createOtpChallenge(user, 'password_reset');
+    if (user?.status === 'active' && user.role !== 'student') challengeId = await createOtpChallenge(user, 'password_reset');
     await audit(req, 'PASSWORD_RESET_REQUESTED', { accountFound: Boolean(user) });
     return res.json({ data: { challengeId, message: 'If the account exists, a reset code was sent.' } });
   });
@@ -374,10 +374,15 @@ export function createApp() {
     if (passwordError) return errorResponse(res, 400, 'WEAK_PASSWORD', passwordError);
     const challenge = await consumeOtp(req.body?.challengeId, req.body?.code, 'password_reset');
     if (!challenge) return errorResponse(res, 400, 'INVALID_OTP', 'The reset code is invalid or expired.');
-    await transaction(async (client) => {
-      await client.query('UPDATE users SET password_hash=$1,updated_at=NOW() WHERE id=$2', [await hashPassword(req.body.password), challenge.user_id]);
+    const account = await query("SELECT id FROM users WHERE id=$1 AND status='active' AND role<>'student'", [challenge.user_id]);
+    if (!account.rowCount) return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'This account cannot use password reset. Contact an administrator.');
+    const passwordChanged = await transaction(async (client) => {
+      const updated = await client.query("UPDATE users SET password_hash=$1,updated_at=NOW() WHERE id=$2 AND status='active' AND role<>'student'", [await hashPassword(req.body.password), challenge.user_id]);
+      if (!updated.rowCount) return false;
       await client.query('DELETE FROM sessions WHERE user_id=$1', [challenge.user_id]);
+      return true;
     });
+    if (!passwordChanged) return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'This account cannot use password reset. Contact an administrator.');
     await audit(req, 'PASSWORD_RESET_COMPLETED', {}, 'user', challenge.user_id);
     return res.json({ data: { success: true, message: 'Password reset successfully.' } });
   });
@@ -391,8 +396,17 @@ export function createApp() {
     const invitationResult = await query('SELECT * FROM invitations WHERE token_hash=$1 AND accepted_at IS NULL AND expires_at>NOW()', [tokenHash]);
     const invitation = invitationResult.rows[0];
     if (!invitation) return errorResponse(res, 400, 'INVALID_INVITATION', 'The invitation is invalid or expired.');
+    if (invitation.role === 'student') return errorResponse(res, 410, 'STUDENT_INVITATIONS_REMOVED', 'Students do not activate accounts. A parent or guardian can sign in after receiving a guardian invitation.');
     const userResult = await query('SELECT * FROM users WHERE LOWER(email)=LOWER($1)', [invitation.email]);
     const user = userResult.rows[0];
+    if (user?.role === 'guardian') {
+      const linkedStudent = await query(
+        `SELECT 1 FROM guardian_patient_links l JOIN patients p ON p.id=l.patient_id
+         WHERE l.guardian_user_id=$1 AND p.patient_type='student' LIMIT 1`,
+        [user.id],
+      );
+      if (!linkedStudent.rowCount) return errorResponse(res, 409, 'GUARDIAN_LINK_REQUIRED', 'A guardian account must be linked to a student before activation.');
+    }
     try {
       await transaction(async (client) => {
         await client.query("UPDATE users SET username=$1,password_hash=$2,status='active',updated_at=NOW() WHERE id=$3", [username, await hashPassword(req.body.password), user.id]);
@@ -410,9 +424,9 @@ export function createApp() {
     const name = String(req.body?.name || '').trim();
     const role = String(req.body?.role || '');
     if (!validEmail(email) || !name || !allowedRoles.has(role)) return errorResponse(res, 400, 'VALIDATION_ERROR', 'A valid name, email, and role are required.');
-    if (['student', 'guardian'].includes(role)) {
-      const patient = await query('SELECT 1 FROM patients WHERE id=$1', [String(req.body?.patientId || '')]);
-      if (!patient.rowCount) return errorResponse(res, 400, 'PATIENT_LINK_REQUIRED', 'Select an existing patient for student and guardian accounts.');
+    if (role === 'guardian') {
+      const patient = await query("SELECT 1 FROM patients WHERE id=$1 AND patient_type='student'", [String(req.body?.patientId || '')]);
+      if (!patient.rowCount) return errorResponse(res, 400, 'PATIENT_LINK_REQUIRED', 'Select an existing student patient record for the guardian account.');
     }
     if (await findUser(email)) return errorResponse(res, 409, 'ACCOUNT_EXISTS', 'An account with this email already exists.');
     const userId = crypto.randomUUID();
@@ -449,6 +463,47 @@ export function createApp() {
   });
 
   app.get('/api/admin/users', requireRoles('system_administrator'), async (_req, res) => res.json({ data: { users: await listUsers() } }));
+
+  app.patch('/api/admin/users/:id/patient-link', requireRoles('system_administrator'), async (req, res) => {
+    if (!validUuid(req.params.id)) return errorResponse(res, 400, 'INVALID_USER_ID', 'A valid user id is required.');
+    const patientId = String(req.body?.patientId || '').trim();
+    const relationship = String(req.body?.relationship || '').trim();
+    if (!patientId || patientId.length > 120 || !relationship || relationship.length > 80) return errorResponse(res, 400, 'VALIDATION_ERROR', 'A student record and guardian relationship are required.');
+    try {
+      await transaction(async (client) => {
+        const account = await client.query('SELECT id,role,status FROM users WHERE id=$1 FOR UPDATE', [req.params.id]);
+        if (!account.rowCount) {
+          const error = new Error('User not found.');
+          error.status = 404;
+          error.code = 'NOT_FOUND';
+          throw error;
+        }
+        if (account.rows[0].role !== 'guardian') {
+          const error = new Error('Only guardian accounts can be linked to a student.');
+          error.status = 409;
+          error.code = 'GUARDIAN_ACCOUNT_REQUIRED';
+          throw error;
+        }
+        const patient = await client.query("SELECT id FROM patients WHERE id=$1 AND patient_type='student'", [patientId]);
+        if (!patient.rowCount) {
+          const error = new Error('Student patient record not found.');
+          error.status = 404;
+          error.code = 'PATIENT_NOT_FOUND';
+          throw error;
+        }
+        await client.query(
+          `INSERT INTO guardian_patient_links(guardian_user_id,patient_id,relationship) VALUES($1,$2,$3)
+           ON CONFLICT(guardian_user_id,patient_id) DO UPDATE SET relationship=EXCLUDED.relationship`,
+          [req.params.id, patientId, relationship],
+        );
+        await audit(req, 'GUARDIAN_STUDENT_LINK_UPDATED', { relationship, accountStatus: account.rows[0].status }, 'user', req.params.id, client);
+      });
+      return res.json({ data: { success: true } });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code, error.message);
+      throw error;
+    }
+  });
 
   app.patch('/api/admin/users/:id/prc-license', requireRoles('system_administrator'), async (req, res) => {
     if (!validUuid(req.params.id)) return errorResponse(res, 400, 'INVALID_USER_ID', 'A valid user id is required.');
@@ -501,8 +556,17 @@ export function createApp() {
     const status = String(req.body?.status || '');
     if (!['active', 'suspended', 'deactivated'].includes(status)) return errorResponse(res, 400, 'INVALID_STATUS', 'Invalid account status.');
     if (req.params.id === req.user.id && status !== 'active') return errorResponse(res, 400, 'SELF_DEACTIVATION', 'You cannot deactivate your own account.');
-    const current = await query('SELECT status FROM users WHERE id=$1', [req.params.id]);
+    const current = await query('SELECT status,role FROM users WHERE id=$1', [req.params.id]);
     if (!current.rowCount) return errorResponse(res, 404, 'NOT_FOUND', 'User not found.');
+    if (current.rows[0].role === 'student' && status === 'active') return errorResponse(res, 409, 'STUDENT_LOGIN_REMOVED', 'Student accounts cannot be reactivated. Invite a guardian account instead.');
+    if (current.rows[0].role === 'guardian' && status === 'active') {
+      const linkedStudent = await query(
+        `SELECT 1 FROM guardian_patient_links l JOIN patients p ON p.id=l.patient_id
+         WHERE l.guardian_user_id=$1 AND p.patient_type='student' LIMIT 1`,
+        [req.params.id],
+      );
+      if (!linkedStudent.rowCount) return errorResponse(res, 409, 'GUARDIAN_LINK_REQUIRED', 'Link this guardian account to a student before restoring access.');
+    }
     if (current.rows[0].status === 'invited' && status === 'active') return errorResponse(res, 409, 'ACTIVATION_REQUIRED', 'Invited users must activate their account from the secure email link.');
     const result = await query('UPDATE users SET status=$1,updated_at=NOW() WHERE id=$2 RETURNING *', [status, req.params.id]);
     if (status !== 'active') await query('DELETE FROM sessions WHERE user_id=$1', [req.params.id]);
@@ -763,6 +827,346 @@ export function createApp() {
       return res.json({ data: { ...validation.value, schemaVersion: result.schemaVersion } });
     } catch (error) {
       if (error.status === 404) return errorResponse(res, 404, error.code, error.message);
+      throw error;
+    }
+  });
+
+  app.get('/api/guardian/health-records', requireRoles('guardian'), async (req, res) => {
+    const [settingsResult, patientResult] = await Promise.all([
+      query('SELECT data FROM clinic_settings WHERE id=1'),
+      query(
+        `SELECT p.id,p.data,d.payload AS draft_payload,d.version AS draft_version,d.updated_at AS draft_updated_at
+         FROM guardian_patient_links l
+         JOIN patients p ON p.id=l.patient_id AND p.patient_type='student'
+         LEFT JOIN guardian_health_record_drafts d
+           ON d.patient_id=p.id AND d.guardian_user_id=l.guardian_user_id
+          AND d.school_year=COALESCE((SELECT data->>'schoolYear' FROM clinic_settings WHERE id=1),'')
+         WHERE l.guardian_user_id=$1 ORDER BY p.created_at`,
+        [req.user.id],
+      ),
+    ]);
+    const schoolYear = String(settingsResult.rows[0]?.data?.schoolYear || '');
+    const patientIds = patientResult.rows.map((row) => row.id);
+    const submissionResult = patientIds.length
+      ? await query(
+        `SELECT id,patient_id,school_year,revision,source,status,payload,version,guardian_attested_at,
+                paper_signature_presence,nurse_notes,nurse_reviewed_at,created_at,updated_at
+         FROM health_record_submissions
+         WHERE patient_id=ANY($1::text[])
+         ORDER BY created_at DESC`,
+        [patientIds],
+      )
+      : { rows: [] };
+    const submissionsByPatient = new Map();
+    for (const row of submissionResult.rows) {
+      const key = String(row.patient_id);
+      submissionsByPatient.set(key, [...(submissionsByPatient.get(key) || []), row]);
+    }
+    const identityFields = ['studentId', 'name', 'gradeLevel', 'section', 'adviser'];
+    const currentAnswerFields = ['birthDate', 'gender', 'motherName', 'fatherName', 'guardianName', 'guardianPhone', 'guardianRelation', 'bloodType', 'allergies', 'allergiesStatus', 'conditions', 'conditionsStatus', 'medications', 'medicationsStatus', 'pastIllness', 'presentIllness', 'hospitalizationHistory', 'hospitalizationDetails', 'g6pdDeficiency', 'medicationAtHome', 'takingRegularMedication', 'regularMedicationName', 'onTherapy', 'lastTreatmentDate', 'therapistName', 'therapyInterventions', 'hasConcerns', 'concernsDetails', 'documentsSubmitted', 'documentsReceived'];
+    const records = patientResult.rows.map((row) => {
+      const profile = row.data || {};
+      const currentAnswers = Object.fromEntries(currentAnswerFields.filter((field) => profile[field] !== undefined).map((field) => [field, profile[field]]));
+      return {
+        patient: { id: row.id, ...Object.fromEntries(identityFields.filter((field) => profile[field] !== undefined).map((field) => [field, profile[field]])) },
+        currentAnswers,
+        draft: row.draft_payload ? { payload: row.draft_payload, version: row.draft_version, updatedAt: row.draft_updated_at } : null,
+        submissions: submissionsByPatient.get(String(row.id)) || [],
+      };
+    });
+    return res.json({ data: { schoolYear, records } });
+  });
+
+  app.put('/api/guardian/health-records/:patientId/draft', requireRoles('guardian'), async (req, res) => {
+    const patientId = String(req.params.patientId || '').trim();
+    const expectedVersion = Number(req.body?.version);
+    if (!patientId || patientId.length > 120 || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
+      return errorResponse(res, 400, 'VALIDATION_ERROR', 'A valid patient and draft version are required.');
+    }
+    const validation = normalizeHealthRecordAnswers(req.body?.payload);
+    if (!validation.valid) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Review the health record fields.', validation.errors);
+    try {
+      const draft = await transaction(async (client) => {
+        const patient = await client.query(
+          `SELECT p.id FROM patients p JOIN guardian_patient_links l ON l.patient_id=p.id
+           WHERE p.id=$1 AND p.patient_type='student' AND l.guardian_user_id=$2 FOR UPDATE OF p`,
+          [patientId, req.user.id],
+        );
+        if (!patient.rowCount) {
+          const error = new Error('This student is not linked to your account.');
+          error.status = 404;
+          error.code = 'PATIENT_NOT_LINKED';
+          throw error;
+        }
+        const settings = await client.query('SELECT data->>\'schoolYear\' AS school_year FROM clinic_settings WHERE id=1');
+        const schoolYear = String(settings.rows[0]?.school_year || '');
+        if (!schoolYear) {
+          const error = new Error('The current school year is not configured. Contact the school clinic.');
+          error.status = 409;
+          error.code = 'SCHOOL_YEAR_UNAVAILABLE';
+          throw error;
+        }
+        const current = await client.query(
+          'SELECT id,version FROM guardian_health_record_drafts WHERE patient_id=$1 AND guardian_user_id=$2 AND school_year=$3 FOR UPDATE',
+          [patientId, req.user.id, schoolYear],
+        );
+        if ((current.rowCount && Number(current.rows[0].version) !== expectedVersion)
+          || (!current.rowCount && expectedVersion !== 0)) {
+          const error = new Error('This draft changed in another session. Reload the form and try again.');
+          error.status = 409;
+          error.code = 'VERSION_CONFLICT';
+          throw error;
+        }
+        const result = current.rowCount
+          ? await client.query(
+            `UPDATE guardian_health_record_drafts SET payload=$1::jsonb,version=version+1,updated_at=NOW()
+             WHERE id=$2 RETURNING id,payload,version,updated_at`,
+            [JSON.stringify(validation.value), current.rows[0].id],
+          )
+          : await client.query(
+            `INSERT INTO guardian_health_record_drafts(id,patient_id,guardian_user_id,school_year,payload,version)
+             VALUES($1,$2,$3,$4,$5::jsonb,1) RETURNING id,payload,version,updated_at`,
+            [crypto.randomUUID(), patientId, req.user.id, schoolYear, JSON.stringify(validation.value)],
+          );
+        await audit(req, 'GUARDIAN_HEALTH_RECORD_DRAFT_SAVED', { schoolYear, version: result.rows[0].version }, 'patient', patientId, client);
+        return result.rows[0];
+      });
+      return res.json({ data: { draft } });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code, error.message);
+      throw error;
+    }
+  });
+
+  app.post('/api/guardian/health-records/:patientId/submit', requireRoles('guardian'), async (req, res) => {
+    const patientId = String(req.params.patientId || '').trim();
+    const expectedVersion = Number(req.body?.version);
+    if (!patientId || patientId.length > 120 || !Number.isInteger(expectedVersion) || expectedVersion < 1 || req.body?.attest !== true) {
+      return errorResponse(res, 400, 'ATTESTATION_REQUIRED', 'Save the draft and confirm the guardian attestation before submitting.');
+    }
+    try {
+      const submission = await transaction(async (client) => {
+        const patient = await client.query(
+          `SELECT p.id FROM patients p JOIN guardian_patient_links l ON l.patient_id=p.id
+           WHERE p.id=$1 AND p.patient_type='student' AND l.guardian_user_id=$2 FOR UPDATE OF p`,
+          [patientId, req.user.id],
+        );
+        if (!patient.rowCount) {
+          const error = new Error('This student is not linked to your account.');
+          error.status = 404;
+          error.code = 'PATIENT_NOT_LINKED';
+          throw error;
+        }
+        const settings = await client.query('SELECT data->>\'schoolYear\' AS school_year FROM clinic_settings WHERE id=1');
+        const schoolYear = String(settings.rows[0]?.school_year || '');
+        const draftResult = await client.query(
+          'SELECT payload,version FROM guardian_health_record_drafts WHERE patient_id=$1 AND guardian_user_id=$2 AND school_year=$3 FOR UPDATE',
+          [patientId, req.user.id, schoolYear],
+        );
+        if (!draftResult.rowCount) {
+          const error = new Error('Save a draft before submitting the health record.');
+          error.status = 409;
+          error.code = 'DRAFT_REQUIRED';
+          throw error;
+        }
+        if (Number(draftResult.rows[0].version) !== expectedVersion) {
+          const error = new Error('This draft changed in another session. Reload the form and try again.');
+          error.status = 409;
+          error.code = 'VERSION_CONFLICT';
+          throw error;
+        }
+        const duplicateSubmission = await client.query(
+          `SELECT id,patient_id,school_year,revision,source,status,payload,version,guardian_attested_at,created_at,updated_at
+           FROM health_record_submissions
+           WHERE patient_id=$1 AND guardian_user_id=$2 AND school_year=$3 AND draft_version=$4`,
+          [patientId, req.user.id, schoolYear, expectedVersion],
+        );
+        if (duplicateSubmission.rowCount) return duplicateSubmission.rows[0];
+        await client.query(
+          `UPDATE health_record_submissions SET status='superseded',version=version+1,updated_at=NOW()
+           WHERE patient_id=$1 AND guardian_user_id=$2 AND school_year=$3 AND status='changes_requested'`,
+          [patientId, req.user.id, schoolYear],
+        );
+        const revisionResult = await client.query(
+          'SELECT COALESCE(MAX(revision),0)+1 AS revision FROM health_record_submissions WHERE patient_id=$1 AND school_year=$2',
+          [patientId, schoolYear],
+        );
+        const id = crypto.randomUUID();
+        const result = await client.query(
+          `INSERT INTO health_record_submissions(id,patient_id,guardian_user_id,school_year,revision,source,status,payload,draft_version,guardian_attested_at,attestation_text)
+           VALUES($1,$2,$3,$4,$5,'guardian','pending_review',$6::jsonb,$7,NOW(),$8)
+           RETURNING id,patient_id,school_year,revision,source,status,payload,version,guardian_attested_at,created_at,updated_at`,
+          [id, patientId, req.user.id, schoolYear, revisionResult.rows[0].revision, JSON.stringify(draftResult.rows[0].payload), expectedVersion, 'I am this student’s parent or legal guardian. The information I provided is accurate to the best of my knowledge. I authorize the school nurse to review it for school health support. I understand that the nurse reviews submissions before they update the student health profile.'],
+        );
+        await audit(req, 'GUARDIAN_HEALTH_RECORD_SUBMITTED', { schoolYear, revision: result.rows[0].revision }, 'health_record_submission', id, client);
+        return result.rows[0];
+      });
+      return res.status(201).json({ data: { submission } });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code, error.message);
+      throw error;
+    }
+  });
+
+  app.get('/api/nurse/health-record-submissions', requireRoles('school_nurse'), async (req, res) => {
+    const history = req.query.history === 'true';
+    const parsedOffset = Number.parseInt(String(req.query.offset || '0'), 10);
+    const offset = Number.isInteger(parsedOffset) && parsedOffset > 0 ? Math.min(parsedOffset, 100000) : 0;
+    const pageSize = 100;
+    const result = await query(
+      `SELECT s.id,s.patient_id,s.guardian_user_id,s.school_year,s.revision,s.source,s.status,s.payload,s.version,
+              s.guardian_attested_at,s.paper_signature_presence,s.documents_received,s.nurse_notes,s.nurse_reviewed_at,s.created_at,
+              p.data->>'name' AS patient_name,p.data->>'studentId' AS student_id,p.data->>'gradeLevel' AS grade_level,
+              u.name AS guardian_name
+       FROM health_record_submissions s JOIN patients p ON p.id=s.patient_id
+       LEFT JOIN users u ON u.id=s.guardian_user_id
+       WHERE ($1::boolean AND s.status IN ('accepted','superseded'))
+          OR (NOT $1::boolean AND s.status IN ('pending_review','changes_requested'))
+       ORDER BY s.created_at DESC,s.id DESC LIMIT $2 OFFSET $3`,
+      [history, pageSize + 1, offset],
+    );
+    const hasMore = result.rows.length > pageSize;
+    return res.json({ data: { submissions: result.rows.slice(0, pageSize), nextOffset: hasMore ? offset + pageSize : null } });
+  });
+
+  app.post('/api/nurse/health-records/:patientId/transcribe', requireRoles('school_nurse'), async (req, res) => {
+    const patientId = String(req.params.patientId || '').trim();
+    const schoolYear = String(req.body?.schoolYear || '').trim();
+    const signatures = req.body?.paperSignaturePresence;
+    const validation = normalizeHealthRecordAnswers(req.body?.payload);
+    if (!patientId || patientId.length > 120 || !schoolYear || schoolYear.length > 40
+      || !signatures || typeof signatures.guardianPresent !== 'boolean' || typeof signatures.studentPresent !== 'boolean') {
+      return errorResponse(res, 400, 'VALIDATION_ERROR', 'Patient, school year, answers, and paper signature presence are required.');
+    }
+    if (!validation.valid) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Review the transcribed health record fields.', validation.errors);
+    try {
+      const submission = await transaction(async (client) => {
+        const patient = await client.query("SELECT id FROM patients WHERE id=$1 AND patient_type='student' FOR UPDATE", [patientId]);
+        if (!patient.rowCount) {
+          const error = new Error('Student patient record not found.');
+          error.status = 404;
+          error.code = 'PATIENT_NOT_FOUND';
+          throw error;
+        }
+        const guardian = await client.query('SELECT guardian_user_id FROM guardian_patient_links WHERE patient_id=$1 ORDER BY created_at LIMIT 1', [patientId]);
+        const revision = await client.query(
+          'SELECT COALESCE(MAX(revision),0)+1 AS revision FROM health_record_submissions WHERE patient_id=$1 AND school_year=$2',
+          [patientId, schoolYear],
+        );
+        const id = crypto.randomUUID();
+        const result = await client.query(
+          `INSERT INTO health_record_submissions(id,patient_id,guardian_user_id,school_year,revision,source,status,payload,paper_signature_presence)
+           VALUES($1,$2,$3,$4,$5,'paper','pending_review',$6::jsonb,$7::jsonb)
+           RETURNING id,patient_id,school_year,revision,source,status,payload,version,paper_signature_presence,created_at`,
+          [id, patientId, guardian.rows[0]?.guardian_user_id || null, schoolYear, revision.rows[0].revision, JSON.stringify(validation.value), JSON.stringify(signatures)],
+        );
+        await audit(req, 'PAPER_HEALTH_RECORD_TRANSCRIBED', { schoolYear, revision: result.rows[0].revision, paperSignaturePresence: signatures }, 'health_record_submission', id, client);
+        return result.rows[0];
+      });
+      return res.status(201).json({ data: { submission } });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code, error.message);
+      throw error;
+    }
+  });
+
+  app.post('/api/nurse/health-record-submissions/:id/review', requireRoles('school_nurse'), async (req, res) => {
+    const submissionId = String(req.params.id || '');
+    const expectedVersion = Number(req.body?.version);
+    const action = String(req.body?.action || '');
+    const notes = typeof req.body?.notes === 'string' ? req.body.notes.trim() : '';
+    const receiptValidation = normalizeDocumentReceiptStatus(req.body?.documentsReceived);
+    if (!validUuid(submissionId) || !Number.isInteger(expectedVersion) || expectedVersion < 1
+      || !['accept', 'request_changes'].includes(action) || notes.length > 2000 || !receiptValidation.valid) {
+      return errorResponse(res, 400, 'VALIDATION_ERROR', 'Provide a valid review action, version, and notes.');
+    }
+    try {
+      const reviewed = await transaction(async (client) => {
+        const locked = await client.query('SELECT * FROM health_record_submissions WHERE id=$1 FOR UPDATE', [submissionId]);
+        if (!locked.rowCount) {
+          const error = new Error('Health record submission not found.');
+          error.status = 404;
+          error.code = 'NOT_FOUND';
+          throw error;
+        }
+        const submission = locked.rows[0];
+        if (Number(submission.version) !== expectedVersion) {
+          const error = new Error('This submission changed in another session. Reload it before reviewing.');
+          error.status = 409;
+          error.code = 'VERSION_CONFLICT';
+          throw error;
+        }
+        if (!['pending_review', 'changes_requested'].includes(submission.status)) {
+          const error = new Error('This submission is no longer awaiting review.');
+          error.status = 409;
+          error.code = 'SUBMISSION_ALREADY_REVIEWED';
+          throw error;
+        }
+        const paperSignatureValidation = action === 'accept' ? validatePaperSignatureForAcceptance(submission) : { valid: true };
+        if (!paperSignatureValidation.valid) {
+          const error = new Error(paperSignatureValidation.message);
+          error.status = paperSignatureValidation.status;
+          error.code = paperSignatureValidation.code;
+          throw error;
+        }
+        let lockedPatient = null;
+        if (action === 'accept') {
+          lockedPatient = await client.query("SELECT data FROM patients WHERE id=$1 AND patient_type='student' FOR UPDATE", [submission.patient_id]);
+          if (!lockedPatient.rowCount) {
+            const error = new Error('Student patient record not found.');
+            error.status = 404;
+            error.code = 'PATIENT_NOT_FOUND';
+            throw error;
+          }
+          const newer = await client.query(
+            `SELECT id FROM health_record_submissions
+             WHERE patient_id=$1 AND id<>$2
+               AND ((school_year=$3 AND revision>$4 AND status IN ('pending_review','changes_requested','accepted'))
+                 OR (status='accepted' AND created_at>$5)) LIMIT 1`,
+            [submission.patient_id, submission.id, submission.school_year, submission.revision, submission.created_at],
+          );
+          if (newer.rowCount) {
+            const error = new Error('A newer revision exists. Review the most recent submission before accepting this one.');
+            error.status = 409;
+            error.code = 'STALE_SUBMISSION';
+            throw error;
+          }
+        }
+        const currentPayload = normalizeHealthRecordAnswers(submission.payload);
+        if (!currentPayload.valid) {
+          const error = new Error('The stored submission failed validation and cannot be accepted.');
+          error.status = 409;
+          error.code = 'SUBMISSION_INVALID';
+          throw error;
+        }
+        if (action === 'accept') {
+          const acceptedAnswers = acceptedProfileFields(currentPayload.value, lockedPatient.rows[0].data || {});
+          const receiptStatus = receiptValidation.value || submission.documents_received || {};
+          const nextProfile = { ...(lockedPatient.rows[0].data || {}), ...acceptedAnswers, documentsReceived: receiptStatus, guardianHealthRecord: acceptedAnswers };
+          await client.query('UPDATE patients SET data=$1::jsonb,updated_at=NOW() WHERE id=$2', [JSON.stringify(nextProfile), submission.patient_id]);
+        }
+        const status = action === 'accept' ? 'accepted' : 'changes_requested';
+        if (action === 'accept') {
+          await client.query(
+            `UPDATE health_record_submissions SET status='superseded',version=version+1,updated_at=NOW()
+             WHERE patient_id=$1 AND school_year=$2 AND id<>$3 AND revision<$4
+               AND status IN ('pending_review','changes_requested')`,
+            [submission.patient_id, submission.school_year, submissionId, submission.revision],
+          );
+        }
+        const result = await client.query(
+          `UPDATE health_record_submissions
+           SET status=$1,nurse_reviewed_by=$2,nurse_reviewed_at=NOW(),nurse_notes=$3,
+               documents_received=COALESCE($4::jsonb,documents_received),version=version+1,updated_at=NOW()
+           WHERE id=$5 RETURNING id,patient_id,school_year,revision,source,status,version,nurse_notes,nurse_reviewed_at,documents_received`,
+          [status, req.user.id, notes, receiptValidation.value ? JSON.stringify(receiptValidation.value) : null, submissionId],
+        );
+        await audit(req, action === 'accept' ? 'HEALTH_RECORD_SUBMISSION_ACCEPTED' : 'HEALTH_RECORD_CHANGES_REQUESTED', { schoolYear: submission.school_year, revision: submission.revision, documentsReceived: receiptValidation.value ? Object.keys(receiptValidation.value).filter((key) => receiptValidation.value[key]) : undefined }, 'health_record_submission', submissionId, client);
+        return result.rows[0];
+      });
+      return res.json({ data: { submission: reviewed } });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code, error.message);
       throw error;
     }
   });
@@ -1269,7 +1673,7 @@ export function createApp() {
     return res.json({ data: { notification: result.rows[0] } });
   });
 
-  app.post('/api/appointments', requireRoles('student', 'guardian', ...clinicalWriteRoles), async (req, res) => {
+  app.post('/api/appointments', requireRoles('guardian', ...clinicalWriteRoles), async (req, res) => {
     const patientId = String(req.body?.patientId || '').trim();
     const startsAt = clinicDateTime(req.body?.startsAt);
     const reason = String(req.body?.reason || '').trim().slice(0, 500);

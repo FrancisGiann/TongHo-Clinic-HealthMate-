@@ -25,7 +25,7 @@ test('broadcast requires bounded content, explicit valid recipients, and a UUID 
     type: 'emergency',
     subject: '  Weather closure  ',
     body: ' Please follow the school advisory. ',
-    roles: ['guardian', 'student'],
+    roles: ['guardian', 'school_nurse'],
     requestId: 'c694f921-0cc7-4b2b-a94f-d9362b8fb497',
   };
   assert.deepEqual(validateBroadcastPayload(payload), {
@@ -33,6 +33,7 @@ test('broadcast requires bounded content, explicit valid recipients, and a UUID 
     value: { ...payload, subject: 'Weather closure', body: 'Please follow the school advisory.' },
   });
   assert.equal(validateBroadcastPayload({ ...payload, roles: ['guardian', 'invalid'] }).valid, false);
+  assert.equal(validateBroadcastPayload({ ...payload, roles: ['student'] }).valid, false);
   assert.equal(validateBroadcastPayload({ ...payload, roles: ['guardian', 'guardian'] }).valid, false);
   assert.equal(validateBroadcastPayload({ ...payload, roles: [] }).valid, false);
   assert.equal(validateBroadcastPayload({ ...payload, subject: ' '.repeat(161) }).valid, false);

@@ -18,7 +18,11 @@ The name explanation may keep the “+” as *assistance/augmentation*, but shou
 
 ## Role-based access objective
 
-Students can access only their own health records and appointments, while parents or guardians can access records and appointments for students linked to their accounts. School nurses can view, create, and update patient profiles, consultation records, risk assessments, and other clinic workflows. System administrators manage user accounts, school and clinic settings, audit logs, and aggregate reports. They can manage the demographic information needed to link accounts to patients, but routine access to individual clinical records and clinical editing remains with the school nurse. These role boundaries limit access to information and functions needed for each user's responsibilities.
+Use this description wherever the paper explains account roles:
+
+> Students from Kindergarten through Grade 10 are school-managed patient records and do not sign in to HealthMate+. Administrators import minimal roster identity and class-placement data and link guardian accounts to student records. A linked parent or guardian can view the linked student’s health record, save a draft, and attest to and submit answers for nurse review. Student identity and class placement are read-only in that form. A school nurse reviews submissions before accepted answers update the clinical profile and continues to manage visits and appointments. Administrators manage user access and guardian links, school and clinic settings, audit logs, and aggregate reports. Access is restricted by role and student link.
+
+Use this boundary in **Objective 4** and every scope paragraph that says administrators can enter or modify clinical records, manage clinical triage, or see identifiable reports. Guardian access does not include routine clinical editing; pending answers remain separate until nurse acceptance. The student has no login or online attestation. Guardian appointment requests remain available for linked students.
 
 Use this boundary in **Objective 4** and every scope paragraph that says administrators can enter/modify clinical records, manage clinical triage, or see identifiable reports. There is no separate school-leadership account in the four-role model; authorized staff can provide appropriate aggregate reports to leadership. Nurse and administrator dashboards share some clinic summaries but expose different actions and data.
 
@@ -44,13 +48,14 @@ Do not claim every rejected OTP, locked-out attempt, or other possible authentic
 
 ## Scope: digital profiles and appointments
 
-- The current registration and clinical screens are **student-focused**. The database has a faculty patient type, but faculty registration, encounters, and reporting have not been verified as a complete user workflow. Remove “students and faculty members” from the initial-release promise or complete and test faculty support.
-- Students and linked guardians can request appointments; the school nurse manages clinic scheduling and status. The prototype supports one nurse and has no walk-in queue or triage workflow. Available appointment slots may be ranked from recent same-weekday clinic traffic; this is a rule-based suggestion, not AI optimization or a guarantee of shorter waits.
+- Student patient records cover Kindergarten through Grade 10. Roster import/register fields are limited to student ID, name, grade, section, and adviser; guardian contact and health answers are not asserted by the school roster import. The faculty patient type and its separately implemented workflows should be described only where the paper's tested evidence supports them.
+- Linked guardians can request appointments for students; the school nurse manages clinic scheduling and status. Students have no account or appointment-request access. The prototype supports one nurse and has no walk-in queue or triage workflow. Available appointment slots may be ranked from recent same-weekday clinic traffic; this is a rule-based suggestion, not AI optimization or a guarantee of shorter waits.
 - Prior clinic encounters, treatment notes, appointments, and imported historical visits are associated with the student record when entered. Do not claim a complete external hospital history or automatic migration from filing cabinets.
+- Guardian health records support online drafts, guardian-only attestations and submissions, nurse review/change requests/acceptance, annual renewal, and updates at any time. Paper forms may be transcribed with signature-presence metadata only; scans are not stored. Clinic document receipt is nurse-verified. The UI says **Review before live use** because notice and process approval remain external tasks.
 
 ## Scope: alerts, notifications, and AI automation
 
-- A recorded clinic visit can create in-app and email notices for the student and linked guardians with the visit date and type; it does **not** currently promise the exact visit time or detailed clinical contents in the message. Clinic-wide announcements can be sent by an administrator. There is no two-way “real-time messaging” feature.
+- A recorded clinic visit can create in-app and email notices for linked guardians with the visit date and type; it does **not** currently promise the exact visit time or detailed clinical contents in the message. Clinic-wide announcements can be sent by an administrator. There is no two-way “real-time messaging” feature.
 - Follow-up, pending-consent, and recurring-visit reminders are rule-based and deduplicated. Immunization reminders are outside scope and disabled. The background reminder scheduler is **opt-in for production** and depends on configured database and SMTP services; delivery has not been verified in production. Do not claim that every notification is successfully received. Automatic notifications triggered by arbitrary risk-score thresholds are not implemented.
 - Consultation summaries are drafts based on recorded encounter fields and require nurse review. The optional external AI provider and template fallback should be stated explicitly. Scheduling suggestions, recurrence checks, risk scores, and reminders are not generative AI outputs. Use the same description in both the Purpose and Description and AI-Assisted Clinical Automation sections.
 
@@ -70,12 +75,12 @@ The current prototype scope is one school nurse, with queue management and immun
 
 - **PTHI-specific scope:** The app tracks basic clinic medicine and supply stock. It is not a full pharmacy-management, hospital-laboratory, inpatient, or emergency-room system; clarify this distinction where the paper excludes “pharmacy inventory.”
 - **Mobile:** There is no native Android/iOS app, push-notification integration, or offline mode. The web interface has responsive layouts; avoid claiming mobile browsers are necessarily feature-restricted unless this is demonstrated in testing.
-- **Usability:** Simple navigation and accessible forms are design goals. Usability for parents, guardians, students, and staff must still be evaluated with participants; do not state that the interface has already reduced task time or errors.
+- **Usability:** Simple navigation and accessible forms are design goals. Usability for parents, guardians, and staff must still be evaluated with participants; do not state that the interface has already reduced task time or errors.
 
 ## Evidence still needed before final paper claims
 
 - PTHI authorization and a validated dataset before importing **actual** paper records; use fictional demo records for development and screenshots.
 - Licensed-clinician approval of real risk rules and review of any clinical claims.
-- Live end-to-end checks of nurse record/stock actions and student/guardian access, plus resolution of the blank nurse **Settings → Inventory requests** tab if that tab remains in scope.
+- Live end-to-end checks of nurse record/stock actions and guardian-only access, plus resolution of the blank nurse **Settings → Inventory requests** tab if that tab remains in scope.
 - Deployment and email-delivery tests on the chosen hosting services; current local success is not production proof.
 - The study's planned evaluation: participants, tasks, measures, results, and limitations. Do not invent improvement percentages, clinical outcomes, or user-satisfaction findings.

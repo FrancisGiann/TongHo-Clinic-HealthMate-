@@ -1,6 +1,6 @@
 # HealthMate+
 
-HealthMate+ is a centralized campus-clinic management system for the Philippine Tong Ho Institute. It supports student/guardian portals, nurse workflows, administration, appointments, clinic records, inventory, deterministic risk indicators, reports, audit logs, email OTP, and in-app notifications.
+HealthMate+ is a centralized campus-clinic management system for the Philippine Tong Ho Institute. It supports guardian-led student health records, nurse workflows, administration, guardian appointment requests, clinic records, inventory, deterministic risk indicators, reports, audit logs, email OTP, and in-app notifications. Students in Kindergarten through Grade 10 are school-managed patient records and do not have accounts or portal access. A nurse reviews guardian submissions before accepted answers update the clinical profile.
 
 ## Architecture
 
@@ -34,6 +34,7 @@ Demo seeding requires `NODE_ENV=development` and explicit opt-in with `SEED_DEMO
 
 - `npm run dev` — frontend and API development servers
 - `npm run db:migrate` — apply pending SQL migrations and bootstrap the first admin
+- `npm run db:reset-student-health -- --dry-run` — inspect reset scope on an explicitly marked local disposable database; applying requires a verified backup and one-time confirmation. See [guardian health records](docs/GUARDIAN_HEALTH_RECORDS.md).
 - `npm test` — deterministic risk, reporting, and summary tests
 - `npm run build` — create the production frontend
 - `npm start` — serve the API and built frontend

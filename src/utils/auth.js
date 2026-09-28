@@ -108,7 +108,7 @@ export async function getUsersForAdmin({ throwOnError = false } = {}) {
 }
 
 export async function createManagedUser({ name, email, role, patientId, relationship }) {
-  const roleMap = { Admin: 'system_administrator', Nurse: 'school_nurse', Student: 'student', Guardian: 'guardian' };
+  const roleMap = { Admin: 'system_administrator', Nurse: 'school_nurse', Guardian: 'guardian' };
   try {
     const result = await api.post('/api/admin/users/invite', { name, email, role: roleMap[role] || role, patientId, relationship });
     return { success: true, ...result };

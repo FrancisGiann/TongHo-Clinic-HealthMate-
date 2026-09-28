@@ -18,15 +18,6 @@ export const DEV_ROLE_ACCOUNTS = Object.freeze([
     role: 'school_nurse',
   },
   {
-    key: 'student',
-    id: 'd1e7bf55-35af-46d1-b0e5-125a91a9c203',
-    username: 'dev.student',
-    email: 'student@healthmate.test',
-    password: 'DevStudent-83!Maple-River',
-    name: 'Fictional Development Student',
-    role: 'student',
-  },
-  {
     key: 'guardian',
     id: 'd1e7bf55-35af-46d1-b0e5-125a91a9c204',
     username: 'dev.guardian',

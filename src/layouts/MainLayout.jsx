@@ -33,6 +33,7 @@ const nurseNavGroups = [
   ] },
   { label: "Patient care", items: [
     { to: "/students", label: "Patients", icon: Users },
+    { to: "/health-record-review", label: "Health record review", icon: ClipboardList },
     { to: "/new-visit", label: "New Visit", icon: Stethoscope },
     { to: "/appointments", label: "Appointments", icon: CalendarDays },
   ] },
@@ -66,7 +67,7 @@ const portalNavGroups = [
     { to: "/", label: "My Health Portal", icon: Home },
     { to: "/appointments", label: "Appointments", icon: CalendarDays },
     { to: "/visits", label: "Visit History", icon: ClipboardList },
-    { to: "/profiles", label: "Health Profile", icon: HeartPulse },
+    { to: "/health-records", label: "Student Health Record", icon: HeartPulse },
   ] },
 ];
 
@@ -89,6 +90,8 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
     "/students/new": "New Student Record",
     "/faculty/new": "New Faculty Record",
     "/profiles": "Linked Profiles",
+    "/health-record-review": "Health Record Review",
+    "/health-records": "Student Health Record",
     "/visits": "Visit History",
   }[location.pathname]
     || (matchPath({ path: "/students/:studentId", end: true }, location.pathname) ? "Patient Profile" : null)
@@ -98,7 +101,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
   const title = specialTitle || navTitle
     || (location.pathname === "/settings" ? "My Account" : "Settings");
   const userDisplayName = user?.name?.replace(/^Nurse\s+/i, "") || settings.nurseName?.replace(/^Nurse\s+/i, "") || 'User';
-  const userRoleLabel = user?.role === "system_administrator" ? "Administrator" : user?.role === "school_nurse" ? "School nurse" : user?.role === "guardian" ? "Guardian" : "Student";
+  const userRoleLabel = user?.role === "system_administrator" ? "Administrator" : user?.role === "school_nurse" ? "School nurse" : "Guardian";
   
   // Keep local clinic alerts on routes available to the current role.
   const clinicAlerts = [];
@@ -115,7 +118,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
     });
   }
 
-  if (data && ['school_nurse', 'student', 'guardian'].includes(user?.role)) {
+  if (data && ['school_nurse', 'guardian'].includes(user?.role)) {
     const upcomingAppointments = (data.appointments || []).filter((appointment) => {
       if (appointment.status !== 'Scheduled') return false;
       const startsAt = appointment.startsAt || (appointment.date ? `${appointment.date}T${appointment.time || '00:00'}+08:00` : '');

@@ -12,6 +12,7 @@
     "db:migrate": "node server/migrate.js",
     "db:seed-demo": "node server/seed-demo.js",
     "db:seed-demo-additive": "node server/seed-demo-additive.js",
+    "db:reset-student-health": "node server/reset-student-health-data.js",
     "db:preflight-dev-accounts": "node server/seed-dev-role-accounts.js --preflight",
     "db:seed-dev-accounts": "node server/seed-dev-role-accounts.js --apply",
     "test": "node --test server/*.test.js server/**/*.test.js src/utils/*.test.js",

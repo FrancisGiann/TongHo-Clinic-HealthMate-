@@ -1,7 +1,7 @@
 import { ArrowRight, CalendarDays, ClipboardList, HeartHandshake, UsersRound } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-const portalFeatures = [
+const accountFeatures = [
   {
     icon: ClipboardList,
     title: 'School clinic team',
@@ -9,13 +9,13 @@ const portalFeatures = [
   },
   {
     icon: UsersRound,
-    title: 'Students',
-    text: 'Sign in to view the health information and appointments available for your own account.',
+    title: 'Parents and guardians',
+    text: 'Submit health records for linked students, see clinic updates, and request appointments. A nurse reviews submissions before they update clinic profiles.',
   },
   {
     icon: CalendarDays,
-    title: 'Parents and guardians',
-    text: 'See records and appointments for the student profiles linked to your account.',
+    title: 'Student records',
+    text: 'The school manages roster details for students from Kindergarten through Grade 10. Students do not have accounts or sign in.',
   },
 ];
 
@@ -61,16 +61,16 @@ export default function Home({ authError = '' }) {
           <HeartHandshake size={24} aria-hidden="true" />
           <h2 id="hm-home-community-title">One school community, connected with care.</h2>
         </div>
-        <p>HealthMate+ supports the school clinic team while giving students and guardians a secure way to reach the records and appointments linked to their accounts.</p>
+        <p>HealthMate+ supports the school clinic team and gives linked guardians secure access to student health records and appointment requests.</p>
       </section>
 
       <section className="hm-home-portals" id="portal-access" aria-labelledby="hm-home-portals-title">
         <div className="hm-home-portals-heading">
-          <h2 id="hm-home-portals-title">A portal for each part of the community.</h2>
-          <p>Your account determines which tools and records you can access.</p>
+          <h2 id="hm-home-portals-title">Access for each part of the community.</h2>
+          <p>Accounts belong to guardians and clinic staff. Students remain school-managed patient records.</p>
         </div>
         <div className="hm-home-portal-list">
-          {portalFeatures.map(({ icon: Icon, title, text }) => (
+          {accountFeatures.map(({ icon: Icon, title, text }) => (
             <article className="hm-home-portal" key={title}>
               <Icon size={22} strokeWidth={1.8} aria-hidden="true" />
               <h3>{title}</h3>

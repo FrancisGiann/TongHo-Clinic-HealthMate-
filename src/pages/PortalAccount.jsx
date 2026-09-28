@@ -3,7 +3,6 @@ import { KeyRound, LockKeyhole, UserRound } from 'lucide-react';
 import { changePassword, validatePasswordStrength } from '../utils/auth';
 
 const roleLabels = {
-  student: 'Student',
   guardian: 'Guardian',
 };
 

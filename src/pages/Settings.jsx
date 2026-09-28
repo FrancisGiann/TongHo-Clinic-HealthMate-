@@ -62,7 +62,6 @@ const formatAuditDetails = (details = {}) => Object.entries(details).map(([key, 
 
 const broadcastRoleOptions = [
   ['school_nurse', 'Nurses'],
-  ['student', 'Students'],
   ['guardian', 'Guardians'],
   ['system_administrator', 'Administrators'],
 ];
@@ -119,6 +118,9 @@ export default function Settings({ data, user, reload, section }) {
   const [users, setUsers] = useState([]);
   const [showUserForm, setShowUserForm] = useState(false);
   const [newUser, setNewUser] = useState({ name: '', email: '', role: 'Nurse', patientId: '', relationship: 'Guardian' });
+  const [guardianLinkTarget, setGuardianLinkTarget] = useState(null);
+  const [guardianLinkForm, setGuardianLinkForm] = useState({ patientId: '', relationship: 'Parent' });
+  const [guardianLinkSaving, setGuardianLinkSaving] = useState(false);
   const [nurseLicenseTarget, setNurseLicenseTarget] = useState(null);
   const [nurseLicenseNumber, setNurseLicenseNumber] = useState('');
   const [licenseVerificationConfirmed, setLicenseVerificationConfirmed] = useState(false);
@@ -566,6 +568,21 @@ export default function Settings({ data, user, reload, section }) {
     const result = await resendInvitation(account.id);
     showScopedUserActionFeedback(scope, result.success ? 'success' : 'error', result.success ? result.message : result.error);
   };
+  const saveGuardianLink = async (event) => {
+    event.preventDefault();
+    if (!guardianLinkTarget || !guardianLinkForm.patientId || !guardianLinkForm.relationship.trim()) return;
+    const scope = feedbackScopeRef.current;
+    setGuardianLinkSaving(true);
+    clearUserActionFeedback();
+    try {
+      await api.patch(`/api/admin/users/${encodeURIComponent(guardianLinkTarget.id)}/patient-link`, guardianLinkForm);
+      showScopedUserActionFeedback(scope, 'success', `${guardianLinkTarget.name} is linked to the selected student. Activate the account separately if it is suspended.`);
+      setGuardianLinkTarget(null);
+      await refreshReviewData();
+    } catch (error) {
+      showScopedUserActionFeedback(scope, 'error', error.message || 'The guardian link could not be saved.');
+    } finally { setGuardianLinkSaving(false); }
+  };
   
   // If not authorized, show authentication modal
   if (!isAuthorized) {
@@ -698,7 +715,8 @@ export default function Settings({ data, user, reload, section }) {
               </select>
             </label>
           </div>
-          {showUserForm && <form className="inline-user-form" onSubmit={handleCreateUser}><label>Name<input value={newUser.name} onChange={(event) => setNewUser({ ...newUser, name: event.target.value })} required /></label><label>Email<input type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} required /></label><label>Role<select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value, patientId: '' })}><option>Admin</option><option>Nurse</option><option>Student</option><option>Guardian</option></select></label>{['Student', 'Guardian'].includes(newUser.role) && <label>Linked patient<select value={newUser.patientId} onChange={(event) => setNewUser({ ...newUser, patientId: event.target.value })} required><option value="">Select patient…</option>{data.students.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label>}{newUser.role === 'Guardian' && <label>Relationship<input value={newUser.relationship} onChange={(event) => setNewUser({ ...newUser, relationship: event.target.value })} required /></label>}<button type="submit" className="primary-btn">Send invitation</button></form>}
+          {showUserForm && <form className="inline-user-form" onSubmit={handleCreateUser}><label>Name<input value={newUser.name} onChange={(event) => setNewUser({ ...newUser, name: event.target.value })} required /></label><label>Email<input type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} required /></label><label>Role<select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value, patientId: '' })}><option>Admin</option><option>Nurse</option><option>Guardian</option></select></label>{newUser.role === 'Guardian' && <><label>Linked student<select value={newUser.patientId} onChange={(event) => setNewUser({ ...newUser, patientId: event.target.value })} required><option value="">Select student…</option>{data.students.filter((student) => student.patientType !== 'faculty').map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label><label>Relationship<input value={newUser.relationship} onChange={(event) => setNewUser({ ...newUser, relationship: event.target.value })} required /></label></>}<button type="submit" className="primary-btn">Send invitation</button></form>}
+          {guardianLinkTarget && <form className="inline-user-form" onSubmit={saveGuardianLink}><div><h4>Link student to {guardianLinkTarget.name}</h4><p className="field-hint">Only student roster records can be linked. Suspended accounts require a separate activation after relinking.</p></div><label>Student record<select value={guardianLinkForm.patientId} onChange={(event) => setGuardianLinkForm((current) => ({ ...current, patientId: event.target.value }))} required><option value="">Select student…</option>{data.students.filter((student) => student.patientType !== 'faculty').map((student) => <option key={student.id} value={student.id}>{student.name} · {student.studentId || student.id}</option>)}</select></label><label>Guardian relationship<input maxLength={80} value={guardianLinkForm.relationship} onChange={(event) => setGuardianLinkForm((current) => ({ ...current, relationship: event.target.value }))} required /></label><button type="submit" className="primary-btn" disabled={guardianLinkSaving || !guardianLinkForm.patientId}>{guardianLinkSaving ? 'Saving…' : 'Save guardian link'}</button><button type="button" className="secondary-btn" onClick={() => setGuardianLinkTarget(null)} disabled={guardianLinkSaving}>Cancel</button></form>}
           {userActionFeedback && <div className={userActionFeedback.tone === 'error' ? 'error-banner' : 'success-message'} role={userActionFeedback.tone === 'error' ? 'alert' : 'status'}>{userActionFeedback.tone === 'success' && <Check size={14} aria-hidden="true" />} {userActionFeedback.message}</div>}
           <p className="disabled-note nurse-license-admin-note">Only administrators can record a nurse’s PRC license, after independently verifying it against an authoritative source. This list shows the recording status without displaying the license number.</p>
           {nurseLicenseTarget && <form className="nurse-license-editor" onSubmit={updateNurseLicense}>
@@ -707,7 +725,7 @@ export default function Settings({ data, user, reload, section }) {
             {Boolean(nurseLicenseNumber.trim()) && <label className="check-label"><input type="checkbox" checked={licenseVerificationConfirmed} onChange={(event) => setLicenseVerificationConfirmed(event.target.checked)} required /> I independently verified this license against an authoritative source.</label>}
             <div className="form-actions"><button type="submit" className="primary-btn" disabled={licenseSaving || (Boolean(nurseLicenseNumber.trim()) && !licenseVerificationConfirmed) || (!nurseLicenseNumber.trim() && !nurseLicenseTarget.prcLicenseNumber)}>{licenseSaving ? 'Saving…' : nurseLicenseNumber.trim() ? 'Record verified license' : 'Clear license record'}</button><button type="button" className="secondary-btn" onClick={() => setNurseLicenseTarget(null)} disabled={licenseSaving}>Cancel</button></div>
           </form>}
-          <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>PRC license</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{visibleUsers.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.role === 'school_nurse' ? <span className={`status-chip ${account.prcLicenseVerified ? 'success' : 'warn'}`}>{account.prcLicenseVerified ? 'Recorded by admin' : 'Not recorded'}</span> : '—'}</td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.status === 'invited' ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}{account.role === 'school_nurse' && <button type="button" className="table-action" onClick={() => openNurseLicenseEditor(account)}>{account.prcLicenseVerified ? 'Update or clear license' : 'Record verified license'}</button>}</td></tr>)}</tbody></table>{visibleUsers.length === 0 && <p className="empty-state">{users.length ? 'No accounts match this filter.' : 'No system accounts are available yet.'}</p>}</div>
+          <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>PRC license</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{visibleUsers.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student (login removed)', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.role === 'school_nurse' ? <span className={`status-chip ${account.prcLicenseVerified ? 'success' : 'warn'}`}>{account.prcLicenseVerified ? 'Recorded by admin' : 'Not recorded'}</span> : '—'}</td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.role === 'student' ? 'Student sign-in is disabled' : <>{account.status === 'invited' ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}{account.role === 'guardian' && <button type="button" className="table-action" onClick={() => { setGuardianLinkTarget(account); setGuardianLinkForm({ patientId: '', relationship: 'Parent' }); }}>Link student</button>}{account.role === 'school_nurse' && <button type="button" className="table-action" onClick={() => openNurseLicenseEditor(account)}>{account.prcLicenseVerified ? 'Update or clear license' : 'Record verified license'}</button>}</>}</td></tr>)}</tbody></table>{visibleUsers.length === 0 && <p className="empty-state">{users.length ? 'No accounts match this filter.' : 'No system accounts are available yet.'}</p>}</div>
           <div className="settings-subsection nurse-verifications">
             <div><h4>Pending nurse verifications</h4><p>Review the school and license details submitted with nurse registrations.</p></div>
             {pendingRegistrations.length === 0 ? <p className="muted-copy">No pending nurse registrations at the moment.</p> : (
@@ -874,7 +892,7 @@ export default function Settings({ data, user, reload, section }) {
             <div className="data-command-grid"><button className="data-action" onClick={exportData}><Download size={17} /><span><strong>Export oversight data</strong><small>Spreadsheet-safe settings and roster export</small></span></button><button className="data-action" onClick={exportOversightSnapshot}><Database size={17} /><span><strong>Download oversight snapshot</strong><small>JSON of the settings and roster visible to this account</small></span></button></div>
             <p className="disabled-note">Clinical visit imports are restricted to school nurses. Schedule encrypted database backups with the hosting provider; local exports are manual.</p>
           </section>}
-          {isAdmin && <ImportPanel type="students" title="Import student roster" description="Preview student IDs, required fields, and duplicate choices before an atomic import." onComplete={reload} />}
+          {isAdmin && <ImportPanel type="students" title="Import student roster" description="Import only student ID, name, grade, section, and adviser. Link guardian accounts separately." onComplete={reload} />}
           <ImportPanel type="faculty" title="Import faculty profiles" description="Preview faculty IDs, profile fields, and duplicates. IDs are checked against student records too." onComplete={reload} />
           {!isAdmin && <ImportPanel type="visits" title="Import historical visits" description="Preview patient matching, dates, row errors, and duplicates before saving historical visits." onComplete={reload} />}
         </div>

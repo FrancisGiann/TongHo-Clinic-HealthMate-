@@ -33,7 +33,18 @@ function timestampValue(value) {
 }
 
 export function studentRecordForUser(record, user) {
-  if (user.role !== 'system_administrator') return { ...record, id: record.id };
+  if (user.role === 'school_nurse') return { ...record, id: record.id };
+  if (user.role === 'guardian') {
+    const fields = [
+      'patientType', 'studentId', 'name', 'gradeLevel', 'section', 'birthDate', 'gender',
+      'motherName', 'fatherName', 'guardianName', 'guardianPhone', 'guardianRelation',
+      'bloodType', 'allergies', 'allergiesStatus', 'conditions', 'conditionsStatus', 'medications', 'medicationsStatus', 'pastIllness', 'presentIllness',
+      'hospitalizationHistory', 'hospitalizationDetails', 'g6pdDeficiency', 'medicationAtHome',
+      'takingRegularMedication', 'regularMedicationName', 'onTherapy', 'lastTreatmentDate',
+      'therapistName', 'therapyInterventions', 'hasConcerns', 'concernsDetails', 'documentsSubmitted', 'documentsReceived', 'guardianHealthRecord',
+    ];
+    return { id: record.id, ...Object.fromEntries(fields.filter((field) => record[field] !== undefined).map((field) => [field, record[field]])) };
+  }
   const fields = ['patientType', 'studentId', 'facultyId', 'name', 'gradeLevel', 'section', 'adviser', 'department', 'position', 'email', 'contactNumber', 'birthDate', 'gender', 'guardianName', 'guardianPhone', 'guardianRelation'];
   return { id: record.id, ...Object.fromEntries(fields.filter((field) => record[field] !== undefined).map((field) => [field, record[field]])) };
 }
@@ -59,11 +70,12 @@ export function hydrateAuthoritativeRecord(key, row) {
 
 async function accessiblePatientIds(user, client = { query }) {
   if (staffRoles.has(user.role)) return null;
-  if (user.role === 'student') {
-    const result = await client.query('SELECT id FROM patients WHERE user_id=$1', [user.id]);
-    return result.rows.map((row) => String(row.id));
-  }
-  const result = await client.query('SELECT patient_id AS id FROM guardian_patient_links WHERE guardian_user_id=$1', [user.id]);
+  if (user.role !== 'guardian') return [];
+  const result = await client.query(
+    `SELECT l.patient_id AS id FROM guardian_patient_links l JOIN patients p ON p.id=l.patient_id
+     WHERE l.guardian_user_id=$1 AND p.patient_type='student'`,
+    [user.id],
+  );
   return result.rows.map((row) => String(row.id));
 }
 
@@ -173,6 +185,11 @@ function validateSaveClinicData(nextData, user, expectedVersion, internal) {
 export async function syncPatients(client, records) {
   for (const record of records) {
     const id = recordId(record);
+    const current = await client.query('SELECT data FROM patients WHERE id=$1 FOR UPDATE', [id]);
+    const canonicalGuardianAnswers = current.rows[0]?.data?.guardianHealthRecord;
+    const storedRecord = canonicalGuardianAnswers && typeof canonicalGuardianAnswers === 'object'
+      ? { ...record, ...canonicalGuardianAnswers, guardianHealthRecord: canonicalGuardianAnswers }
+      : record;
     await client.query(
       `INSERT INTO patients(id,patient_type,data) VALUES($1,$2,$3::jsonb - 'consentStatus' - 'consentDueDate')
        ON CONFLICT(id) DO UPDATE SET patient_type=EXCLUDED.patient_type,
@@ -180,7 +197,7 @@ export async function syncPatients(client, records) {
            'consentStatus',patients.data->'consentStatus',
            'consentDueDate',patients.data->'consentDueDate'
          )),updated_at=NOW()`,
-      [id, record.patientType === 'faculty' ? 'faculty' : 'student', JSON.stringify(record)],
+      [id, record.patientType === 'faculty' ? 'faculty' : 'student', JSON.stringify(storedRecord)],
     );
   }
 }
@@ -262,7 +279,6 @@ export async function saveClinicData(nextData, user, expectedVersion, options = 
 }
 
 export async function linkUserToPatient(userId, patientId, role, relationship = 'Guardian') {
-  if (role === 'student') return query('UPDATE patients SET user_id=$1,updated_at=NOW() WHERE id=$2', [userId, String(patientId)]);
   if (role === 'guardian') {
     return query(
       `INSERT INTO guardian_patient_links(guardian_user_id,patient_id,relationship) VALUES($1,$2,$3)

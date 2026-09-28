@@ -4,7 +4,7 @@ import { api } from '../utils/api';
 import { downloadCsv, importCsvRecords, parseCsv } from '../utils/csv';
 
 const templates = {
-  students: [{ 'Student ID': 'PTHI-DEMO-001', Name: 'Fictional Student', Grade: 'Grade 4', Section: 'Rizal', Adviser: 'Fictional Adviser', 'Birth Date': '2016-05-14', Gender: 'Prefer not to say', Guardian: 'Fictional Guardian', Phone: '' }],
+  students: [{ 'Student ID': 'PTHI-DEMO-001', Name: 'Fictional Student', Grade: 'Kindergarten', Section: 'Sample Section', Adviser: 'Fictional Adviser' }],
   faculty: [{ 'Faculty ID': 'PTHI-FAC-DEMO-001', Name: 'Fictional Faculty Member', Department: 'Science', Position: 'Teacher', Email: 'faculty@example.test', 'Contact Number': '' }],
   visits: [{ 'Patient ID': 'PTHI-DEMO-001', Date: '2026-01-15', Type: 'Illness', Complaint: 'Headache', Treatment: 'Rest', Disposition: 'Returned to class', Notes: '' }],
 };

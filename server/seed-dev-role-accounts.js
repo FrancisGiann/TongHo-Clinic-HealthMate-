@@ -83,7 +83,7 @@ async function inspectDatabase(client) {
     || patientResult.rows[0].id !== DEV_ROLE_PATIENT_ID
     || patientResult.rows[0].patient_type !== 'student'
     || stableJson(patientResult.rows[0].data) !== stableJson(DEV_PATIENT)
-    || patientResult.rows[0].user_id !== registry.get('account:student')?.entity_id) {
+    || patientResult.rows[0].user_id !== null) {
     return refused('seeded_development_patient_changed');
   }
 
@@ -188,8 +188,8 @@ async function applySeed() {
 
     if (!inspection.seededAlready) {
       await client.query(
-        `INSERT INTO patients(id,user_id,patient_type,data) VALUES($1,$2,'student',$3::jsonb)`,
-        [DEV_ROLE_PATIENT_ID, accountIds.student, JSON.stringify(DEV_PATIENT)],
+        `INSERT INTO patients(id,patient_type,data) VALUES($1,'student',$2::jsonb)`,
+        [DEV_ROLE_PATIENT_ID, JSON.stringify(DEV_PATIENT)],
       );
       await client.query(
         `INSERT INTO ${DEV_ROLE_SEED_REGISTRY}(seed_key,entity_type,entity_id) VALUES('patient','patient',$1)`,
