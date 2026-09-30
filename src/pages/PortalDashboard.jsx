@@ -35,6 +35,9 @@ export default function PortalDashboard({ data, user }) {
           <h2>Welcome, {greetingName}</h2>
           <p>See the clinic information shared with your guardian account and manage linked-student appointment requests.</p>
         </div>
+        <div className="role-dashboard-art" aria-hidden="true">
+          <img src="/illustrations/guardian-care.webp" alt="" width="600" height="400" />
+        </div>
         <Link className="primary-btn" to="/appointments">
           <CalendarDays size={16} aria-hidden="true" />
           {patients.length ? 'Request appointment' : 'View appointments'}

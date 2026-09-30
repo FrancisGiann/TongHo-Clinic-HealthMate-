@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap");
 :root {
   --ink: var(--color-foreground);
   --muted: var(--color-muted-foreground);
@@ -6967,3 +6967,264 @@ fieldset.form-section { min-width: 0; border: 0; }
 
 .settings-logout-all-password { width: 100%; max-width: 420px; }
 .settings-logout-all-actions { display: flex; justify-content: flex-start; }
+
+/* Scoped HealthMate+ home and dashboard refresh */
+.hm-home {
+  --hm-lavender: #eeeaff;
+  --hm-lavender-soft: #f5f2ff;
+  font-family: var(--font-body, "Inter"), sans-serif;
+}
+.hm-home :where(h1, h2, h3) { font-family: var(--font-display, "Outfit"), sans-serif; }
+.hm-home a:focus-visible { outline-color: #6854c8; }
+.hm-home-nav a:not(.hm-home-nav-signin) { color: var(--hm-muted); }
+.hm-home-primary:focus-visible,
+.hm-home-nav-signin:focus-visible,
+.hm-home-access-link:focus-visible { outline-color: #6854c8; outline-offset: 3px; }
+.hm-home-hero { grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: clamp(38px, 6vw, 82px); }
+.hm-home-hero-copy h1 { max-width: 12ch; letter-spacing: -.025em; }
+.hm-home-hero-copy > p { max-width: 60ch; }
+.hm-home-scene {
+  width: 100%;
+  overflow: hidden;
+  aspect-ratio: 3 / 2;
+  border: 1px solid #e5dff0;
+  border-radius: 18px;
+  background: var(--hm-lavender-soft);
+}
+.hm-home-scene img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.hm-home-section-heading h2 { max-width: 20ch; }
+.hm-home-community > p,
+.hm-home-portals-heading > p,
+.hm-home-portal p,
+.hm-home-access p { max-width: 68ch; }
+.hm-home-portals-heading h2 { max-width: 19ch; }
+.hm-home-portal-list {
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
+  align-items: stretch;
+  gap: 16px;
+  border: 0;
+}
+.hm-home-portal,
+.hm-home-portal + .hm-home-portal {
+  min-width: 0;
+  padding: 26px 28px;
+  border: 1px solid #e2dced;
+  border-radius: 15px;
+  background: #f3efff;
+}
+.hm-home-portal-list .hm-home-portal-guardians { background: #f7f2e9; border-color: #e6dccd; }
+.hm-home-portal h3 { max-width: 20ch; margin: 0 0 9px; font: 600 21px/1.2 var(--font-display, "Outfit"), sans-serif; }
+.hm-home-portal p { margin: 0; font-size: 14px; }
+.hm-home-student-note { margin: 17px 0 0; color: var(--hm-muted); font-size: 13px; }
+.hm-home-access { border: 1px solid #e4ddef; background: var(--hm-lavender); }
+.hm-home-access h2 { font-size: 30px; }
+.hm-home-footer { margin-top: 34px; border-top: 1px solid var(--hm-rule); }
+
+.dashboard,
+.nurse-dashboard,
+.portal-dashboard {
+  --dash-wash: #f2effa;
+  --dash-line: #e0daec;
+  min-width: 0;
+  font-family: var(--font-body, "Inter"), sans-serif;
+}
+.nurse-dashboard,
+.portal-dashboard { gap: 18px; }
+.nurse-dashboard-header,
+.portal-dashboard-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px auto;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  padding: 19px 22px;
+  border: 1px solid var(--dash-line);
+  border-radius: 16px;
+  background: var(--dash-wash);
+}
+.nurse-dashboard-header > div:first-child,
+.portal-dashboard-header > div:first-child { min-width: 0; }
+.nurse-dashboard-header h2,
+.portal-dashboard-header h2,
+.dashboard .welcome-band h2 {
+  overflow-wrap: anywhere;
+  font-family: var(--font-display, "Outfit"), sans-serif;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -.025em;
+}
+.nurse-dashboard-date,
+.portal-dashboard-context { color: var(--muted); font-size: 11px; }
+.nurse-dashboard-header > div:first-child > p:last-child,
+.portal-dashboard-header > div:first-child > p:last-child { max-width: 64ch; line-height: 1.55; }
+.role-dashboard-art,
+.dashboard-welcome-art {
+  width: 112px;
+  height: 75px;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--dash-line);
+  border-radius: 12px;
+  background: #f5f1e8;
+}
+.role-dashboard-art img,
+.dashboard-welcome-art img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.nurse-dashboard-actions .primary-btn,
+.nurse-dashboard-actions .secondary-btn,
+.portal-dashboard-header .primary-btn { white-space: nowrap; }
+.nurse-worklinks { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.nurse-worklink,
+.portal-summary-link { border-color: var(--dash-line); border-radius: 14px; box-shadow: none; }
+.nurse-worklink:hover,
+.portal-summary-link:hover { border-color: #a99ed1; box-shadow: 0 7px 18px rgba(39, 26, 91, .07); }
+.nurse-dashboard-panel,
+.portal-panel,
+.dashboard .content-grid > .panel { border-color: var(--dash-line); border-radius: 16px; box-shadow: none; }
+.nurse-dashboard-panel .panel-heading h3,
+.portal-panel .panel-heading h3,
+.dashboard .panel-heading h3 { font-family: var(--font-display, "Outfit"), sans-serif; font-size: 17px; font-weight: 600; }
+.nurse-section-link,
+.portal-section-link { color: var(--violet); text-underline-offset: 3px; }
+.nurse-section-link:hover,
+.portal-section-link:hover { color: var(--color-teal-700); text-decoration: underline; }
+.nurse-dashboard-empty,
+.portal-empty-state {
+  align-items: flex-start;
+  padding: 17px;
+  border: 1px solid var(--dash-line);
+  border-radius: 12px;
+  background: var(--dash-wash);
+}
+.nurse-dashboard-empty > div { display: grid; gap: 4px; }
+.nurse-dashboard-empty strong,
+.portal-empty-state strong { color: var(--ink); font-size: 13px; font-weight: 600; }
+.nurse-dashboard-empty a { margin-top: 3px; color: var(--violet); font-size: 12px; }
+.portal-empty-state p,
+.nurse-dashboard-empty p { line-height: 1.5; }
+.portal-summary-link { padding: 15px 16px; }
+.portal-profile-row,
+.portal-record-row { border-color: var(--dash-line); }
+.portal-profile-name strong,
+.portal-record-row strong { overflow-wrap: anywhere; }
+.admin-dashboard-error { margin: 0 0 16px; }
+.dashboard .welcome-band {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 136px;
+  align-items: center;
+  gap: 16px;
+  min-height: 172px;
+  padding: 23px 26px;
+  border: 1px solid var(--dash-line);
+  border-radius: 16px;
+  background: var(--dash-wash);
+  color: var(--ink);
+  box-shadow: none;
+}
+.dashboard .welcome-band:after { display: none; }
+.dashboard .welcome-band > div:first-child { grid-column: 1; }
+.dashboard .welcome-band h2 { margin: 0 0 7px; color: var(--ink); line-height: 1.14; }
+.dashboard .welcome-copy { max-width: 62ch; color: var(--muted); line-height: 1.55; }
+.dashboard .dashboard-school-year { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
+.dashboard .date-pill {
+  top: 19px;
+  right: 20px;
+  border-color: #d6cdec;
+  background: rgba(255,255,255,.68);
+  color: var(--violet);
+}
+.dashboard-welcome-art { grid-column: 2; grid-row: 1; width: 136px; height: 91px; align-self: end; margin-top: 36px; }
+.dashboard .stats-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 16px 0 19px; }
+.dashboard .stat-card { min-width: 0; gap: 11px; padding: 15px 13px; border-radius: 14px; box-shadow: none; }
+.dashboard .stat-card:hover { transform: translateY(-2px); border-color: #aaa0d0; box-shadow: 0 7px 18px rgba(39, 26, 91, .07); }
+.dashboard .stat-card.teal .stat-icon { background: #eeeaff; color: var(--violet); }
+.dashboard .stat-card .stat-icon { flex: none; width: 38px; height: 38px; border-radius: 11px; }
+.dashboard .stat-card strong { font-family: var(--font-display, "Outfit"), sans-serif; font-size: 25px; }
+.dashboard .stat-card span { overflow-wrap: anywhere; }
+.dashboard .content-grid { gap: 16px; margin-bottom: 16px; }
+.dashboard .panel { padding: 21px; }
+.dashboard .admin-table th { background: var(--dash-wash); }
+.dashboard .admin-account-cell strong,
+.dashboard .admin-account-cell small { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+.dashboard .admin-invite-list { display: grid; gap: 8px; margin-top: 12px; }
+.dashboard .admin-invite-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--dash-line);
+  border-radius: 10px;
+  background: var(--dash-wash);
+}
+.dashboard .admin-invite-row > div { min-width: 0; overflow-wrap: anywhere; }
+.dashboard .admin-invite-row strong { font-size: 13px; }
+.dashboard .admin-invite-row small { color: var(--muted); font-size: 11px; }
+.dashboard .admin-invite-review { flex: none; font-size: 12px; }
+.dark .dashboard,
+.dark .nurse-dashboard,
+.dark .portal-dashboard { --dash-wash: #29254b; --dash-line: #45416d; }
+.dark .nurse-dashboard-header,
+.dark .portal-dashboard-header,
+.dark .dashboard .welcome-band { background: #242047; border-color: #45416d; }
+.dark .role-dashboard-art,
+.dark .dashboard-welcome-art { border-color: #45416d; }
+.dark .dashboard .date-pill { border-color: #5b5486; background: #302c58; color: #e8e4ff; }
+.dark .dashboard .stat-card small { color: #c2bcff; }
+.dark .nurse-worklink,
+.dark .portal-summary-link { background: #242047; border-color: #45416d; }
+.dark .nurse-dashboard-row,
+.dark .nurse-dashboard-alert,
+.dark .portal-record-row,
+.dark .portal-profile-row { border-color: #45416d; }
+.dark .nurse-worklink:hover,
+.dark .portal-summary-link:hover { border-color: #aaa2f2; }
+.dark .nurse-section-link,
+.dark .portal-section-link,
+.dark .nurse-dashboard-empty a { color: #c2bcff; }
+.dark .nurse-section-link:hover,
+.dark .portal-section-link:hover { color: #e8e4ff; }
+.dark .dashboard .admin-invite-row { background: #242047; border-color: #45416d; }
+@media (max-width: 1050px) {
+  .dashboard .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .nurse-dashboard-header,
+  .portal-dashboard-header { grid-template-columns: minmax(0, 1fr) 94px auto; }
+  .role-dashboard-art { width: 94px; height: 63px; }
+}
+@media (max-width: 760px) {
+  .hm-home-hero { grid-template-columns: minmax(0, 1fr); gap: 24px; padding-block: 42px; }
+  .hm-home-scene { max-height: 260px; }
+  .hm-home-portal-list { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .hm-home-portal,
+  .hm-home-portal + .hm-home-portal { padding: 21px; }
+  .hm-home-access h2 { font-size: 26px; }
+  .nurse-dashboard-header,
+  .portal-dashboard-header {
+    grid-template-columns: minmax(0, 1fr) 76px;
+    gap: 12px;
+    padding: 17px;
+  }
+  .role-dashboard-art { width: 76px; height: 51px; }
+  .nurse-worklinks { grid-template-columns: minmax(0, 1fr); }
+  .nurse-dashboard-header h2,
+  .portal-dashboard-header h2 { font-size: 24px; }
+  .nurse-dashboard-actions,
+  .portal-dashboard-header > .primary-btn { grid-column: 1 / -1; width: 100%; }
+  .dashboard .welcome-band { grid-template-columns: minmax(0, 1fr) 92px; min-height: 148px; padding: 20px; }
+  .dashboard-welcome-art { width: 92px; height: 62px; }
+  .dashboard .date-pill { position: static; grid-column: 1 / -1; grid-row: 2; justify-self: start; margin: 0; }
+  .dashboard .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 420px) {
+  .hm-home-scene { max-height: 210px; border-radius: 14px; }
+  .hm-home-community { gap: 12px; }
+  .hm-home-section-heading { gap: 11px; }
+  .hm-home-section-heading h2,
+  .hm-home-portals-heading h2 { font-size: 27px; }
+  .role-dashboard-art { display: none; }
+  .nurse-dashboard-header,
+  .portal-dashboard-header { grid-template-columns: minmax(0, 1fr); }
+  .dashboard .welcome-band { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-welcome-art { display: none; }
+  .dashboard .stats-grid { grid-template-columns: minmax(0, 1fr); }
+}

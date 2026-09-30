@@ -68,17 +68,18 @@ export default function Dashboard({ data, user }) {
     <div className="dashboard">
       <section className="welcome-band">
         <div>
-          <p className="eyebrow light">
-            Administrator overview · {data.settings.schoolYear}
-          </p>
           <h2>{greeting}, {userFirstName}</h2>
           <p className="welcome-copy">
             Manage accounts, clinic settings, reports, and system activity from one place.
           </p>
+          <p className="dashboard-school-year">School year · {data.settings?.schoolYear || 'School clinic'}</p>
         </div>
         <button className="date-pill" onClick={() => navigate('/reports?period=daily')}>
-          <CalendarDays size={16} /> Today <ChevronRight size={15} />
+          <CalendarDays size={16} aria-hidden="true" /> Today <ChevronRight size={15} aria-hidden="true" />
         </button>
+        <div className="dashboard-welcome-art" aria-hidden="true">
+          <img src="/illustrations/admin-care.webp" alt="" width="600" height="400" />
+        </div>
       </section>
       
       {isAdmin && adminUsersLoading && <p className="field-hint" role="status">Loading administrator account counts…</p>}
@@ -175,14 +176,14 @@ export default function Dashboard({ data, user }) {
              <div className="recent-students">
                <h4>Pending invitations</h4>
                {adminUsersLoading ? <p role="status" className="field-hint">Loading invitations…</p> : adminUsersError ? <p className="field-hint">Invitation status is unavailable. Retry above to refresh it.</p> : pendingInvites.length > 0 ? (
-                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '1rem' }}>
+                   <div className="admin-invite-list">
                    {pendingInvites.slice(0, 3).map(entry => (
-                     <div key={entry.username} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', background: 'var(--surface-2)', borderRadius: '8px' }}>
+                     <div className="admin-invite-row" key={entry.username}>
                        <div>
-                         <strong style={{ fontSize: '0.85rem' }}>{entry.name}</strong><br/>
-                         <small style={{ color: 'var(--text-2)', fontSize: '0.75rem' }}>{entry.email}</small>
+                         <strong>{entry.name}</strong><br />
+                         <small>{entry.email}</small>
                        </div>
-                       <button className="text-btn" onClick={() => navigate('/users?filter=invited')} style={{ fontSize: '0.8rem' }}>Review</button>
+                       <button className="text-btn admin-invite-review" onClick={() => navigate('/users?filter=invited')}>Review</button>
                      </div>
                    ))}
                  </div>
@@ -286,6 +287,9 @@ function NurseDashboard({ data, user }) {
           <h2>{greeting}, {userFirstName}</h2>
           <p>Here’s what needs your attention at the clinic today.</p>
         </div>
+        <div className="role-dashboard-art" aria-hidden="true">
+          <img src="/illustrations/nurse-care.webp" alt="" width="600" height="400" />
+        </div>
         <div className="nurse-dashboard-actions">
           <Link className="primary-btn" to="/new-visit"><Plus size={17} aria-hidden="true" /> New visit</Link>
         </div>
@@ -330,8 +334,7 @@ function NurseDashboard({ data, user }) {
           ) : (
             <div className="nurse-dashboard-empty">
               <CalendarDays size={20} aria-hidden="true" />
-              <p>No appointments scheduled for today.</p>
-              <Link to="/appointments">View all appointments</Link>
+              <div><strong>Your schedule is clear for today.</strong><p>Scheduled visits for today will appear here.</p><Link to="/appointments">View appointment schedule</Link></div>
             </div>
           )}
         </section>
@@ -353,7 +356,7 @@ function NurseDashboard({ data, user }) {
           ) : (
             <div className="nurse-dashboard-empty">
               <ClipboardCheck size={20} aria-hidden="true" />
-              <p>No clinic alerts need action.</p>
+              <div><strong>No inventory items need attention.</strong><p>Items at or below reorder level will appear here.</p></div>
             </div>
           )}
         </section>
@@ -384,8 +387,7 @@ function NurseDashboard({ data, user }) {
         ) : (
           <div className="nurse-dashboard-empty">
             <Stethoscope size={20} aria-hidden="true" />
-            <p>No clinic visits have been recorded yet.</p>
-            <Link to="/new-visit">Start a visit record</Link>
+            <div><strong>No clinic visits yet.</strong><p>Saved visit records will appear here.</p><Link to="/new-visit">Start a visit record</Link></div>
           </div>
         )}
       </section>

@@ -1,23 +1,5 @@
-import { ArrowRight, CalendarDays, ClipboardList, HeartHandshake, UsersRound } from 'lucide-react';
+import { ArrowRight, HeartHandshake } from 'lucide-react';
 import { Link } from 'react-router-dom';
-
-const accountFeatures = [
-  {
-    icon: ClipboardList,
-    title: 'School clinic team',
-    text: 'Manage patient profiles, consultations, appointments, clinic supplies, and reports in one secure workspace.',
-  },
-  {
-    icon: UsersRound,
-    title: 'Parents and guardians',
-    text: 'Submit health records for linked students, see clinic updates, and request appointments. A nurse reviews submissions before they update clinic profiles.',
-  },
-  {
-    icon: CalendarDays,
-    title: 'Student records',
-    text: 'The school manages roster details for students from Kindergarten through Grade 10. Students do not have accounts or sign in.',
-  },
-];
 
 export default function Home({ authError = '' }) {
   return (
@@ -38,22 +20,16 @@ export default function Home({ authError = '' }) {
 
       <section className="hm-home-hero" aria-labelledby="hm-home-title">
         <div className="hm-home-hero-copy">
-          <h1 id="hm-home-title">A welcoming place for school health.</h1>
-          <p>HealthMate+ brings the Philippine Tong Ho Institute school clinic and its community together around secure, role-based access to clinic information.</p>
+          <h1 id="hm-home-title">School clinic care, connected.</h1>
+          <p>A secure clinic workspace for Philippine Tong Ho Institute staff, with linked health records and appointment access for guardians.</p>
           <div className="hm-home-actions">
             <Link className="hm-home-primary" to="/login">Sign in to HealthMate+ <ArrowRight size={18} /></Link>
-            <a className="hm-home-secondary" href="#portal-access">Explore portal access</a>
+            <a className="hm-home-secondary" href="#portal-access">How access works</a>
           </div>
         </div>
-        <figure className="hm-home-seal-panel">
-          <div className="hm-home-seal-frame">
-            <img src="/Logo.jpg" alt="Philippine Tong Ho Institute seal" />
-          </div>
-          <figcaption>
-            <p>Philippine Tong Ho Institute</p>
-            <span>City of Lucena</span>
-          </figcaption>
-        </figure>
+        <div className="hm-home-scene" aria-hidden="true">
+          <img src="/illustrations/school-clinic.webp" alt="" width="1200" height="800" fetchPriority="high" />
+        </div>
       </section>
 
       <section className="hm-home-community" id="community" aria-labelledby="hm-home-community-title">
@@ -61,29 +37,31 @@ export default function Home({ authError = '' }) {
           <HeartHandshake size={24} aria-hidden="true" />
           <h2 id="hm-home-community-title">One school community, connected with care.</h2>
         </div>
-        <p>HealthMate+ supports the school clinic team and gives linked guardians secure access to student health records and appointment requests.</p>
+        <p>Clinic staff can manage health records and visits in one workspace. Guardians can follow information shared for linked students and request clinic appointments.</p>
       </section>
 
       <section className="hm-home-portals" id="portal-access" aria-labelledby="hm-home-portals-title">
         <div className="hm-home-portals-heading">
-          <h2 id="hm-home-portals-title">Access for each part of the community.</h2>
-          <p>Accounts belong to guardians and clinic staff. Students remain school-managed patient records.</p>
+          <h2 id="hm-home-portals-title">A clear place for every role.</h2>
+          <p>Clinic staff and guardians use accounts with access shaped around their responsibilities.</p>
         </div>
         <div className="hm-home-portal-list">
-          {accountFeatures.map(({ icon: Icon, title, text }) => (
-            <article className="hm-home-portal" key={title}>
-              <Icon size={22} strokeWidth={1.8} aria-hidden="true" />
-              <h3>{title}</h3>
-              <p>{text}</p>
-            </article>
-          ))}
+          <article className="hm-home-portal hm-home-portal-staff">
+            <h3>For school clinic staff</h3>
+            <p>Nurses manage student profiles, consultations, appointment requests, supplies, and reports. System administrators manage accounts and clinic settings.</p>
+          </article>
+          <article className="hm-home-portal hm-home-portal-guardians">
+            <h3>For parents and guardians</h3>
+            <p>View records for linked students, submit health information for nurse review, and request clinic appointments for those students.</p>
+          </article>
         </div>
+        <p className="hm-home-student-note">Students are school-managed patient records. They do not have accounts or sign in.</p>
       </section>
 
       <section className="hm-home-access" aria-labelledby="hm-home-access-title">
         <div>
-          <h2 id="hm-home-access-title">Your account, your access.</h2>
-          <p>Sign in with the account provided by your school clinic administrator. New accounts are activated from an invitation link.</p>
+          <h2 id="hm-home-access-title">Your account starts with an invitation.</h2>
+          <p>Ask your school clinic administrator for an account invitation. Follow its link to activate your account, then sign in to HealthMate+.</p>
         </div>
         <Link className="hm-home-access-link" to="/login">Go to sign in <ArrowRight size={17} /></Link>
       </section>
