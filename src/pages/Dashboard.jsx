@@ -65,18 +65,26 @@ export default function Dashboard({ data, user }) {
   else if (currentHour >= 18) greeting = "Good evening";
 
   return (
-    <div className="dashboard">
+    <div className={`dashboard${isAdmin ? " admin-dashboard" : ""}`}>
       <section className="welcome-band">
         <div>
-          <h2>{greeting}, {userFirstName}</h2>
+          <h2>{isAdmin ? "Administration overview" : `${greeting}, ${userFirstName}`}</h2>
           <p className="welcome-copy">
-            Manage accounts, clinic settings, reports, and system activity from one place.
+            {isAdmin
+              ? "Review account access, update clinic details, and open school reports."
+              : "Manage accounts, clinic settings, reports, and system activity from one place."}
           </p>
           <p className="dashboard-school-year">School year · {data.settings?.schoolYear || 'School clinic'}</p>
         </div>
-        <button className="date-pill" onClick={() => navigate('/reports?period=daily')}>
-          <CalendarDays size={16} aria-hidden="true" /> Today <ChevronRight size={15} aria-hidden="true" />
-        </button>
+        {isAdmin ? (
+          <button className="date-pill" onClick={() => navigate('/users')}>
+            <Users size={16} aria-hidden="true" /> Manage users <ChevronRight size={15} aria-hidden="true" />
+          </button>
+        ) : (
+          <button className="date-pill" onClick={() => navigate('/reports?period=daily')}>
+            <CalendarDays size={16} aria-hidden="true" /> Today <ChevronRight size={15} aria-hidden="true" />
+          </button>
+        )}
         <div className="dashboard-welcome-art" aria-hidden="true">
           <img src="/illustrations/admin-care.webp" alt="" width="600" height="400" />
         </div>
@@ -88,18 +96,17 @@ export default function Dashboard({ data, user }) {
         <button type="button" className="secondary-btn" onClick={() => setAdminUsersRetry((count) => count + 1)}>Retry</button>
       </div>}
       
-      <section className="stats-grid">
-          <Stat to="/users" icon={Users} label="Total Users" value={adminUsersLoading ? '…' : adminUsersError ? '—' : adminUsers.length} change="System accounts" tone="teal" />
-          <Stat to="/users?filter=active" icon={Users} label="Active Users" value={adminUsersLoading ? '…' : adminUsersError ? '—' : adminUsers.filter((account) => account.status === 'active').length} change="Active accounts" tone="teal" />
-          <Stat to="/users?filter=invited" icon={Users} label="Pending Invites" value={adminUsersLoading ? '…' : adminUsersError ? '—' : pendingInvites.length} change="Awaiting approval" tone="amber" />
+      <section className="stats-grid admin-metrics" aria-label="Account summary">
+          <Stat to="/users" icon={Users} label="Total users" value={adminUsersLoading ? '…' : adminUsersError ? '—' : adminUsers.length} change="System accounts" tone="teal" primary />
+          <Stat to="/users?filter=active" icon={Users} label="Active users" value={adminUsersLoading ? '…' : adminUsersError ? '—' : adminUsers.filter((account) => account.status === 'active').length} change="Active accounts" tone="teal" />
+          <Stat to="/users?filter=invited" icon={Users} label="Pending invites" value={adminUsersLoading ? '…' : adminUsersError ? '—' : pendingInvites.length} change="Awaiting approval" tone="amber" />
           <Stat to="/users?filter=nurses" icon={ShieldAlert} label="Nurse accounts" value={adminUsersLoading ? '…' : adminUsersError ? '—' : adminUsers.filter((account) => account.role === 'school_nurse').length} change="Clinical access holders" tone="violet" />
-          <Stat to="/users?filter=restricted" icon={LockKeyhole} label="Restricted accounts" value={adminUsersLoading ? '…' : adminUsersError ? '—' : adminUsers.filter((account) => account.status !== 'active').length} change="Review access status" tone="rose" />
+          <Stat to="/users?filter=restricted" icon={LockKeyhole} label="Non-active accounts" value={adminUsersLoading ? '…' : adminUsersError ? '—' : adminUsers.filter((account) => account.status !== 'active').length} change="Invited or inactive" tone="rose" />
       </section>
       <div className="content-grid">
         <section className="panel timeline-panel">
           <div className="panel-heading">
             <div>
-              <p className="section-kicker">System access</p>
               <h3>
                 User access overview
               </h3>
@@ -125,7 +132,7 @@ export default function Dashboard({ data, user }) {
                         {adminUsers.slice(0, 5).map(account => (
                           <tr key={account.id}>
                             <td className="admin-account-cell"><strong>{account.name}</strong><small>{account.email}</small></td>
-                            <td className="admin-role-cell">{account.role === 'school_nurse' ? 'School nurse' : account.role === 'system_administrator' ? 'Administrator' : account.role}</td>
+                            <td className="admin-role-cell">{({ school_nurse: 'School nurse', system_administrator: 'Administrator', guardian: 'Guardian', student: 'Student' })[account.role] || account.role}</td>
                             <td className="admin-status-cell"><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span>
                             </td>
                           </tr>
@@ -138,11 +145,10 @@ export default function Dashboard({ data, user }) {
         <section className="panel actions-panel">
           <div className="panel-heading">
             <div>
-              <p className="section-kicker">Management</p>
               <h3>Admin shortcuts</h3>
             </div>
           </div>
-          <div className="action-list">
+          <div className="action-list admin-action-list">
             <Action
               icon={Plus}
               label="School & clinic"
@@ -173,8 +179,8 @@ export default function Dashboard({ data, user }) {
             />
           </div>
           
-             <div className="recent-students">
-               <h4>Pending invitations</h4>
+          <div className="recent-students admin-pending-block">
+            <h4>Pending invitations</h4>
                {adminUsersLoading ? <p role="status" className="field-hint">Loading invitations…</p> : adminUsersError ? <p className="field-hint">Invitation status is unavailable. Retry above to refresh it.</p> : pendingInvites.length > 0 ? (
                    <div className="admin-invite-list">
                    {pendingInvites.slice(0, 3).map(entry => (
@@ -188,7 +194,7 @@ export default function Dashboard({ data, user }) {
                    ))}
                  </div>
                ) : (
-                 <p style={{ color: 'var(--text-2)', fontSize: '0.85rem', marginTop: '1rem' }}>No pending invitations.</p>
+                 <p className="admin-invite-empty">No invitations are waiting for review.</p>
                )}
              </div>
         </section>
@@ -200,9 +206,9 @@ export default function Dashboard({ data, user }) {
   );
 }
 
-function Stat({ to, icon: Icon, label, value, change, tone }) {
+function Stat({ to, icon: Icon, label, value, change, tone, primary = false }) {
   return (
-    <Link to={to} className={`stat-card ${tone}`}>
+    <Link to={to} className={`stat-card ${tone}${primary ? " stat-primary" : ""}`}>
       <div className="stat-icon">
         <Icon size={19} aria-hidden="true" />
       </div>

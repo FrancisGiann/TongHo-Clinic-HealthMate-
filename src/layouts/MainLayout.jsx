@@ -5,6 +5,8 @@ import {
   Bell,
   Building2,
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   ClipboardList,
   Database,
   FileBarChart,
@@ -14,8 +16,6 @@ import {
   Menu,
   Moon,
   Package,
-  PanelLeftClose,
-  PanelLeftOpen,
   Search,
   Settings,
   ShieldCheck,
@@ -71,8 +71,19 @@ const portalNavGroups = [
   ] },
 ];
 
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "healthmate-sidebar-collapsed";
+
+function getStoredSidebarCollapsed() {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 export default function MainLayout({ settings, dark, setDark, user, onLogout, data }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(getStoredSidebarCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [logoSource, setLogoSource] = useState("/Logo.jpg");
   const [clock, setClock] = useState(() => new Date());
@@ -144,6 +155,13 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
   
   useEffect(() => setMobileOpen(false), [location.pathname]);
   useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(collapsed));
+    } catch {
+      // Keep the sidebar usable when browser storage is unavailable.
+    }
+  }, [collapsed]);
+  useEffect(() => {
     if (previousPathRef.current === location.pathname) return;
     previousPathRef.current = location.pathname;
     window.scrollTo({ top: 0, behavior: 'auto' });
@@ -206,8 +224,16 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
             <strong>HealthMate+</strong>
             <span>PRO</span>
           </div>
-          <button className="icon-btn sidebar-collapse" onClick={() => setCollapsed(!collapsed)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} aria-controls="app-navigation">
-            {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+          <button
+            type="button"
+            className="icon-btn sidebar-collapse"
+            onClick={() => setCollapsed((current) => !current)}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-expanded={!collapsed}
+            aria-controls="app-navigation"
+          >
+            {collapsed ? <ChevronRight size={19} aria-hidden="true" /> : <ChevronLeft size={19} aria-hidden="true" />}
           </button>
           <button
             className="icon-btn mobile-close"
@@ -247,11 +273,11 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <NavLink to="/settings" className={({ isActive }) => `protected-link${isActive ? ' active' : ''}`} title="My account settings" aria-label="My Account">
+          <NavLink to="/settings" className={({ isActive }) => `protected-link${isActive ? ' active' : ''}`} title={collapsed ? "My Account" : "My account settings"} aria-label="My Account">
             <Settings size={18} aria-hidden="true" />
             <span>My Account</span>
           </NavLink>
-          <button className="logout-btn" onClick={onLogout} aria-label="Sign out and close session">
+          <button className="logout-btn" onClick={onLogout} aria-label="Sign out and close session" title={collapsed ? "Sign out" : undefined}>
             <LogOut size={18} />
             <span>Sign out</span>
           </button>
