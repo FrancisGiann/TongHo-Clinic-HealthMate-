@@ -22,6 +22,40 @@ function clinicDate(value) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+function newEventId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  throw new Error('This browser cannot create a secure arrival request id. Use a supported browser and try again.');
+}
+
+function guardianEmailMessage(summary, subject) {
+  if (summary?.deliveryUnavailable) return `${subject} was recorded, but email delivery status could not be confirmed.`;
+  if (!summary?.recipientCount) return `${subject} was recorded; no active linked guardian email was available.`;
+  if (summary.emailFailedCount === 0 && summary.emailSentCount === summary.recipientCount) {
+    return `${subject} was recorded; email sent to ${summary.recipientCount} linked guardian${summary.recipientCount === 1 ? '' : 's'}.`;
+  }
+  if (summary.emailSentCount > 0) {
+    const details = [
+      summary.emailFailedCount ? `${summary.emailFailedCount} failed` : '',
+      summary.emailPendingCount ? `${summary.emailPendingCount} pending or status unknown` : '',
+    ].filter(Boolean).join('; ');
+    return `${subject} was recorded; email sent to ${summary.emailSentCount} of ${summary.recipientCount} linked guardians${details ? `; ${details}` : ''}.`;
+  }
+  if (summary.emailPendingCount) {
+    const failure = summary.emailFailedCount ? ` ${summary.emailFailedCount} failed;` : '';
+    return `${subject} was recorded;${failure} email status is pending or unknown for ${summary.emailPendingCount} linked guardian${summary.emailPendingCount === 1 ? '' : 's'}.`;
+  }
+  return `${subject} was recorded, but email failed for ${summary.emailFailedCount} linked guardian${summary.emailFailedCount === 1 ? '' : 's'}.`;
+}
+
+function clinicDateTimeLabel(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-PH', {
+    timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short',
+  }).format(date);
+}
+
 function validDateKey(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const [year, month, day] = value.split('-').map(Number);
@@ -61,14 +95,54 @@ export default function NewVisit({ data, user, reload, refreshInBackground }) {
   const [summaryMeta, setSummaryMeta] = useState(null);
   const [summaryApproved, setSummaryApproved] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [guardianNotification, setGuardianNotification] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [arrivalSaving, setArrivalSaving] = useState(false);
+  const [arrivalResult, setArrivalResult] = useState(null);
+  const [arrivalError, setArrivalError] = useState('');
   const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
   const [inventoryRefreshMessage, setInventoryRefreshMessage] = useState("");
   const [inventoryRefreshError, setInventoryRefreshError] = useState("");
   const inventoryRecoveryPending = useRef(false);
   const inventoryRefreshLock = useRef(false);
+  const selectedPatientIdRef = useRef(String(location.state?.selectedStudent?.id || ''));
+  const arrivalRequestRef = useRef(null);
+  const arrivalLock = useRef(false);
   const clinicToday = clinicDate(new Date());
   const selected = data.students.find((student) => String(student.id) === selectedId);
+  const changeSelectedPatient = (value) => {
+    const nextId = String(value || '');
+    selectedPatientIdRef.current = nextId;
+    arrivalRequestRef.current = null;
+    setArrivalResult(null);
+    setArrivalError('');
+    setSelectedId(nextId);
+  };
+  const recordArrival = async () => {
+    if (!selected || selected.patientType !== 'student' || user?.role !== 'school_nurse' || saving || arrivalLock.current) return;
+    const patientId = String(selected.id);
+    if (!arrivalRequestRef.current || arrivalRequestRef.current.patientId !== patientId) {
+      try {
+        arrivalRequestRef.current = { patientId, eventId: newEventId() };
+      } catch (error) {
+        setArrivalError(error.message);
+        return;
+      }
+    }
+    const { eventId } = arrivalRequestRef.current;
+    arrivalLock.current = true;
+    setArrivalSaving(true);
+    setArrivalError('');
+    try {
+      const result = await api.post('/api/visits/arrivals', { patientId, eventId });
+      if (selectedPatientIdRef.current === patientId) setArrivalResult(result);
+    } catch (error) {
+      if (selectedPatientIdRef.current === patientId) setArrivalError(error.message || 'Arrival status could not be confirmed. Check status to safely retry.');
+    } finally {
+      arrivalLock.current = false;
+      if (selectedPatientIdRef.current === patientId) setArrivalSaving(false);
+    }
+  };
   const canAcknowledgeMissingTemperature = riskResult?.decisionSupportMode === 'conservative_triage_v1'
     && riskResult?.status === 'incomplete'
     && riskResult?.missingFields?.length === 1
@@ -132,8 +206,9 @@ export default function NewVisit({ data, user, reload, refreshInBackground }) {
   };
   const save = async (event) => {
     event?.preventDefault();
-    if (saving) return;
+    if (saving || arrivalSaving) return;
     setSaved(false);
+    setGuardianNotification(null);
     if (!selected) return setSaveError('Select a patient before saving the visit.');
     if (!complaint.trim()) return setSaveError('Enter a chief complaint before saving the visit.');
     if (!treatment.trim()) return setSaveError('Enter the treatment or care provided before saving the visit.');
@@ -214,8 +289,9 @@ export default function NewVisit({ data, user, reload, refreshInBackground }) {
       setSaving(false);
     }
     setRiskResult(result.assessment);
-    await reload?.();
+    setGuardianNotification(result.guardianNotification || null);
     setSaved(true);
+    await reload?.();
   };
   return (
     <div className="form-page">
@@ -228,7 +304,7 @@ export default function NewVisit({ data, user, reload, refreshInBackground }) {
       <div className="form-layout">
         <form className="panel form-panel" onSubmit={save}>
           <FormStep number="01" title="Select patient">
-            <StudentPicker students={data.students} value={selectedId} onChange={setSelectedId} label="Patient" required disabled={saving} />
+            <StudentPicker students={data.students} value={selectedId} onChange={changeSelectedPatient} label="Patient" required disabled={saving || arrivalSaving} />
             {selected && (
               <div className="selected-student">
                 <div className="avatar small teal">
@@ -248,6 +324,21 @@ export default function NewVisit({ data, user, reload, refreshInBackground }) {
               </div>
             )}
             {selected && <div className="selected-allergies"><strong>Allergies</strong><p>{selected.allergies?.trim() || 'None recorded'}</p></div>}
+            {selected?.patientType === 'student' && user?.role === 'school_nurse' && (
+              <div className="arrival-action-panel">
+                <button type="button" className="secondary-btn" onClick={recordArrival} disabled={arrivalSaving || saving || Boolean(arrivalResult)}>
+                  {arrivalSaving ? 'Recording arrival…' : arrivalError ? 'Check arrival status' : arrivalResult ? 'Arrival recorded' : 'Record arrival & notify guardian'}
+                </button>
+                {arrivalError && <p className="error-banner" role="alert">{arrivalError}</p>}
+                {arrivalResult && (
+                  <p className="success-message" role="status">
+                    {arrivalResult.alreadyRecorded ? 'Arrival was already recorded. ' : ''}
+                    {clinicDateTimeLabel(arrivalResult.arrival?.occurredAt) && `Recorded ${clinicDateTimeLabel(arrivalResult.arrival.occurredAt)}. `}
+                    {guardianEmailMessage(arrivalResult.notification, 'Arrival')}
+                  </p>
+                )}
+              </div>
+            )}
           </FormStep>
           <FormStep number="02" title="Visit details">
             <label>
@@ -355,12 +446,15 @@ export default function NewVisit({ data, user, reload, refreshInBackground }) {
                 <input type="date" value={followUpDate} min={clinicToday} onChange={(e) => setFollowUpDate(e.target.value)} required />
               </label>}
             </div>
-            <button type="submit" className="primary-btn" disabled={saving}>
+            <button type="submit" className="primary-btn" disabled={saving || arrivalSaving}>
               <ClipboardPlus size={16} /> {saving ? 'Saving visit…' : 'Save visit'}
             </button>
           </div>
           {saved && (
-            <p className="success-message" role="status">Visit saved to today’s activity.</p>
+            <p className="success-message" role="status">
+              Visit saved to today’s activity.
+              {guardianNotification && !guardianNotification.skipped && ` ${guardianEmailMessage(guardianNotification, 'Care summary')}`}
+            </p>
           )}
           {saveError && <div className="error-banner" role="alert">{saveError}</div>}
           {riskResult && <div className={`risk-result risk-${riskResult.category}`}><strong>{riskResult.priority === 'requires-review' ? 'Nurse review required' : riskResult.priority === 'urgent' ? 'Urgent nurse review required' : `Decision-support result: ${riskResult.category}`}</strong><p>{riskResult.rationale}</p>{riskResult.decisionSupportMode === 'conservative_triage_v1' && <small>No-match remains unclassified and never means low risk or routine disposition. This prompt cannot replace the nurse’s assessment.</small>}<small>{riskResult.disclaimer} Rule version: {riskResult.ruleVersion} ({riskResult.ruleStatus}).</small></div>}

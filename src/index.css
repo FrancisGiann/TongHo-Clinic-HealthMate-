@@ -7432,6 +7432,15 @@ fieldset.form-section { min-width: 0; border: 0; }
 .dark .admin-dashboard .admin-action-list .action-item { color: var(--ink); }
 .dark .admin-dashboard .admin-action-list .action-item:hover { background: #302a67; }
 
+.arrival-action-panel {
+  display: grid;
+  justify-items: start;
+  gap: 9px;
+  margin-top: 14px;
+}
+.arrival-action-panel .success-message,
+.arrival-action-panel .error-banner { margin: 0; }
+
 @media (max-width: 1050px) {
   .admin-dashboard .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .admin-dashboard .admin-metrics .stat-primary { grid-column: span 2; }

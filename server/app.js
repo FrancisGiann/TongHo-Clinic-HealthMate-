@@ -52,6 +52,7 @@ import { ensureSameOrigin, loginOtpRequired, rateLimit, requestOriginAllowed, tr
 import { buildInvitationActivationUrl } from './invitationUrl.js';
 import { recordNurseLicenseVerification, validateNurseLicenseUpdate } from './domain/nurseLicense.js';
 import { acceptedProfileFields, normalizeDocumentReceiptStatus, normalizeHealthRecordAnswers, validatePaperSignatureForAcceptance } from './domain/health-records.js';
+import { clinicArrivalNotice, clinicVisitCareSummary, notificationDeliveryCounts, recordClinicArrival, validateClinicArrivalPayload } from './domain/clinicArrivals.js';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const distDir = join(currentDir, '..', 'dist');
@@ -120,22 +121,60 @@ async function notifyLinkedUsers(patientId, { type, subject, body, dedupeKey }) 
        AND u.id IN (SELECT guardian_user_id FROM guardian_patient_links WHERE patient_id=$1)`,
     [String(patientId)],
   );
+  const statuses = [];
   for (const user of users.rows) {
     await createNotification({ userId: user.id, type, subject, body, dedupeKey: `${dedupeKey}:in-app:${user.id}`, metadata: { patientId: String(patientId) } });
-    const emailNotification = await createNotification({ userId: user.id, channel: 'email', type, subject, body, dedupeKey: `${dedupeKey}:email:${user.id}`, metadata: { patientId: String(patientId) } });
-    if (!emailNotification) continue;
+    const emailDedupeKey = `${dedupeKey}:email:${user.id}`;
+    const emailNotification = await createNotification({ userId: user.id, channel: 'email', type, subject, body, dedupeKey: emailDedupeKey, metadata: { patientId: String(patientId) } });
+    if (!emailNotification) {
+      const existing = await query('SELECT status FROM notifications WHERE dedupe_key=$1', [emailDedupeKey]);
+      statuses.push(existing.rows[0]?.status || 'unknown');
+      continue;
+    }
     try {
       await sendEmail({
         to: user.email,
         subject,
         text: body,
-        html: `<p>Hello ${escapeHtml(user.name)},</p><p>${escapeHtml(body)}</p><p>Sign in to HealthMate+ for authorized details.</p>`,
+        html: `<p>Hello ${escapeHtml(user.name)},</p><p>${escapeHtml(body).replaceAll('\n', '<br>')}</p><p>Sign in to HealthMate+ for authorized details.</p>`,
       });
-      await query("UPDATE notifications SET status='sent',sent_at=NOW() WHERE id=$1", [emailNotification.id]);
-    } catch {
-      await query("UPDATE notifications SET status='failed' WHERE id=$1", [emailNotification.id]);
+      statuses.push('sent');
+      try {
+        await query("UPDATE notifications SET status='sent',sent_at=NOW() WHERE id=$1", [emailNotification.id]);
+      } catch (error) {
+        console.error('Email status update failed:', error.message);
+      }
+    } catch (error) {
+      statuses.push('failed');
+      try {
+        await query("UPDATE notifications SET status='failed' WHERE id=$1", [emailNotification.id]);
+      } catch (statusError) {
+        console.error('Email failure status update failed:', statusError.message);
+      }
     }
   }
+  return notificationDeliveryCounts(statuses, users.rows.length);
+}
+
+async function notificationDeliveryForDedupe(dedupeKey, patientId) {
+  const result = await query(
+    'SELECT user_id,channel,status FROM notifications WHERE dedupe_key LIKE $1',
+    [`${dedupeKey}:%`],
+  );
+  const recipients = new Set(result.rows.filter((row) => row.channel === 'in_app').map((row) => String(row.user_id)));
+  const emailRows = new Map(result.rows.filter((row) => row.channel === 'email').map((row) => [String(row.user_id), row.status]));
+  for (const userId of emailRows.keys()) recipients.add(userId);
+  if (!recipients.size) {
+    const activeRecipients = await query(
+      `SELECT COUNT(DISTINCT u.id)::int AS count FROM users u
+       WHERE u.status='active' AND u.role='guardian'
+         AND u.id IN (SELECT guardian_user_id FROM guardian_patient_links WHERE patient_id=$1)`,
+      [String(patientId)],
+    );
+    const count = Number(activeRecipients.rows[0]?.count || 0);
+    if (count > 0) return { recipientCount: count, emailSentCount: 0, emailFailedCount: 0, emailPendingCount: count, deliveryPending: true, deliveryUnavailable: true };
+  }
+  return notificationDeliveryCounts([...recipients].map((userId) => emailRows.get(userId) || 'unknown'), recipients.size);
 }
 
 export async function runClinicReminders({ req = null, source = 'manual', now = new Date() } = {}) {
@@ -628,12 +667,15 @@ export function createApp() {
     const version = await saveClinicData(req.body?.data, req.user, req.body?.version);
     const after = await loadClinicData(req.user);
     for (const visit of newRecords(before.visits, after.visits)) {
-      await notifyLinkedUsers(visit.studentId || visit.patientId, {
-        type: 'clinic_visit',
-        subject: 'Clinic visit recorded',
-        body: `A clinic visit was recorded on ${visit.date || 'the current date'}${visit.time ? ` at ${visit.time}` : ''}.`,
-        dedupeKey: `visit:${visit.id}`,
-      });
+      const patientId = visit.studentId || visit.patientId;
+      const patient = after.students.find((student) => String(student.id) === String(patientId));
+      if (patient?.patientType !== 'student') continue;
+      const notice = clinicVisitCareSummary({ studentName: patient.name, visit });
+      try {
+        await notifyLinkedUsers(patientId, { ...notice, dedupeKey: `visit:${visit.id}` });
+      } catch (error) {
+        console.error('Legacy visit notification failed:', error.message);
+      }
     }
     for (const appointment of newRecords(before.appointments, after.appointments)) {
       await notifyLinkedUsers(appointment.studentId || appointment.patientId, {
@@ -1214,6 +1256,57 @@ export function createApp() {
     return res.json({ data: result });
   });
 
+  app.post('/api/visits/arrivals', requireRoles('school_nurse'), async (req, res) => {
+    const validation = validateClinicArrivalPayload(req.body || {});
+    if (!validation.valid) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Select a student and try again.', validation.fields);
+    const { patientId, eventId } = validation.value;
+    const recorded = await recordClinicArrival({ transaction, patientId, eventId, userId: req.user.id });
+    if (recorded.status === 'not_found') return errorResponse(res, 404, 'PATIENT_NOT_FOUND', 'The selected student was not found.');
+    if (recorded.status === 'not_student') return errorResponse(res, 400, 'STUDENT_REQUIRED', 'Arrival notifications are available for student patients only.');
+    if (recorded.status === 'conflict') return errorResponse(res, 409, 'ARRIVAL_IDEMPOTENCY_CONFLICT', 'This arrival request id is already associated with a different student.');
+
+    const dedupeKey = `clinic-arrival:${eventId}`;
+    if (recorded.status === 'existing') {
+      let notification;
+      try {
+        notification = await notificationDeliveryForDedupe(dedupeKey, patientId);
+      } catch (error) {
+        console.error('Arrival notification status lookup failed:', error.message);
+        notification = { recipientCount: 0, emailSentCount: 0, emailFailedCount: 0, deliveryUnavailable: true };
+      }
+      return res.json({ data: {
+        arrival: { id: recorded.arrival.id, patientId: recorded.arrival.patient_id, occurredAt: recorded.arrival.occurred_at },
+        alreadyRecorded: true,
+        notification,
+      } });
+    }
+
+    let notification;
+    let clinicName = 'Campus Clinic';
+    try {
+      const settings = await query('SELECT data FROM clinic_settings WHERE id=1');
+      clinicName = settings.rows[0]?.data?.clinicName || clinicName;
+    } catch (error) {
+      console.error('Arrival clinic-name lookup failed:', error.message);
+    }
+    try {
+      const notice = clinicArrivalNotice({
+        studentName: recorded.patient.data?.name,
+        clinicName,
+        occurredAt: recorded.arrival.occurred_at,
+      });
+      notification = await notifyLinkedUsers(patientId, { ...notice, dedupeKey });
+    } catch (error) {
+      console.error('Arrival notification failed:', error.message);
+      notification = { recipientCount: 0, emailSentCount: 0, emailFailedCount: 0, deliveryUnavailable: true };
+    }
+    return res.status(201).json({ data: {
+      arrival: { id: recorded.arrival.id, patientId: recorded.arrival.patient_id, occurredAt: recorded.arrival.occurred_at },
+      alreadyRecorded: false,
+      notification,
+    } });
+  });
+
   app.post('/api/visits', requireRoles(...clinicalWriteRoles), async (req, res) => {
     const validation = validateVisitPayload(req.body || {});
     if (!validation.valid) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Review the visit fields and try again.', validation.fields);
@@ -1241,15 +1334,19 @@ export function createApp() {
 
     const visitId = crypto.randomUUID();
     let visit;
+    let patientName = '';
+    let patientType = '';
     try {
       await clinicDataTransaction(async (client) => {
-        const patient = await client.query('SELECT id,data FROM patients WHERE id=$1 FOR SHARE', [input.patientId]);
+        const patient = await client.query('SELECT id,patient_type,data FROM patients WHERE id=$1 FOR SHARE', [input.patientId]);
         if (!patient.rowCount) {
           const error = new Error('The selected patient was not found.');
           error.status = 404;
           error.code = 'PATIENT_NOT_FOUND';
           throw error;
         }
+        patientType = patient.rows[0].patient_type;
+        patientName = patient.rows[0].data?.name || '';
         const createdAt = new Date();
         const { resolved: resolvedDispensations, lockOrder } = await resolveInventoryDispensations(client, input.dispensations);
         const legacyMedicine = input.medicineId ? resolvedDispensations.find((entry) => entry.itemId === input.medicineId) : null;
@@ -1304,17 +1401,17 @@ export function createApp() {
       if (error.status) return errorResponse(res, error.status, error.code || 'VISIT_SAVE_FAILED', error.message);
       throw error;
     }
-    try {
-      await notifyLinkedUsers(input.patientId, {
-        type: 'clinic_visit',
-        subject: 'Clinic visit recorded',
-        body: `A ${input.visitType.toLowerCase()} clinic visit was recorded on ${visit.date}${visit.time ? ` at ${visit.time}` : ''}.`,
-        dedupeKey: `visit:${visitId}`,
-      });
-    } catch (error) {
-      console.error('Visit notification failed:', error.message);
+    let guardianNotification = { recipientCount: 0, emailSentCount: 0, emailFailedCount: 0, skipped: patientType !== 'student' };
+    if (patientType === 'student') {
+      try {
+        const notice = clinicVisitCareSummary({ studentName: patientName, visit });
+        guardianNotification = await notifyLinkedUsers(input.patientId, { ...notice, dedupeKey: `visit:${visitId}` });
+      } catch (error) {
+        console.error('Visit notification failed:', error.message);
+        guardianNotification = { recipientCount: 0, emailSentCount: 0, emailFailedCount: 0, deliveryUnavailable: true };
+      }
     }
-    return res.status(201).json({ data: { visit, assessment, summaryPendingApproval: Boolean(input.summaryDraft && !input.summaryApproved) } });
+    return res.status(201).json({ data: { visit, assessment, summaryPendingApproval: Boolean(input.summaryDraft && !input.summaryApproved), guardianNotification } });
   });
 
   app.get('/api/risk/rules', requireRoles(...reportReadRoles), async (req, res) => {

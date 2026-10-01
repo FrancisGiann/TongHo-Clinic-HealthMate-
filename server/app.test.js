@@ -223,6 +223,23 @@ test('visit creation and clinical snapshot writes are restricted to school nurse
   }
 });
 
+test('arrival recording route is restricted to school nurses', () => {
+  const app = createApp();
+  const route = app.router.stack.find((layer) => layer.route?.path === '/api/visits/arrivals' && layer.route.methods.post);
+  assert.ok(route);
+  const guard = route.route.stack[0].handle;
+  const invoke = (role) => {
+    let statusCode = 200;
+    let nextCalled = false;
+    const response = { status(code) { statusCode = code; return { json: () => response }; } };
+    guard({ user: { role } }, response, () => { nextCalled = true; });
+    return { statusCode, nextCalled };
+  };
+  assert.deepEqual(invoke('school_nurse'), { statusCode: 200, nextCalled: true });
+  assert.deepEqual(invoke('system_administrator'), { statusCode: 403, nextCalled: false });
+  assert.deepEqual(invoke('guardian'), { statusCode: 403, nextCalled: false });
+});
+
 test('legacy queue API routes return a disabled response for old clients', async () => {
   const app = createApp();
   const routes = app.router.stack
