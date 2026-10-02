@@ -43,6 +43,13 @@ const CONSERVATIVE_TRIAGE_DRAFT = Object.freeze({
 const allowedFields = new Set(['painScore', 'clinicianRedFlag', 'recentVisitCount', 'temperature', 'pulse']);
 const allowedOperators = new Set(['equals', 'gte', 'lte', 'lt', 'gt']);
 
+function parseRuleNumber(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : Number.NaN;
+  if (typeof value !== 'string' || !value.trim()) return Number.NaN;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
 function validateConservativeTriageRules(rules) {
   if (rules.requireReviewOnNoMatch !== true
     || !Array.isArray(rules.requiredFields)
@@ -79,25 +86,30 @@ export function validateRiskRules(rules) {
   if (rules.mode === CONSERVATIVE_TRIAGE_MODE) return validateConservativeTriageRules(rules);
   if (rules.mode !== undefined) return { valid: false, message: 'The risk-rule mode is not supported.' };
   const thresholds = rules.thresholds;
-  if (!thresholds || !Number.isFinite(Number(thresholds.moderate)) || !Number.isFinite(Number(thresholds.high))
-    || Number(thresholds.moderate) < 1 || Number(thresholds.high) <= Number(thresholds.moderate) || Number(thresholds.high) > 100) {
+  const moderate = parseRuleNumber(thresholds?.moderate);
+  const high = parseRuleNumber(thresholds?.high);
+  if (!thresholds || !Number.isFinite(moderate) || !Number.isFinite(high)
+    || moderate < 1 || high <= moderate || high > 100) {
     return { valid: false, message: 'Provide ordered thresholds from 1 to 100.' };
   }
-  if (!Array.isArray(rules.requiredFields) || rules.requiredFields.some((field) => !allowedFields.has(field))) {
+  if (!Array.isArray(rules.requiredFields) || rules.requiredFields.some((field) => !allowedFields.has(field))
+    || new Set(rules.requiredFields).size !== rules.requiredFields.length) {
     return { valid: false, message: 'Required fields contain an unsupported clinical indicator.' };
   }
   if (!Array.isArray(rules.indicators) || rules.indicators.length < 1 || rules.indicators.length > 30) {
     return { valid: false, message: 'Provide between 1 and 30 indicators.' };
   }
   for (const indicator of rules.indicators) {
+    const weight = parseRuleNumber(indicator?.weight);
     if (!indicator || !allowedFields.has(indicator.field) || !allowedOperators.has(indicator.operator)
-      || !Number.isInteger(Number(indicator.weight)) || Number(indicator.weight) < 1 || Number(indicator.weight) > 20
+      || !Number.isInteger(weight) || weight < 1 || weight > 20
       || typeof indicator.label !== 'string' || !indicator.label.trim() || indicator.label.trim().length > 120) {
       return { valid: false, message: 'Each indicator needs a supported field, operator, 1–20 weight, and short label.' };
     }
     if (indicator.field === 'clinicianRedFlag') {
       if (indicator.operator !== 'equals' || typeof indicator.value !== 'boolean') return { valid: false, message: 'Clinician warning indicators must compare a boolean value.' };
-    } else if (!['gte', 'lte', 'lt', 'gt'].includes(indicator.operator) || !Number.isFinite(Number(indicator.value))) {
+    } else if (!['gte', 'lte', 'lt', 'gt'].includes(indicator.operator)
+      || !Number.isFinite(parseRuleNumber(indicator.value))) {
       return { valid: false, message: 'Numeric indicators must use a numeric threshold.' };
     }
   }
@@ -142,12 +154,26 @@ export async function approveDraftRiskRule(client, ruleId, approverId) {
 
 function compare(actual, operator, expected) {
   if (operator === 'equals') return actual === expected;
-  if (operator === 'gte') return Number.isFinite(Number(actual)) && Number(actual) >= Number(expected);
-  if (operator === 'lte') return Number.isFinite(Number(actual)) && Number(actual) <= Number(expected);
-  if (operator === 'lt') return Number.isFinite(Number(actual)) && Number(actual) < Number(expected);
-  if (operator === 'gt') return Number.isFinite(Number(actual)) && Number(actual) > Number(expected);
   if (operator === 'includes') return Array.isArray(actual) && actual.includes(expected);
+  const numericActual = typeof actual === 'number' ? actual
+    : typeof actual === 'string' && actual.trim() ? Number(actual) : Number.NaN;
+  if (!Number.isFinite(numericActual)) return false;
+  if (operator === 'gte') return numericActual >= expected;
+  if (operator === 'lte') return numericActual <= expected;
+  if (operator === 'lt') return numericActual < expected;
+  if (operator === 'gt') return numericActual > expected;
   return false;
+}
+
+function isMissingRuleInput(value) {
+  return value === undefined || value === null || (typeof value === 'string' && !value.trim());
+}
+
+function validRequiredRuleInput(field, value) {
+  if (field === 'clinicianRedFlag') return typeof value === 'boolean';
+  const numericValue = typeof value === 'number' ? value
+    : typeof value === 'string' && value.trim() ? Number(value) : Number.NaN;
+  return Number.isFinite(numericValue);
 }
 
 const decisionDisclaimer = 'Decision support only. This result is not a diagnosis and does not replace clinical judgment.';
@@ -218,10 +244,12 @@ export function riskAllowsAcknowledgedIncomplete(result) {
 export function assessRisk(input, configuredRules = DEMONSTRATION_RULES) {
   const rules = configuredRules || DEMONSTRATION_RULES;
   if (rules.mode === CONSERVATIVE_TRIAGE_MODE) return assessConservativeTriage(input, rules);
-  const missingFields = (rules.requiredFields || []).filter((field) => {
+  const missingFields = [];
+  for (const field of rules.requiredFields || []) {
     const value = input?.[field];
-    return value === undefined || value === null || value === '';
-  });
+    if (isMissingRuleInput(value)) missingFields.push(field);
+    else if (!validRequiredRuleInput(field, value)) missingFields.push(`valid${field[0]?.toUpperCase() || ''}${field.slice(1)}`);
+  }
 
   if (input?.painScore !== undefined && (!Number.isInteger(Number(input.painScore)) || Number(input.painScore) < 1 || Number(input.painScore) > 10)) {
     missingFields.push('validPainScore');
@@ -372,20 +400,34 @@ export async function disableRiskRuleTesting(client, environment = process.env.N
 }
 
 export async function ensureConservativeCandidateDraft(client) {
-  await client.query("SELECT pg_advisory_xact_lock(hashtext('risk-rule-conservative-candidate'))");
+  await client.query("SELECT pg_advisory_xact_lock(hashtext('risk-rule-version'))");
   const existing = await client.query(
-    "SELECT id,version,name,status FROM risk_rules WHERE rules->>'mode'=$1 ORDER BY version DESC LIMIT 1",
+    "SELECT id,version,name,status FROM risk_rules WHERE rules->>'mode'=$1 AND status<>'retired' ORDER BY version DESC LIMIT 1",
     [CONSERVATIVE_TRIAGE_MODE],
   );
   if (existing.rowCount) return { ...existing.rows[0], created: false };
 
-  const latest = await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM risk_rules');
-  const version = Number(latest.rows[0]?.version || 0) + 1;
   const candidate = getConservativeCandidateRuleDraft();
   const id = crypto.randomUUID();
+  return createRiskRuleDraft(client, { id, name: candidate.name, rules: candidate.rules, lockHeld: true, created: true });
+}
+
+export async function createRiskRuleDraft(client, { id = crypto.randomUUID(), name, rules, version, lockHeld = false, created = false }) {
+  if (!lockHeld) await client.query("SELECT pg_advisory_xact_lock(hashtext('risk-rule-version'))");
+  let nextVersion = version;
+  if (nextVersion === undefined) {
+    const latest = await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM risk_rules');
+    nextVersion = Number(latest.rows[0]?.version || 0) + 1;
+  }
+  if (!Number.isSafeInteger(nextVersion) || nextVersion < 1 || nextVersion > 2147483647) {
+    const error = new Error('The supported risk-rule version range is exhausted.');
+    error.status = 409;
+    error.code = 'VERSION_LIMIT_REACHED';
+    throw error;
+  }
   await client.query(
     "INSERT INTO risk_rules(id,version,name,rules,status,approved_by,approved_at) VALUES($1,$2,$3,$4::jsonb,'draft',NULL,NULL)",
-    [id, version, candidate.name, JSON.stringify(candidate.rules)],
+    [id, nextVersion, name, JSON.stringify(rules)],
   );
-  return { id, version, name: candidate.name, status: 'draft', created: true };
+  return { id, version: nextVersion, name, status: 'draft', created };
 }

@@ -34,7 +34,7 @@ import {
   verifyPassword,
 } from './auth.js';
 import { emailConfigured, escapeHtml, sendEmail } from './email.js';
-import { activateRiskRuleForTesting, approveDraftRiskRule, assessRisk, disableRiskRuleTesting, ensureConservativeCandidateDraft, getConservativeCandidateRuleDraft, getDemonstrationRules, readTestRiskRuleActivation, riskAllowsAcknowledgedIncomplete, riskNeedsNurseAcknowledgement, selectRiskRules, validateRiskRules } from './domain/risk.js';
+import { activateRiskRuleForTesting, approveDraftRiskRule, assessRisk, createRiskRuleDraft, disableRiskRuleTesting, ensureConservativeCandidateDraft, getConservativeCandidateRuleDraft, getDemonstrationRules, readTestRiskRuleActivation, riskAllowsAcknowledgedIncomplete, riskNeedsNurseAcknowledgement, selectRiskRules, validateRiskRules } from './domain/risk.js';
 import { buildClinicReport, reportForRole, reportSnapshotForStorage } from './domain/reporting.js';
 import { applyStockAdjustment, validateInventoryArchive, validateInventoryItem, validateStockAdjustment } from './domain/inventory.js';
 import { persistVisitAndDispensations, resolveInventoryDispensations } from './domain/dispensing.js';
@@ -1457,15 +1457,17 @@ export function createApp() {
     return res.json({ data: { rules: result.rows, demonstrationRules: getDemonstrationRules(), candidateRuleDraft: getConservativeCandidateRuleDraft(), testActivationAvailable, testActivation, currentUserLicenseVerified } });
   });
 
-  app.post('/api/risk/rules/conservative-candidate', requireRoles('system_administrator'), async (req, res) => {
+  app.post('/api/risk/rules/conservative-candidate', requireRoles('school_nurse', 'system_administrator'), async (req, res) => {
     let candidate;
     try {
       candidate = await transaction((client) => ensureConservativeCandidateDraft(client));
     } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'RISK_RULE_CREATE_FAILED', error.message);
       if (error.code !== '23505') throw error;
       try {
         candidate = await transaction((client) => ensureConservativeCandidateDraft(client));
       } catch (retryError) {
+        if (retryError.status) return errorResponse(res, retryError.status, retryError.code || 'RISK_RULE_CREATE_FAILED', retryError.message);
         if (retryError.code === '23505') return errorResponse(res, 409, 'VERSION_EXISTS', 'A rule version was created at the same time. Try again to create the next version.');
         throw retryError;
       }
@@ -1474,27 +1476,31 @@ export function createApp() {
     return res.status(candidate.created ? 201 : 200).json({ data: candidate });
   });
 
-  app.post('/api/risk/rules', requireRoles('system_administrator'), async (req, res) => {
-    const version = Number(req.body?.version);
-    const name = String(req.body?.name || '').trim();
+  app.post('/api/risk/rules', requireRoles('school_nurse', 'system_administrator'), async (req, res) => {
+    const hasRequestedVersion = Boolean(req.body && Object.hasOwn(req.body, 'version'));
+    const rawVersion = req.body?.version;
+    const requestedVersion = !hasRequestedVersion ? undefined
+      : typeof rawVersion === 'number' ? rawVersion
+        : typeof rawVersion === 'string' && rawVersion.trim() ? Number(rawVersion) : Number.NaN;
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
     const rules = req.body?.rules;
-    const status = 'draft';
-    if (!Number.isInteger(version) || version < 1 || !name || !rules || !Array.isArray(rules.indicators) || !validateRiskRules(rules).valid) {
-      return errorResponse(res, 400, 'VALIDATION_ERROR', 'Version, name, and a supported rule definition are required.');
-    }
-    const id = crypto.randomUUID();
+    if (hasRequestedVersion && (!Number.isSafeInteger(requestedVersion) || requestedVersion < 1 || requestedVersion > 2147483647)) return errorResponse(res, 400, 'VALIDATION_ERROR', 'If supplied, version must be a positive whole number within the supported range.');
+    if (!name || name.length > 120) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Enter a rule name from 1 to 120 characters.');
+    const validation = validateRiskRules(rules);
+    if (!validation.valid) return errorResponse(res, 400, 'VALIDATION_ERROR', validation.message);
+    let draft;
     try {
-      await query(
-        `INSERT INTO risk_rules(id,version,name,rules,status,approved_by,approved_at)
-         VALUES($1,$2,$3,$4::jsonb,$5,$6,CASE WHEN $5='clinician_approved' THEN NOW() ELSE NULL END)`,
-        [id, version, name, JSON.stringify(rules), status, null],
-      );
+      draft = await transaction(async (client) => {
+        const created = await createRiskRuleDraft(client, { name, rules, version: requestedVersion });
+        await audit(req, 'RISK_RULE_CREATED', { version: created.version, status: created.status }, 'risk_rule', created.id, client);
+        return created;
+      });
     } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'RISK_RULE_CREATE_FAILED', error.message);
       if (error.code === '23505') return errorResponse(res, 409, 'VERSION_EXISTS', 'That risk-rule version already exists.');
       throw error;
     }
-    await audit(req, 'RISK_RULE_CREATED', { version, status }, 'risk_rule', id);
-    return res.status(201).json({ data: { id, version, status } });
+    return res.status(201).json({ data: draft });
   });
 
   app.put('/api/risk/rules/:id/test-activation', requireRoles('school_nurse', 'system_administrator'), async (req, res) => {

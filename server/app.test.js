@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createApp } from './app.js';
 import { requireAuth } from './auth.js';
+import { getDemonstrationRules } from './domain/risk.js';
 
 test('application factory exposes an Express request handler', () => {
   const configuredHops = process.env.TRUST_PROXY_HOPS;
@@ -97,21 +98,66 @@ test('guardian invitation requires an administrator and a student patient link',
   }
 });
 
-test('persisting the built-in candidate draft is administrator-only', () => {
+test('nurses and administrators can create inactive risk drafts while guardians cannot', () => {
   const app = createApp();
-  const route = app.router.stack.find((layer) => layer.route?.path === '/api/risk/rules/conservative-candidate');
-  assert.ok(route?.route?.methods.post);
+  for (const path of ['/api/risk/rules', '/api/risk/rules/conservative-candidate']) {
+    const route = app.router.stack.find((layer) => layer.route?.path === path && layer.route.methods.post);
+    assert.ok(route, `POST ${path} exists`);
+    const guard = route.route.stack[0].handle;
+    const invoke = (role) => {
+      let statusCode = 200;
+      let nextCalled = false;
+      const response = { status(code) { statusCode = code; return { json: () => response }; } };
+      guard({ user: { role } }, response, () => { nextCalled = true; });
+      return { statusCode, nextCalled };
+    };
+    assert.deepEqual(invoke('system_administrator'), { statusCode: 200, nextCalled: true }, `${path} allows administrators`);
+    assert.deepEqual(invoke('school_nurse'), { statusCode: 200, nextCalled: true }, `${path} allows nurses to create inactive drafts`);
+    assert.deepEqual(invoke('guardian'), { statusCode: 403, nextCalled: false }, `${path} rejects guardians`);
+  }
+});
+
+test('only school nurses can approve a risk rule', () => {
+  const app = createApp();
+  const route = app.router.stack.find((layer) => layer.route?.path === '/api/risk/rules/:id/approve' && layer.route.methods.patch);
+  assert.ok(route);
   const guard = route.route.stack[0].handle;
-  const invoke = (role) => {
+  for (const [role, expected] of [['school_nurse', true], ['system_administrator', false], ['guardian', false]]) {
     let statusCode = 200;
     let nextCalled = false;
     const response = { status(code) { statusCode = code; return { json: () => response }; } };
     guard({ user: { role } }, response, () => { nextCalled = true; });
-    return { statusCode, nextCalled };
-  };
-  assert.deepEqual(invoke('system_administrator'), { statusCode: 200, nextCalled: true });
-  assert.deepEqual(invoke('school_nurse'), { statusCode: 403, nextCalled: false });
-  assert.deepEqual(invoke('student'), { statusCode: 403, nextCalled: false });
+    assert.equal(nextCalled, expected, `${role} approval access`);
+    if (!expected) assert.equal(statusCode, 403);
+  }
+});
+
+test('risk draft API rejects coerced versions and malformed rule payloads before writing', async () => {
+  const app = createApp();
+  const route = app.router.stack.find((layer) => layer.route?.path === '/api/risk/rules' && layer.route.methods.post);
+  assert.ok(route);
+  const handler = route.route.stack.at(-1).handle;
+  const base = { name: 'Nurse draft', rules: getDemonstrationRules() };
+  const cases = [
+    { body: { ...base, version: true }, message: /version must be a positive whole number/i },
+    { body: { ...base, version: [1] }, message: /version must be a positive whole number/i },
+    { body: { ...base, version: ' ' }, message: /version must be a positive whole number/i },
+    { body: { ...base, version: 2147483648 }, message: /version must be a positive whole number/i },
+    { body: { ...base, name: {} }, message: /rule name/i },
+    { body: { ...base, rules: { ...getDemonstrationRules(), thresholds: { moderate: '', high: 7 } } }, message: /thresholds from 1 to 100/i },
+    { body: { ...base, rules: { ...getDemonstrationRules(), indicators: getDemonstrationRules().indicators.map((item, index) => index === 1 ? { ...item, value: ' ' } : item) } }, message: /numeric indicators must use a numeric threshold/i },
+  ];
+  for (const { body, message } of cases) {
+    let statusCode = 200;
+    let responseBody;
+    const response = {
+      status(code) { statusCode = code; return this; },
+      json(value) { responseBody = value; return this; },
+    };
+    await handler({ body, user: { id: 'nurse-id', role: 'school_nurse' } }, response);
+    assert.equal(statusCode, 400);
+    assert.match(responseBody.error.message, message);
+  }
 });
 
 test('risk-rule test activation is available to nurses and administrators behind dedicated routes', async () => {

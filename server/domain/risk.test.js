@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { activateRiskRuleForTesting, approveDraftRiskRule, assessRisk, disableRiskRuleTesting, ensureConservativeCandidateDraft, getConservativeCandidateRuleDraft, getDemonstrationRules, readTestRiskRuleActivation, riskAllowsAcknowledgedIncomplete, riskNeedsNurseAcknowledgement, selectRiskRules, validateRiskRules } from './risk.js';
+import { activateRiskRuleForTesting, approveDraftRiskRule, assessRisk, createRiskRuleDraft, disableRiskRuleTesting, ensureConservativeCandidateDraft, getConservativeCandidateRuleDraft, getDemonstrationRules, readTestRiskRuleActivation, riskAllowsAcknowledgedIncomplete, riskNeedsNurseAcknowledgement, selectRiskRules, validateRiskRules } from './risk.js';
 
 function testActivationClient({ active = null, includeApproved = false, shared: existingState = null } = {}) {
   const shared = existingState || {
@@ -92,6 +92,78 @@ test('risk rule validator accepts a bounded supported rule set', () => {
   assert.deepEqual(validateRiskRules(rules), { valid: true });
 });
 
+test('risk rule validator rejects blank or nonnumeric values while retaining numeric-string compatibility', () => {
+  const blankThreshold = getDemonstrationRules();
+  blankThreshold.thresholds.moderate = '';
+  assert.equal(validateRiskRules(blankThreshold).valid, false);
+
+  const numericStringThreshold = getDemonstrationRules();
+  numericStringThreshold.thresholds.moderate = '3';
+  assert.equal(validateRiskRules(numericStringThreshold).valid, true);
+
+  const booleanThreshold = getDemonstrationRules();
+  booleanThreshold.thresholds.moderate = false;
+  assert.equal(validateRiskRules(booleanThreshold).valid, false);
+
+  const arrayThreshold = getDemonstrationRules();
+  arrayThreshold.thresholds.moderate = [];
+  assert.equal(validateRiskRules(arrayThreshold).valid, false);
+
+  const blankIndicator = getDemonstrationRules();
+  blankIndicator.indicators[1].value = '';
+  assert.equal(validateRiskRules(blankIndicator).valid, false);
+
+  const numericStringWeight = getDemonstrationRules();
+  numericStringWeight.indicators[0].weight = '10';
+  assert.equal(validateRiskRules(numericStringWeight).valid, true);
+
+  const booleanWeight = getDemonstrationRules();
+  booleanWeight.indicators[0].weight = true;
+  assert.equal(validateRiskRules(booleanWeight).valid, false);
+});
+
+test('overlapping score conditions continue to add each matching weight', () => {
+  const rules = getDemonstrationRules();
+  const result = assessRisk({ painScore: 8, clinicianRedFlag: false, recentVisitCount: 3 }, rules);
+  assert.equal(result.total, 8);
+  assert.deepEqual(result.components.map((item) => item.label), ['High reported pain', 'Moderate reported pain', 'Recurring clinic visits']);
+});
+
+test('missing optional numeric measurements never match zero-valued thresholds', () => {
+  const rules = {
+    requiredFields: ['painScore'],
+    thresholds: { moderate: 3, high: 7 },
+    indicators: [
+      { field: 'painScore', operator: 'gte', value: 1, weight: 1, label: 'Pain recorded' },
+      { field: 'recentVisitCount', operator: 'lte', value: 0, weight: 2, label: 'No recurring visits' },
+    ],
+  };
+  for (const recentVisitCount of [undefined, null, '']) {
+    const result = assessRisk({ painScore: 2, recentVisitCount }, rules);
+    assert.equal(result.total, 1);
+    assert.deepEqual(result.components.map((item) => item.label), ['Pain recorded']);
+  }
+});
+
+test('required numeric and boolean rule inputs reject malformed values with review status', () => {
+  const rules = {
+    requiredFields: ['temperature', 'clinicianRedFlag'],
+    thresholds: { moderate: 3, high: 7 },
+    indicators: [{ field: 'temperature', operator: 'gte', value: 36, weight: 1, label: 'Temperature recorded' }],
+  };
+  for (const temperature of ['   ', false, []]) {
+    const result = assessRisk({ temperature, clinicianRedFlag: false }, rules);
+    assert.equal(result.status, 'incomplete');
+    assert.equal(result.priority, 'requires-review');
+    assert.ok(result.missingFields.includes(temperature === '   ' ? 'temperature' : 'validTemperature'));
+  }
+  for (const clinicianRedFlag of ['false', [], 0]) {
+    const result = assessRisk({ temperature: 37, clinicianRedFlag }, rules);
+    assert.equal(result.status, 'incomplete');
+    assert.ok(result.missingFields.includes('validClinicianRedFlag'));
+  }
+});
+
 test('conservative candidate is valid and cannot be changed to remove its review behavior or source cutoffs', () => {
   const rules = getConservativeCandidateRuleDraft().rules;
   assert.deepEqual(validateRiskRules(rules), { valid: true });
@@ -114,14 +186,14 @@ test('candidate draft creation atomically selects the next version and is idempo
     let releaseLock;
     return {
       async query(sql, params = []) {
-        if (sql.includes("pg_advisory_xact_lock(hashtext('risk-rule-conservative-candidate'))")) {
+        if (sql.includes("pg_advisory_xact_lock(hashtext('risk-rule-version'))")) {
           const previous = shared.lockTail;
           shared.lockTail = new Promise((resolve) => { releaseLock = resolve; });
           await previous;
           return { rows: [] };
         }
         if (sql.includes("WHERE rules->>'mode'=$1")) {
-          const matches = shared.rules.filter((rule) => rule.rules.mode === params[0]).sort((a, b) => b.version - a.version);
+          const matches = shared.rules.filter((rule) => rule.rules.mode === params[0] && rule.status !== 'retired').sort((a, b) => b.version - a.version);
           return matches.length ? { rowCount: 1, rows: [{ id: matches[0].id, version: matches[0].version, name: matches[0].name, status: matches[0].status }] } : { rowCount: 0, rows: [] };
         }
         if (sql.includes('SELECT COALESCE(MAX(version),0)::int AS version FROM risk_rules')) {
@@ -157,6 +229,76 @@ test('candidate draft creation atomically selects the next version and is idempo
   assert.equal(repeated.created, false);
   assert.equal(repeated.id, results[0].id);
   assert.equal(shared.rules.filter((rule) => rule.rules.mode === 'conservative_triage_v1').length, 1);
+});
+
+test('retired conservative candidate can be recreated as a new draft version', async () => {
+  const shared = {
+    rules: [{ id: 'old-candidate', version: 8, name: 'Old candidate', rules: getConservativeCandidateRuleDraft().rules, status: 'retired' }],
+    lockTail: Promise.resolve(),
+  };
+  let releaseLock;
+  const client = {
+    async query(sql, params = []) {
+      if (sql.includes("pg_advisory_xact_lock(hashtext('risk-rule-version'))")) {
+        const previous = shared.lockTail;
+        shared.lockTail = new Promise((resolve) => { releaseLock = resolve; });
+        await previous;
+        return { rows: [] };
+      }
+      if (sql.includes("WHERE rules->>'mode'=$1")) return { rowCount: 0, rows: [] };
+      if (sql.includes('SELECT COALESCE(MAX(version),0)::int AS version FROM risk_rules')) return { rowCount: 1, rows: [{ version: 8 }] };
+      if (sql.startsWith('INSERT INTO risk_rules')) {
+        const [id, version, name, rulesJson] = params;
+        shared.rules.push({ id, version, name, rules: JSON.parse(rulesJson), status: 'draft' });
+        return { rowCount: 1, rows: [] };
+      }
+      throw new Error(`Unexpected retired candidate query: ${sql}`);
+    },
+    release() { releaseLock?.(); },
+  };
+  const draft = await (async () => {
+    try { return await ensureConservativeCandidateDraft(client); }
+    finally { client.release(); }
+  })();
+  assert.equal(draft.created, true);
+  assert.equal(draft.version, 9);
+  assert.equal(draft.status, 'draft');
+  assert.equal(shared.rules.length, 2);
+});
+
+test('concurrent new drafts receive distinct automatically assigned versions', async () => {
+  const shared = { rules: [{ id: 'old', version: 3 }], lockTail: Promise.resolve() };
+  const makeClient = () => {
+    let releaseLock;
+    return {
+      async query(sql, params = []) {
+        if (sql.includes("pg_advisory_xact_lock(hashtext('risk-rule-version'))")) {
+          const previous = shared.lockTail;
+          shared.lockTail = new Promise((resolve) => { releaseLock = resolve; });
+          await previous;
+          return { rows: [] };
+        }
+        if (sql.includes('SELECT COALESCE(MAX(version),0)::int AS version FROM risk_rules')) {
+          return { rowCount: 1, rows: [{ version: Math.max(...shared.rules.map((rule) => rule.version)) }] };
+        }
+        if (sql.startsWith('INSERT INTO risk_rules')) {
+          const [id, version, name, rulesJson] = params;
+          shared.rules.push({ id, version, name, rules: JSON.parse(rulesJson), status: 'draft' });
+          return { rowCount: 1, rows: [] };
+        }
+        throw new Error(`Unexpected draft creation query: ${sql}`);
+      },
+      release() { releaseLock?.(); },
+    };
+  };
+  const create = async (name) => {
+    const client = makeClient();
+    try { return await createRiskRuleDraft(client, { name, rules: getDemonstrationRules() }); }
+    finally { client.release(); }
+  };
+  const drafts = await Promise.all([create('Nurse draft A'), create('Nurse draft B')]);
+  assert.deepEqual(drafts.map((draft) => draft.version).sort(), [4, 5]);
+  assert.ok(drafts.every((draft) => draft.status === 'draft'));
 });
 
 test('candidate temperature indicators use strict WHO boundaries and always require nurse review', () => {

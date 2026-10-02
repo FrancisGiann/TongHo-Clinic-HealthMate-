@@ -4,6 +4,7 @@ import { Check, Database, Download, Lock, RotateCcw, Save, ShieldCheck, Upload, 
 import { downloadCsv } from "../utils/csv";
 import { api } from "../utils/api";
 import ImportPanel from "../components/ImportPanel";
+import RiskRuleBuilder, { RiskRuleDetails } from "../components/RiskRuleBuilder";
 import {
   getAuditLogs,
   getUsersForAdmin,
@@ -13,6 +14,7 @@ import {
   changePassword,
   authenticateUser,
 } from "../utils/auth";
+import { riskRuleFormFromRule } from "../utils/riskRules";
 
 const auditEventMeta = {
   LOGIN_SUCCESS: { label: "Signed in", tone: "positive", group: "Access" },
@@ -108,13 +110,20 @@ export default function Settings({ data, user, reload, section }) {
   const [testActivationAvailable, setTestActivationAvailable] = useState(false);
   const [testActivation, setTestActivation] = useState(null);
   const [currentUserLicenseVerified, setCurrentUserLicenseVerified] = useState(false);
-  const [riskRuleForm, setRiskRuleForm] = useState({ version: '', name: '', rules: '' });
-  const [riskMessage, setRiskMessage] = useState('');
+  const [riskLoading, setRiskLoading] = useState(true);
+  const [riskLoadError, setRiskLoadError] = useState('');
+  const [riskActionBusy, setRiskActionBusy] = useState('');
+  const [riskMessage, setRiskMessage] = useState(null);
+  const [riskEditorSeed, setRiskEditorSeed] = useState(null);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPasswordValue, setNewPasswordValue] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const isAdmin = user?.role === 'system_administrator';
   const savedCandidateRule = riskRules.find((rule) => rule.rules?.mode === 'conservative_triage_v1');
+  const reusableCandidateRule = riskRules.find((rule) => rule.rules?.mode === 'conservative_triage_v1' && rule.status !== 'retired');
+  const currentRiskRule = testActivation?.ruleId
+    ? riskRules.find((rule) => rule.id === testActivation.ruleId)
+    : riskRules.find((rule) => rule.status === 'clinician_approved');
   const [users, setUsers] = useState([]);
   const [showUserForm, setShowUserForm] = useState(false);
   const [newUser, setNewUser] = useState({ name: '', email: '', role: 'Nurse', patientId: '', relationship: 'Guardian' });
@@ -188,7 +197,7 @@ export default function Settings({ data, user, reload, section }) {
     setSessionMessage('');
     setSessionsError('');
     setBroadcastMessage(null);
-    setRiskMessage('');
+    setRiskMessage(null);
     setSaved(false);
     return () => {
       if (userActionFeedbackTimerRef.current) window.clearTimeout(userActionFeedbackTimerRef.current);
@@ -198,21 +207,7 @@ export default function Settings({ data, user, reload, section }) {
 
   useEffect(() => {
     if (activeSection === 'account') refreshSessions();
-    api.get('/api/risk/rules').then((ruleData) => {
-      setRiskRules(ruleData.rules || []);
-      setDemonstrationRules(ruleData.demonstrationRules || null);
-      setCandidateRuleDraft(ruleData.candidateRuleDraft || null);
-      setTestActivationAvailable(Boolean(ruleData.testActivationAvailable));
-      setTestActivation(ruleData.testActivation || null);
-      setCurrentUserLicenseVerified(Boolean(ruleData.currentUserLicenseVerified));
-    }).catch(() => {
-      setRiskRules([]);
-      setDemonstrationRules(null);
-      setCandidateRuleDraft(null);
-      setTestActivationAvailable(false);
-      setTestActivation(null);
-      setCurrentUserLicenseVerified(false);
-    });
+    loadRiskRules();
     if (!isAdmin) return;
     if (activeSection === 'security') {
       refreshAuditLogs();
@@ -461,86 +456,113 @@ export default function Settings({ data, user, reload, section }) {
     }
   };
   const loadRiskRules = async () => {
-    const result = await api.get('/api/risk/rules');
-    setRiskRules(result.rules || []);
-    setDemonstrationRules(result.demonstrationRules || null);
-    setCandidateRuleDraft(result.candidateRuleDraft || null);
-    setTestActivationAvailable(Boolean(result.testActivationAvailable));
-    setTestActivation(result.testActivation || null);
-    setCurrentUserLicenseVerified(Boolean(result.currentUserLicenseVerified));
+    setRiskLoading(true);
+    setRiskLoadError('');
+    try {
+      const result = await api.get('/api/risk/rules');
+      setRiskRules(result.rules || []);
+      setDemonstrationRules(result.demonstrationRules || null);
+      setCandidateRuleDraft(result.candidateRuleDraft || null);
+      setTestActivationAvailable(Boolean(result.testActivationAvailable));
+      setTestActivation(result.testActivation || null);
+      setCurrentUserLicenseVerified(Boolean(result.currentUserLicenseVerified));
+    } catch (error) {
+      setRiskLoadError(error.message || 'Risk rules could not be loaded. Try refreshing.');
+    } finally {
+      setRiskLoading(false);
+    }
   };
-  const loadCandidateIntoDraft = () => {
-    if (!candidateRuleDraft) return;
-    const nextVersion = Math.max(0, ...riskRules.map((rule) => Number(rule.version) || 0)) + 1;
-    setRiskRuleForm({
-      version: String(nextVersion),
-      name: candidateRuleDraft.name,
-      rules: JSON.stringify(candidateRuleDraft.rules, null, 2),
-    });
-    setScopedFeedback(feedbackScopeRef.current, setRiskMessage, 'Candidate loaded for review. Save it to create an inactive draft; a licensed school nurse must approve it before use.');
+  const setRiskFeedback = (tone, text) => setRiskMessage({ tone, text });
+  const setScopedRiskFeedback = (scope, tone, text) => {
+    if (feedbackScopeRef.current === scope) setRiskFeedback(tone, text);
   };
   const createCandidateRuleDraft = async () => {
     const scope = feedbackScopeRef.current;
-    setRiskMessage('');
+    setRiskMessage(null);
+    setRiskActionBusy('candidate');
     try {
       const result = await api.post('/api/risk/rules/conservative-candidate', {});
-      setScopedFeedback(scope, setRiskMessage, result.created
+      setScopedRiskFeedback(scope, 'success', result.created
         ? `Inactive candidate draft version ${result.version} created. A licensed school nurse must approve it before use.`
         : `Candidate already exists as version ${result.version} (${result.status}); no duplicate was created.`);
       await loadRiskRules();
     } catch (error) {
-      setScopedFeedback(scope, setRiskMessage, error.message);
+      setScopedRiskFeedback(scope, 'error', error.message || 'The candidate draft could not be created.');
+    } finally {
+      setRiskActionBusy('');
     }
   };
-  const createRiskRule = async (event) => {
-    event.preventDefault();
+  const createRiskRule = async ({ name, rules }) => {
     const scope = feedbackScopeRef.current;
-    setRiskMessage('');
+    setRiskMessage(null);
+    setRiskActionBusy('create');
     try {
-      await api.post('/api/risk/rules', { version: Number(riskRuleForm.version), name: riskRuleForm.name, rules: JSON.parse(riskRuleForm.rules) });
-      setScopedFeedback(scope, setRiskMessage, 'Draft risk rules saved. A licensed school nurse must approve the version before use.');
-      setRiskRuleForm({ version: '', name: '', rules: '' });
+      const result = await api.post('/api/risk/rules', { name, rules });
+      setScopedRiskFeedback(scope, 'success', `Inactive draft version ${result.version} saved. A verified school nurse must approve and use it separately.`);
       await loadRiskRules();
+      return true;
     } catch (error) {
-      setScopedFeedback(scope, setRiskMessage, error.message.includes('JSON') ? 'Rules must be valid JSON.' : error.message);
+      setScopedRiskFeedback(scope, 'error', error.message || 'The inactive draft could not be saved.');
+      return false;
+    } finally {
+      setRiskActionBusy('');
     }
   };
   const approveRiskRule = async (rule) => {
     const scope = feedbackScopeRef.current;
-    setRiskMessage('');
+    const developmentOverride = testActivation?.ruleId
+      ? riskRules.find((item) => item.id === testActivation.ruleId)
+      : null;
+    setRiskMessage(null);
+    setRiskActionBusy(`approve:${rule.id}`);
     try {
       await api.patch(`/api/risk/rules/${encodeURIComponent(rule.id)}/approve`, {});
-      setScopedFeedback(scope, setRiskMessage, `Version ${rule.version} approved by your nurse account.`);
+      setScopedRiskFeedback(scope, 'success', developmentOverride && developmentOverride.id !== rule.id
+        ? `Version ${rule.version} was approved; development assessments still use test version ${developmentOverride.version}. The previously approved version was retired.`
+        : `Version ${rule.version} is now approved and in use. The previously approved version was retired.`);
       await loadRiskRules();
     } catch (error) {
-      setScopedFeedback(scope, setRiskMessage, error.message);
+      setScopedRiskFeedback(scope, 'error', error.message || 'The rule could not be approved.');
+    } finally {
+      setRiskActionBusy('');
     }
   };
   const enableRiskRuleForTesting = async (rule) => {
     const scope = feedbackScopeRef.current;
-    setRiskMessage('');
+    setRiskMessage(null);
+    setRiskActionBusy(`test:${rule.id}`);
     try {
       const result = await api.put(`/api/risk/rules/${encodeURIComponent(rule.id)}/test-activation`, {});
-      setScopedFeedback(scope, setRiskMessage, result.changed
+      setScopedRiskFeedback(scope, 'success', result.changed
         ? `Version ${rule.version} is enabled for testing in this development environment. Assessments are marked test_active; this does not approve the rule.`
         : `Version ${rule.version} was already enabled for testing. Its draft status and clinician approval fields are unchanged.`);
       await Promise.all([loadRiskRules(), reload()]);
     } catch (error) {
-      setScopedFeedback(scope, setRiskMessage, error.message);
+      setScopedRiskFeedback(scope, 'error', error.message || 'Test activation could not be changed.');
+    } finally {
+      setRiskActionBusy('');
     }
   };
   const disableRiskRuleTesting = async () => {
     const scope = feedbackScopeRef.current;
-    setRiskMessage('');
+    setRiskMessage(null);
+    setRiskActionBusy('test-disable');
     try {
       const result = await api.delete('/api/risk/rules/test-activation');
-      setScopedFeedback(scope, setRiskMessage, result.changed
+      setScopedRiskFeedback(scope, 'success', result.changed
         ? 'Test activation disabled. New assessments now use the clinician-approved rule or the legacy demonstration rules.'
         : 'No test activation was active.');
       await Promise.all([loadRiskRules(), reload()]);
     } catch (error) {
-      setScopedFeedback(scope, setRiskMessage, error.message);
+      setScopedRiskFeedback(scope, 'error', error.message || 'Test activation could not be disabled.');
+    } finally {
+      setRiskActionBusy('');
     }
+  };
+  const copyRiskRuleToDraft = (rule) => {
+    if (!riskRuleFormFromRule(rule)) return;
+    setRiskEditorSeed({ rule, revision: (riskEditorSeed?.revision || 0) + 1 });
+    setRiskFeedback('success', `Version ${rule.version} loaded into the form. Save it as a new inactive draft after reviewing each condition.`);
   };
   const handleCreateUser = async (event) => {
     event.preventDefault();
@@ -809,42 +831,83 @@ export default function Settings({ data, user, reload, section }) {
 
       {activeSection === 'risk' && (
         <section className="panel settings-tab-panel">
-          <div className="settings-panel-heading"><div><h3>Risk rules</h3><p className="field-hint">Versioned decision support only. No rule is a diagnosis or a substitute for nurse judgment.</p></div></div>
-          {candidateRuleDraft && <div className="disabled-note">
-            <strong>Conservative candidate rule</strong>
-            <p>It marks a clinician-observed urgent warning sign for urgent review, and temperatures strictly below 36 °C or above 39 °C for nurse review. The warning-sign screen must be answered after assessment; an unanswered screen blocks saving. A valid reading with no listed sign remains unclassified and still requires the nurse’s full assessment. It does not calculate a weighted score.</p>
-            <p>WHO sources: {candidateRuleDraft.sources.map((source, index) => <span key={source.url}>{index > 0 ? ' · ' : ''}<a href={source.url} target="_blank" rel="noreferrer">{source.label}</a></span>)}</p>
-            <ul>{candidateRuleDraft.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul>
-            {isAdmin && <div className="form-actions">
-              <button type="button" className="primary-btn" onClick={createCandidateRuleDraft} disabled={Boolean(savedCandidateRule)}>
-                {savedCandidateRule ? `Candidate exists · v${savedCandidateRule.version} (${savedCandidateRule.status})` : 'Create inactive candidate draft'}
+          <div className="settings-panel-heading">
+            <div><h3>Risk rules</h3><p className="field-hint">Create clear inactive drafts, review their meaning, and track which version is in use. Rules support a nurse’s assessment; they are not a diagnosis.</p></div>
+            <button type="button" className="secondary-btn" onClick={loadRiskRules} disabled={riskLoading || Boolean(riskActionBusy)}>{riskLoading ? 'Refreshing…' : 'Refresh rules'}</button>
+          </div>
+          <div className="risk-workflow-note">
+            <strong>Who can do what</strong>
+            <p>Nurses and administrators can create drafts. Drafts never affect assessments. Only a school nurse whose PRC license was verified and recorded by an administrator can approve and use a draft; that approval retires the previously approved version.</p>
+          </div>
+          {riskLoadError && <div className="risk-feedback is-error" role="alert"><span>{riskLoadError}</span><button type="button" className="secondary-btn" onClick={loadRiskRules} disabled={riskLoading}>{riskLoading ? 'Retrying…' : 'Try again'}</button></div>}
+          {riskLoading && riskRules.length === 0 && <p className="risk-loading" role="status">Loading saved risk rules…</p>}
+          {candidateRuleDraft && <div className="risk-candidate-card">
+            <div><p className="section-kicker">Optional fixed screening candidate</p><h4>WHO IITT-informed partial screening</h4></div>
+            <p>Warning signs and temperature boundaries prompt urgent or nurse review; other results remain unclassified. This preset does not calculate a weighted score.</p>
+            {reusableCandidateRule && <p className={currentRiskRule?.id === reusableCandidateRule.id ? 'risk-current-label' : 'risk-candidate-state'}>{currentRiskRule?.id === reusableCandidateRule.id ? `Currently used · v${reusableCandidateRule.version}` : `Saved as ${reusableCandidateRule.status === 'draft' ? 'an inactive draft' : 'an approved version'} · v${reusableCandidateRule.version}`}</p>}
+            <details className="risk-candidate-details">
+              <summary>Sources and limitations</summary>
+              <p className="risk-source-links">WHO sources: {candidateRuleDraft.sources.map((source, index) => <span key={source.url}>{index > 0 ? ' · ' : ''}<a href={source.url} target="_blank" rel="noreferrer">{source.label}</a></span>)}</p>
+              <ul>{candidateRuleDraft.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul>
+            </details>
+            <div className="form-actions">
+              <button type="button" className="secondary-btn" onClick={createCandidateRuleDraft} disabled={riskLoading || Boolean(riskActionBusy) || Boolean(reusableCandidateRule)}>
+                {riskActionBusy === 'candidate' ? 'Creating inactive draft…' : reusableCandidateRule ? `Candidate saved · v${reusableCandidateRule.version} (${reusableCandidateRule.status})` : 'Create WHO-informed inactive draft'}
               </button>
-              <button type="button" className="secondary-btn" onClick={loadCandidateIntoDraft}>Load candidate into draft form</button>
-            </div>}
+              {savedCandidateRule?.status === 'retired' && !reusableCandidateRule && <span className="field-hint">The earlier candidate is retired. Creating this again makes a new draft version.</span>}
+            </div>
           </div>}
-          {testActivationAvailable && <div className="disabled-note risk-test-activation-note" role="status">
+          {testActivationAvailable && <div className="risk-test-activation-note" role="status">
             <strong>Development testing</strong>
-            <span>Test activation is available to clinic administrators and nurses in this development environment. It keeps the rule in draft, leaves clinician approval fields empty, and labels assessments test_active.</span>
-            {testActivation && <span>Currently testing rule version {riskRules.find((rule) => rule.id === testActivation.ruleId)?.version || 'unknown'}.</span>}
-            {testActivation && <button type="button" className="secondary-btn" onClick={disableRiskRuleTesting}>Disable test activation</button>}
+            <span>Testing is available to nurses and administrators in this development environment. It leaves the draft unapproved and labels assessments test_active.</span>
+            {testActivation && <span>Version {riskRules.find((rule) => rule.id === testActivation.ruleId)?.version || 'unknown'} is currently selected for development tests.</span>}
+            {testActivation && <button type="button" className="secondary-btn" onClick={disableRiskRuleTesting} disabled={riskLoading || Boolean(riskActionBusy)}>{riskActionBusy === 'test-disable' ? 'Disabling…' : 'Disable test activation'}</button>}
           </div>}
-          {demonstrationRules && <div className="disabled-note">Demonstration rules are visible for testing and remain unapproved. They are the fallback when no clinician-approved version exists; an enabled test rule takes precedence in development.</div>}
-          {isAdmin && <form className="inline-entry-form" onSubmit={createRiskRule}><div className="two-fields"><label>Version<input type="number" min="1" value={riskRuleForm.version} onChange={(event) => setRiskRuleForm({ ...riskRuleForm, version: event.target.value })} required /></label><label>Rule set name<input value={riskRuleForm.name} maxLength="120" onChange={(event) => setRiskRuleForm({ ...riskRuleForm, name: event.target.value })} required /></label></div><label>Rules JSON<textarea value={riskRuleForm.rules} onChange={(event) => setRiskRuleForm({ ...riskRuleForm, rules: event.target.value })} placeholder='{"requiredFields":["painScore"],"thresholds":{"moderate":3,"high":7},"indicators":[]}' required /></label><button className="primary-btn">Save draft rule set</button></form>}
-          {riskMessage && <p className="success-message" role="status">{riskMessage}</p>}
-          <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Version</th><th>Name</th><th>Status</th><th>Approver</th><th>Action</th></tr></thead><tbody>{riskRules.map((rule) => {
-            const isTestActive = testActivation?.ruleId === rule.id;
-            const isDraft = rule.status === 'draft';
-            const canTest = testActivationAvailable && isDraft && rule.rules?.mode === 'conservative_triage_v1'
-              && ['school_nurse', 'system_administrator'].includes(user?.role);
-            return <tr key={rule.id}><td>{rule.version}</td><td>{rule.name}</td><td><span className={`status-chip ${rule.status === 'clinician_approved' ? 'success' : 'warn'}`}>{rule.status === 'clinician_approved' ? 'Clinician approved' : isTestActive ? 'Test active · development' : 'Draft — not in use'}</span></td><td>{rule.approved_by || 'None'}</td><td>
-              {canTest && (isTestActive
-                ? <button type="button" className="table-action" onClick={disableRiskRuleTesting}>Disable test</button>
-                : <button type="button" className="table-action" onClick={() => enableRiskRuleForTesting(rule)}>Enable for testing</button>)}
-              {user?.role === 'school_nurse' && isDraft && <button type="button" className="table-action" onClick={() => approveRiskRule(rule)} disabled={!currentUserLicenseVerified}>Approve</button>}
-              {!canTest && !(user?.role === 'school_nurse' && isDraft) && '—'}
-            </td></tr>;
-          })}</tbody></table></div>
-          {user?.role === 'school_nurse' && !currentUserLicenseVerified && <p className="disabled-note">A system administrator must independently verify and record your PRC license before rule approval is available. Nurses cannot record their own license here. Test activation does not require a PRC license.</p>}
+          {demonstrationRules && !currentRiskRule && !testActivation && <p className="risk-demo-note">Version 0 demonstration rules are currently the fallback because no clinician-approved version exists. In development, a selected test draft takes precedence.</p>}
+          <RiskRuleBuilder onSave={createRiskRule} saving={riskActionBusy === 'create'} busy={riskLoading || Boolean(riskActionBusy)} demonstrationRules={demonstrationRules} seed={riskEditorSeed} />
+          {riskMessage && <p className={`risk-feedback ${riskMessage.tone === 'error' ? 'is-error' : 'is-success'}`} role={riskMessage.tone === 'error' ? 'alert' : 'status'}>{riskMessage.text}</p>}
+
+          <div className="risk-rules-heading"><div><h4>Saved versions</h4><p>Review each version’s requirements, conditions, status, and approval history.</p></div>{currentRiskRule && <span className="risk-current-label">Currently used{testActivation?.ruleId === currentRiskRule.id ? ' for development tests' : ''}: v{currentRiskRule.version}</span>}</div>
+          {!riskLoading && !riskLoadError && riskRules.length === 0 && <p className="risk-empty-state">No saved rule versions yet.</p>}
+          <div className="risk-rule-list">
+            {riskRules.map((rule) => {
+              const isTestActive = testActivation?.ruleId === rule.id;
+              const isDraft = rule.status === 'draft';
+              const isCurrent = currentRiskRule?.id === rule.id;
+              const canTest = testActivationAvailable && isDraft && rule.rules?.mode === 'conservative_triage_v1'
+                && ['school_nurse', 'system_administrator'].includes(user?.role);
+              const canCopy = !rule.rules?.mode && Boolean(riskRuleFormFromRule(rule));
+              const busy = riskLoading || Boolean(riskActionBusy);
+              const statusLabel = rule.status === 'clinician_approved' ? 'Clinician approved'
+                : rule.status === 'retired' ? 'Retired · not in use'
+                  : isTestActive ? 'Test active · development only' : 'Draft · inactive';
+              const approvedAt = rule.approved_at ? new Date(rule.approved_at) : null;
+              const approvedDate = approvedAt && !Number.isNaN(approvedAt.getTime()) ? approvedAt.toLocaleDateString() : '';
+              const approvalRecorded = Boolean(rule.approved_at || rule.status === 'clinician_approved');
+              return <article className="risk-rule-card" key={rule.id}>
+                <div className="risk-rule-card-heading">
+                  <div><p className="section-kicker">Version {rule.version}</p><h5>{rule.name}</h5></div>
+                  <div className="risk-rule-badges">
+                    <span className={`status-chip ${rule.status === 'clinician_approved' || isCurrent ? 'success' : rule.status === 'retired' ? 'neutral' : 'warn'}`}>{statusLabel}</span>
+                    {isCurrent && <span className="risk-current-label">Currently used</span>}
+                  </div>
+                </div>
+                <RiskRuleDetails rule={rule} />
+                <div className="risk-rule-card-footer">
+                  <span>{approvalRecorded ? `Clinician approval recorded${approvedDate ? ` · ${approvedDate}` : ''}` : rule.status === 'retired' ? 'Retired without recorded approval' : 'Waiting for nurse approval'}</span>
+                  <div className="risk-rule-actions">
+                    {canCopy && <button type="button" className="secondary-btn" onClick={() => copyRiskRuleToDraft(rule)} disabled={busy}>Use as starting point</button>}
+                    {canTest && (isTestActive
+                      ? <button type="button" className="secondary-btn" onClick={disableRiskRuleTesting} disabled={busy}>{riskActionBusy === 'test-disable' ? 'Disabling…' : 'Disable test'}</button>
+                      : <button type="button" className="secondary-btn" onClick={() => enableRiskRuleForTesting(rule)} disabled={busy}>{riskActionBusy === `test:${rule.id}` ? 'Enabling…' : 'Enable for development test'}</button>)}
+                    {user?.role === 'school_nurse' && isDraft && <button type="button" className="primary-btn" onClick={() => approveRiskRule(rule)} disabled={!currentUserLicenseVerified || busy}>{riskActionBusy === `approve:${rule.id}` ? 'Approving…' : `Approve and use v${rule.version}`}</button>}
+                  </div>
+                  {user?.role === 'system_administrator' && isDraft && <span className="risk-approval-note">Only a verified school nurse can approve this draft.</span>}
+                </div>
+              </article>;
+            })}
+          </div>
+          {user?.role === 'school_nurse' && !currentUserLicenseVerified && <p className="risk-license-note">Draft creation is available. Approval and use require an administrator to verify and record your PRC license. Nurses cannot record their own verification.</p>}
         </section>
       )}
 

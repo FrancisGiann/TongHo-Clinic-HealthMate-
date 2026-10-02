@@ -7478,6 +7478,269 @@ fieldset.form-section { min-width: 0; border: 0; }
 .arrival-action-panel .success-message,
 .arrival-action-panel .error-banner { margin: 0; }
 
+/* Risk rule authoring and review */
+.risk-workflow-note,
+.risk-candidate-card,
+.risk-demo-note,
+.risk-license-note {
+  margin: 14px 0;
+  padding: 14px 16px;
+  border: 1px solid #d8d3f4;
+  border-radius: 10px;
+  background: #f7f6ff;
+  color: var(--ink);
+}
+.risk-workflow-note strong,
+.risk-candidate-card h4 { color: #302078; }
+.risk-workflow-note p,
+.risk-candidate-card p,
+.risk-candidate-card li,
+.risk-demo-note,
+.risk-license-note { font-size: 12px; line-height: 1.55; }
+.risk-workflow-note p { margin: 5px 0 0; color: var(--muted); }
+.risk-candidate-card { display: grid; gap: 8px; }
+.risk-candidate-card > div:first-child .section-kicker { margin: 0 0 3px; }
+.risk-candidate-card h4 { margin: 0; font-size: 15px; }
+.risk-candidate-card p { margin: 0; color: var(--muted); }
+.risk-candidate-card ul { margin: 0; padding-left: 20px; color: var(--muted); }
+.risk-candidate-card li + li { margin-top: 5px; }
+.risk-candidate-card .form-actions { margin-top: 3px; }
+.risk-source-links a { color: var(--teal-dark); text-underline-offset: 2px; }
+.risk-candidate-card > .risk-current-label { margin: 0; color: #176556; }
+.risk-candidate-state { width: fit-content; margin: 0; padding: 5px 8px; border-radius: 999px; background: #f0eef7; color: #615b7c !important; font-size: 10px !important; font-weight: 650; }
+.risk-candidate-details { padding-top: 4px; }
+.risk-candidate-details summary { width: fit-content; color: var(--teal-dark); cursor: pointer; font-size: 12px; font-weight: 650; text-underline-offset: 3px; }
+.risk-candidate-details > p { margin-top: 8px; }
+.risk-candidate-details ul { margin: 8px 0 0; padding-left: 20px; }
+.risk-test-activation-note {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  margin: 14px 0;
+  padding: 14px 16px;
+  border: 1px solid #eadbb0;
+  border-radius: 10px;
+  background: #fffaf0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.risk-test-activation-note strong { color: #805b12; }
+.risk-demo-note { color: var(--muted); }
+.risk-rule-builder {
+  display: grid;
+  gap: 16px;
+  margin: 18px 0 24px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--white);
+}
+.risk-rule-builder-heading,
+.risk-rules-heading,
+.risk-rule-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.risk-rule-builder-heading h4,
+.risk-rules-heading h4 { margin: 0; color: var(--ink); font-size: 16px; }
+.risk-rule-builder-heading p,
+.risk-rules-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.risk-rule-builder-note {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--teal);
+  background: #f5f3ff;
+  color: #49436c;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.risk-rule-builder > label,
+.risk-rule-condition label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.risk-rule-builder input:not([type="checkbox"]),
+.risk-rule-builder select {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--white);
+  color: var(--ink);
+  font: 500 13px "IBM Plex Sans", sans-serif;
+}
+.risk-rule-builder input:focus-visible,
+.risk-rule-builder select:focus-visible,
+.risk-rule-builder button:focus-visible,
+.risk-rule-details summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.risk-rule-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.risk-rule-fieldset > legend,
+.risk-rule-condition > legend { padding: 0 5px; color: var(--ink); font-size: 13px; font-weight: 650; }
+.risk-rule-fieldset > p { margin: 0 0 11px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.risk-rule-field-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.risk-rule-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.risk-rule-check input { flex: none; width: 16px; height: 16px; accent-color: var(--teal); }
+.risk-rule-score-inputs { max-width: 520px; margin: 0; }
+.risk-rule-condition-list { display: grid; gap: 10px; }
+.risk-rule-condition {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #e2def5;
+  border-radius: 8px;
+  background: #fcfbff;
+}
+.risk-rule-condition-grid { display: grid; grid-template-columns: 1.3fr 1fr 1fr .6fr; gap: 10px; }
+.risk-rule-condition-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin-top: 10px; }
+.risk-rule-remove { display: inline-flex; align-items: center; gap: 5px; min-height: 38px; margin: 0; font-size: 11px; }
+.risk-rule-add { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; }
+.risk-rule-builder .form-actions { margin: 0; }
+.risk-rule-builder .primary-btn,
+.risk-rule-builder .secondary-btn,
+.risk-candidate-card .secondary-btn,
+.risk-test-activation-note .secondary-btn,
+.risk-feedback .secondary-btn,
+.risk-rule-card .primary-btn,
+.risk-rule-card .secondary-btn { min-height: 38px; }
+.risk-feedback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 11px 13px;
+  border: 1px solid #b9e0d4;
+  border-radius: 8px;
+  background: #f0faf6;
+  color: #176556;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.risk-feedback.is-error { border-color: #f4c7ce; background: #fff4f5; color: #9f1239; }
+.risk-feedback.is-success { border-color: #b9e0d4; background: #f0faf6; color: #176556; }
+.risk-loading,
+.risk-empty-state { margin: 14px 0; color: var(--muted); font-size: 13px; }
+.risk-rules-heading { align-items: center; margin: 22px 0 12px; }
+.risk-current-label {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 5px 8px;
+  border: 1px solid #b7ddcf;
+  border-radius: 999px;
+  background: #effaf5;
+  color: #176556;
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.risk-rule-list { display: grid; gap: 12px; }
+.risk-rule-card { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--white); }
+.risk-rule-card-heading { align-items: center; }
+.risk-rule-card-heading .section-kicker { margin: 0 0 3px; }
+.risk-rule-card-heading h5 { margin: 0; color: var(--ink); font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
+.risk-rule-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.status-chip.neutral { background: #f0eef7; color: #615b7c; }
+.risk-rule-details { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--muted); font-size: 12px; line-height: 1.5; }
+.risk-rule-details summary { width: fit-content; color: var(--teal-dark); cursor: pointer; font-weight: 650; text-underline-offset: 3px; }
+.risk-rule-details > p { margin: 9px 0 0; }
+.risk-rule-details ul { display: grid; gap: 7px; margin: 10px 0; padding-left: 18px; }
+.risk-rule-details li { padding-left: 2px; }
+.risk-rule-details li strong,
+.risk-rule-details li span { display: block; }
+.risk-rule-details li strong { color: var(--ink); }
+.risk-rule-score-thresholds { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 12px 0; }
+.risk-rule-score-thresholds div { display: flex; gap: 6px; }
+.risk-rule-score-thresholds dt { color: var(--muted); }
+.risk-rule-score-thresholds dd { margin: 0; color: var(--ink); font-weight: 650; }
+.risk-rule-details .risk-rule-disclaimer { padding-top: 8px; border-top: 1px solid var(--line); font-size: 11px; }
+.risk-rule-card-footer { display: grid; gap: 10px; margin-top: 12px; color: var(--muted); font-size: 11px; }
+.risk-rule-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.risk-rule-actions .primary-btn,
+.risk-rule-actions .secondary-btn { margin: 0; }
+.risk-approval-note { color: var(--muted); font-size: 11px; }
+.risk-rule-builder button:disabled,
+.risk-candidate-card button:disabled,
+.risk-rule-card button:disabled,
+.risk-test-activation-note button:disabled,
+.settings-panel-heading button:disabled { cursor: wait; opacity: .7; }
+.dark .risk-workflow-note,
+.dark .risk-candidate-card,
+.dark .risk-demo-note,
+.dark .risk-license-note { border-color: #49436f; background: #211e43; color: var(--ink); }
+.dark .risk-workflow-note strong,
+.dark .risk-candidate-card h4 { color: #ddd8ff; }
+.dark .risk-source-links a { color: #c3bcff; }
+.dark .risk-candidate-card > .risk-current-label { color: #bfe6dc; }
+.dark .risk-candidate-state { background: #302a51; color: #d2cfea !important; }
+.dark .risk-candidate-details summary { color: #c3bcff; }
+.dark .risk-test-activation-note { border-color: #66552b; background: #302a40; color: var(--ink); }
+.dark .risk-test-activation-note strong { color: #f0d28b; }
+.dark .risk-rule-builder { background: #1c1945; border-color: #3d3768; }
+.dark .risk-rule-builder-note { background: #252051; color: #d4d0e9; }
+.dark .risk-rule-builder input:not([type="checkbox"]),
+.dark .risk-rule-builder select { background: #252051; border-color: #49436f; color: var(--ink); }
+.dark .risk-rule-fieldset,
+.dark .risk-rule-condition,
+.dark .risk-rule-check,
+.dark .risk-rule-card,
+.dark .risk-rule-details { border-color: #3d3768; background: #211e43; }
+.dark .risk-feedback.is-error { border-color: #75384c; background: #351e2a; color: #fecdd3; }
+.dark .risk-feedback.is-success { border-color: #38504c; background: #192523; color: #bfe6dc; }
+.dark .risk-current-label { border-color: #38504c; background: #192523; color: #bfe6dc; }
+.dark .status-chip.neutral { background: #302a51; color: #d2cfea; }
+.dark .risk-rule-details summary { color: #c3bcff; }
+.dark .risk-rule-details li strong,
+.dark .risk-rule-score-thresholds dd { color: var(--ink); }
+.dark .risk-rule-details .risk-rule-disclaimer { border-color: #3d3768; }
+.dark .risk-rule-builder-note { border-left-color: #9e96e7; }
+.dark .risk-rule-remove { background: #252051; color: #d4d0ff; }
+.dark .risk-rule-remove:hover { background: #302a67; }
+
+@media (max-width: 760px) {
+  .settings-tab-panel > .settings-panel-heading,
+  .risk-rule-builder-heading,
+  .risk-rules-heading { align-items: stretch; flex-direction: column; }
+  .settings-tab-panel > .settings-panel-heading > button { width: 100%; justify-content: center; }
+  .risk-rule-builder { padding: 14px; }
+  .risk-rule-field-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .risk-rule-condition-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .risk-rule-condition-footer { grid-template-columns: minmax(0, 1fr); }
+  .risk-rule-remove { justify-self: start; }
+  .risk-rule-card-heading { align-items: flex-start; flex-direction: column; }
+  .risk-rule-badges { justify-content: flex-start; }
+  .risk-rule-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .risk-rule-actions button { width: 100%; justify-content: center; }
+  .risk-feedback { align-items: flex-start; flex-direction: column; }
+  .risk-feedback .secondary-btn { width: 100%; justify-content: center; }
+}
+
 @media (max-width: 1050px) {
   .admin-dashboard .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .admin-dashboard .admin-metrics .stat-primary { grid-column: span 2; }
