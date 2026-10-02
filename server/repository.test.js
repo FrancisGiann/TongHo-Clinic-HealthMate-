@@ -40,6 +40,8 @@ test('bulk sync accepts retired fields as absent and upsert-only writes preserve
   await syncCollection(client, 'visits', [{ id: 'visit-1', patientId: 'student-1', chiefComplaint: 'Headache' }], 'nurse-1');
   assert.equal(queries.some(([sql]) => /\bDELETE\b/i.test(sql)), false);
   assert.match(queries.at(-1)[0], /INSERT INTO visits\(/);
+  assert.match(queries.at(-1)[0], /\$3::jsonb - '_requestFingerprint'/);
+  assert.match(queries.at(-1)[0], /visits\.data->'_requestFingerprint'/);
 });
 
 test('retired queue, immunization, screening, and incident collections cannot be synced', async () => {

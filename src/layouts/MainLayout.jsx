@@ -82,14 +82,22 @@ function getStoredSidebarCollapsed() {
   }
 }
 
-export default function MainLayout({ settings, dark, setDark, user, onLogout, data }) {
+export default function MainLayout({ settings, dark, setDark, user, onLogout, logoutError, data }) {
   const [collapsed, setCollapsed] = useState(getStoredSidebarCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [logoSource, setLogoSource] = useState("/Logo.jpg");
   const [clock, setClock] = useState(() => new Date());
   const [showNotifications, setShowNotifications] = useState(false);
   const [serverNotifications, setServerNotifications] = useState([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(true);
+  const [notificationsError, setNotificationsError] = useState('');
+  const [notificationLoadAttempt, setNotificationLoadAttempt] = useState(0);
+  const [notificationActionError, setNotificationActionError] = useState('');
+  const [markingNotificationId, setMarkingNotificationId] = useState(null);
+  const [loggingOut, setLoggingOut] = useState(false);
   const notificationButtonRef = useRef(null);
+  const mobileMenuButtonRef = useRef(null);
+  const mobileCloseButtonRef = useRef(null);
   const pageTitleRef = useRef(null);
   const location = useLocation();
   const previousPathRef = useRef(location.pathname);
@@ -149,7 +157,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
     });
   }
 
-  serverNotifications.filter((item) => item.status !== 'read').slice(0, 5).forEach((item) => {
+  serverNotifications.filter((item) => item.channel === 'in_app' && item.status !== 'read').slice(0, 5).forEach((item) => {
     clinicAlerts.push({ title: item.subject, text: item.body, id: item.id });
   });
   
@@ -174,8 +182,12 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
   }, [location.state]);
   useEffect(() => {
     if (!mobileOpen) return undefined;
+    mobileCloseButtonRef.current?.focus();
     const closeOnEscape = (event) => {
-      if (event.key === 'Escape') setMobileOpen(false);
+      if (event.key === 'Escape') {
+        setMobileOpen(false);
+        mobileMenuButtonRef.current?.focus();
+      }
     };
     document.addEventListener('keydown', closeOnEscape);
     return () => document.removeEventListener('keydown', closeOnEscape);
@@ -185,14 +197,32 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
     return () => clearInterval(timer);
   }, []);
   useEffect(() => {
-    api.get('/api/notifications').then((result) => setServerNotifications(result.notifications || [])).catch(() => {});
-  }, [user?.id]);
+    let active = true;
+    setServerNotifications([]);
+    setNotificationsLoading(true);
+    setNotificationsError('');
+    api.get('/api/notifications')
+      .then((result) => {
+        if (active) setServerNotifications((result.notifications || []).filter((item) => item.channel === 'in_app'));
+      })
+      .catch(() => {
+        if (active) setNotificationsError('Notifications could not be loaded. Check your connection and retry.');
+      })
+      .finally(() => {
+        if (active) setNotificationsLoading(false);
+      });
+    return () => { active = false; };
+  }, [user?.id, notificationLoadAttempt]);
   const markNotificationRead = async (id) => {
+    setMarkingNotificationId(id);
+    setNotificationActionError('');
     try {
       await api.patch(`/api/notifications/${encodeURIComponent(id)}/read`, {});
       setServerNotifications((current) => current.map((item) => item.id === id ? { ...item, status: 'read' } : item));
     } catch {
-      // Keep the notification visible when the server could not confirm the update.
+      setNotificationActionError('This alert is still unread. Try marking it read again.');
+    } finally {
+      setMarkingNotificationId(null);
     }
   };
   const closeNotifications = () => {
@@ -237,7 +267,8 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
           </button>
           <button
             className="icon-btn mobile-close"
-            onClick={() => setMobileOpen(false)}
+            ref={mobileCloseButtonRef}
+            onClick={() => { setMobileOpen(false); mobileMenuButtonRef.current?.focus(); }}
             aria-label="Close navigation menu"
           >
             <X size={18} />
@@ -277,9 +308,10 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
             <Settings size={18} aria-hidden="true" />
             <span>My Account</span>
           </NavLink>
-          <button className="logout-btn" onClick={onLogout} aria-label="Sign out and close session" title={collapsed ? "Sign out" : undefined}>
+          {logoutError && <p className="logout-error" role="alert">{logoutError}</p>}
+          <button className="logout-btn" onClick={async () => { setLoggingOut(true); try { await onLogout(); } finally { setLoggingOut(false); } }} disabled={loggingOut} aria-busy={loggingOut} aria-label="Sign out and close session" title={collapsed ? "Sign out" : undefined}>
             <LogOut size={18} />
-            <span>Sign out</span>
+            <span>{loggingOut ? 'Signing out…' : 'Sign out'}</span>
           </button>
           <div className="nurse-mini">
             <div className="avatar small">
@@ -292,10 +324,11 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
           </div>
         </div>
       </aside>
-      {mobileOpen && <button type="button" className="mobile-nav-scrim" onClick={() => setMobileOpen(false)} aria-label="Close navigation menu" />}
+      {mobileOpen && <button type="button" className="mobile-nav-scrim" onClick={() => { setMobileOpen(false); mobileMenuButtonRef.current?.focus(); }} aria-label="Close navigation menu" />}
       <main className="main-content">
         <header className="topbar">
           <button
+            ref={mobileMenuButtonRef}
             className="icon-btn mobile-menu"
             onClick={() => setMobileOpen(true)}
             aria-label="Open navigation menu"
@@ -344,6 +377,9 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
                     Close
                   </button>
                 </div>
+                {notificationsLoading && <p className="notification-state" role="status">Loading notifications…</p>}
+                {notificationsError && <div className="notification-state" role="alert"><p>{notificationsError}</p><button type="button" onClick={() => setNotificationLoadAttempt((attempt) => attempt + 1)}>Retry</button></div>}
+                {notificationActionError && <p className="notification-state" role="alert">{notificationActionError}</p>}
                 {clinicAlerts.length > 0 ? (
                   clinicAlerts.map((alert, index) => (
                     alert.to ? (
@@ -361,15 +397,15 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, da
                       <div key={alert.id || `notification-${index}`}>
                         <b>{alert.title}</b>
                         <span>{alert.text}</span>
-                        {alert.id && <button type="button" className="table-action" onClick={() => markNotificationRead(alert.id)}>Mark read</button>}
+                        {alert.id && <button type="button" className="table-action" onClick={() => markNotificationRead(alert.id)} disabled={markingNotificationId === alert.id}>{markingNotificationId === alert.id ? 'Marking read…' : 'Mark read'}</button>}
                       </div>
                     )
                   ))
-                ) : (
+                ) : !notificationsLoading && !notificationsError ? (
                   <div style={{ padding: '20px', textAlign: 'center', color: 'var(--muted)', fontSize: '13px' }}>
                     No alerts at this time
                   </div>
-                )}
+                ) : null}
               </div>
             <button
               className={`theme-toggle ${dark ? "on" : ""}`}

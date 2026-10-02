@@ -88,6 +88,28 @@ test('manual reminder sweeps in the same month reuse the recurring-review dedupe
   assert.deepEqual(keys, ['recurring-visits:patient-1:2026-08', 'recurring-visits:patient-1:2026-08']);
 });
 
+test('reminder sweeps count returned partial and complete email failures', async () => {
+  let queryIndex = 0;
+  const results = [
+    { rows: [
+      { id: 'visit-one', patient_id: 'patient-1', data: { followUp: true, followUpDate: '2026-08-21' } },
+      { id: 'visit-two', patient_id: 'patient-2', data: { followUp: true, followUpDate: '2026-08-21' } },
+    ] },
+    { rows: [] },
+    { rows: [] },
+  ];
+  const result = await runClinicReminderSweep({
+    now: new Date('2026-08-20T02:00:00.000Z'),
+    queryFn: async () => results[queryIndex++],
+    notifyPatient: async (patientId) => patientId === 'patient-1'
+      ? { recipientCount: 2, emailSentCount: 1, emailFailedCount: 1, emailPendingCount: 0 }
+      : { recipientCount: 2, emailSentCount: 0, emailFailedCount: 2, emailPendingCount: 0 },
+  });
+
+  assert.equal(result.triggered, 2);
+  assert.equal(result.notificationFailures, 3);
+});
+
 test('consent reminders dedupe by patient and due date across repeated sweeps', async () => {
   const keys = [];
   for (const now of ['2026-08-20T00:00:00Z', '2026-08-21T00:00:00Z']) {

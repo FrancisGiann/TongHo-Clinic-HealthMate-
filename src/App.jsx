@@ -26,6 +26,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState('');
+  const [logoutError, setLogoutError] = useState('');
   const [data, setData, clinic] = useClinicData(user);
   const location = useLocation();
 
@@ -37,8 +38,15 @@ export default function App() {
   }, []);
 
   const handleLogout = async () => {
-    await logoutUser().catch(() => {});
-    setUser(null);
+    setLogoutError('');
+    try {
+      await logoutUser();
+      setUser(null);
+      return true;
+    } catch {
+      setLogoutError('Could not confirm sign-out. Check your connection and try again.');
+      return false;
+    }
   };
 
   const updateTheme = (value) => {
@@ -63,7 +71,7 @@ export default function App() {
       />
     );
   }
-  if (!['guardian', 'school_nurse', 'system_administrator'].includes(user.role)) return <div className="loading-screen"><p role="alert">This account has no supported HealthMate+ role.</p><button className="primary-btn" onClick={handleLogout}>Sign out</button></div>;
+  if (!['guardian', 'school_nurse', 'system_administrator'].includes(user.role)) return <div className="loading-screen"><p role="alert">This account has no supported HealthMate+ role.</p>{logoutError && <p role="alert">{logoutError}</p>}<button className="primary-btn" onClick={handleLogout}>Sign out</button></div>;
   if (!clinic.ready) return (
     <div className="loading-screen">
       {clinic.error ? <><p role="alert">Authorized clinic records could not be loaded. {clinic.error}</p><button className="primary-btn" onClick={clinic.reload}>Try again</button></> : 'Loading authorized clinic records…'}
@@ -79,6 +87,7 @@ export default function App() {
       setDark={updateTheme}
       user={user}
       onLogout={handleLogout}
+      logoutError={logoutError}
       data={data}
     />
   );
@@ -97,7 +106,7 @@ export default function App() {
               <Route path="/faculty/new" element={<FacultyRegistration data={data} reload={clinic.reload} />} />
               <Route path="/students/:studentId" element={<StudentProfile data={data} commitData={clinic.commitData} reload={clinic.reload} />} />
               <Route path="/health-record-review" element={<HealthRecordReview data={data} />} />
-              <Route path="/new-visit" element={<NewVisit data={data} user={user} reload={clinic.reload} refreshInBackground={clinic.refreshInBackground} />} />
+              <Route path="/new-visit" element={<NewVisit data={data} user={user} refreshInBackground={clinic.refreshInBackground} />} />
               <Route path="/inventory" element={<Inventory data={data} applyServerData={clinic.applyServerData} reload={clinic.reload} saving={clinic.saving} />} />
               <Route path="/reports" element={<Reports />} />
               <Route path="/appointments" element={<Appointments data={data} user={user} reload={clinic.reload} />} />

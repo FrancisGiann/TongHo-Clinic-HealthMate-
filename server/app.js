@@ -53,6 +53,8 @@ import { buildInvitationActivationUrl } from './invitationUrl.js';
 import { recordNurseLicenseVerification, validateNurseLicenseUpdate } from './domain/nurseLicense.js';
 import { acceptedProfileFields, normalizeDocumentReceiptStatus, normalizeHealthRecordAnswers, validatePaperSignatureForAcceptance } from './domain/health-records.js';
 import { clinicArrivalNotice, clinicVisitCareSummary, notificationDeliveryCounts, recordClinicArrival, validateClinicArrivalPayload } from './domain/clinicArrivals.js';
+import { listInAppNotifications, markInAppNotificationRead } from './domain/notifications.js';
+import { createOrReplayVisitRequest, findVisitRequest, publicVisitRecord, validVisitRequestId, visitRequestFingerprint } from './domain/visitRequests.js';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const distDir = join(currentDir, '..', 'dist');
@@ -1311,107 +1313,140 @@ export function createApp() {
     const validation = validateVisitPayload(req.body || {});
     if (!validation.valid) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Review the visit fields and try again.', validation.fields);
     const input = validation.value;
+    const requestId = req.body?.requestId === undefined ? null : req.body.requestId;
+    if (requestId !== null && !validVisitRequestId(requestId)) return errorResponse(res, 400, 'INVALID_VISIT_REQUEST_ID', 'A valid visit request id is required.');
+    const requestFingerprint = requestId ? visitRequestFingerprint(input) : null;
     if (input.summaryApproved && req.user.role !== 'school_nurse') {
       return errorResponse(res, 403, 'NURSE_APPROVAL_REQUIRED', 'Only a school nurse can approve a consultation summary.');
     }
-    const rules = await latestRules();
-    const recent = await query('SELECT COUNT(*)::int AS count FROM visits WHERE patient_id=$1', [input.patientId]);
-    const assessment = assessRisk(visitRiskInput(input, recent.rows[0]?.count || 0), rules);
-    if (assessment.status === 'incomplete' && !riskAllowsAcknowledgedIncomplete(assessment)) {
-      return errorResponse(res, 400, 'RISK_INPUT_INCOMPLETE', assessment.rationale, { missingFields: assessment.missingFields });
-    }
-    if (riskNeedsNurseAcknowledgement(assessment) && !input.riskAcknowledgement) {
-      const isHighRisk = assessment.category === 'high';
-      return errorResponse(
-        res,
-        400,
-        isHighRisk ? 'HIGH_RISK_ACKNOWLEDGEMENT_REQUIRED' : 'RISK_REVIEW_ACKNOWLEDGEMENT_REQUIRED',
-        isHighRisk ? 'Document the nurse acknowledgement before saving a high-risk visit.' : 'Document the nurse review and action before saving this assessment.',
-        { riskAcknowledgement: isHighRisk ? 'Required for high-risk results.' : 'Required for incomplete or review-required results.' },
-      );
-    }
-    if (input.summaryApproved && !input.summaryDraft) return errorResponse(res, 400, 'SUMMARY_REQUIRED', 'A nurse-approved summary must contain text.');
-
-    const visitId = crypto.randomUUID();
     let visit;
+    let assessment;
     let patientName = '';
     let patientType = '';
-    try {
-      await clinicDataTransaction(async (client) => {
-        const patient = await client.query('SELECT id,patient_type,data FROM patients WHERE id=$1 FOR SHARE', [input.patientId]);
-        if (!patient.rowCount) {
-          const error = new Error('The selected patient was not found.');
-          error.status = 404;
-          error.code = 'PATIENT_NOT_FOUND';
-          throw error;
-        }
-        patientType = patient.rows[0].patient_type;
-        patientName = patient.rows[0].data?.name || '';
-        const createdAt = new Date();
-        const { resolved: resolvedDispensations, lockOrder } = await resolveInventoryDispensations(client, input.dispensations);
-        const legacyMedicine = input.medicineId ? resolvedDispensations.find((entry) => entry.itemId === input.medicineId) : null;
-        visit = {
-          id: visitId,
-          patientId: input.patientId,
-          studentId: input.patientId,
-          date: clinicCalendarDate(createdAt),
-          time: createdAt.toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' }),
-          createdAt: createdAt.toISOString(),
-          type: input.visitType,
-          chiefComplaint: input.chiefComplaint,
-          treatment: input.treatment,
-          disposition: input.disposition,
-          followUp: input.followUp,
-          ...(input.followUpDate ? { followUpDate: input.followUpDate } : {}),
-          medicineId: input.medicineId || null,
-          medicineQuantity: input.medicineId ? input.medicineQuantity : 0,
-          medicineName: legacyMedicine?.itemName || null,
-          dispensations: resolvedDispensations.map(({ itemId, itemName, itemType, quantity }) => ({ itemId, itemName, itemType, quantity })),
-          temperature: input.temperature,
-          pulse: input.pulse,
-          painScore: input.painScore,
-          riskAssessment: assessment,
-          riskAcknowledgement: input.riskAcknowledgement || '',
-          notes: input.notes || '',
-          consultationSummary: input.summaryApproved ? input.summaryDraft : '',
-          summaryProvider: input.summaryApproved ? 'approved-nurse-workflow' : null,
-          summaryApprovedBy: input.summaryApproved ? req.user.id : null,
-          nurseName: req.user.name,
-        };
-        await persistVisitAndDispensations(client, {
-          persistVisit: async () => {
-            await client.query(
-              'INSERT INTO visits(id,patient_id,data,created_by) VALUES($1,$2,$3::jsonb,$4)',
-              [visitId, input.patientId, JSON.stringify(visit), req.user.id],
-            );
-            await client.query(
-              'INSERT INTO risk_assessments(id,visit_id,rule_version,result,acknowledged_by,acknowledged_at,override_reason) VALUES($1,$2,$3,$4::jsonb,$5,CASE WHEN $6 THEN NOW() ELSE NULL END,$7)',
-              [crypto.randomUUID(), visitId, Number(assessment.ruleVersion || 0), JSON.stringify(assessment), riskNeedsNurseAcknowledgement(assessment) ? req.user.id : null, riskNeedsNurseAcknowledgement(assessment) && Boolean(input.riskAcknowledgement), riskNeedsNurseAcknowledgement(assessment) ? (input.riskAcknowledgement || null) : null],
-            );
-          },
-          resolved: resolvedDispensations,
-          lockOrder,
-          visitId,
-          createdAt,
+    let replayed = false;
+    const visitId = requestId || crypto.randomUUID();
+
+    if (requestId) {
+      const existing = await findVisitRequest(query, requestId, req.user.id, requestFingerprint);
+      if (existing?.kind === 'conflict') return errorResponse(res, 409, 'VISIT_REQUEST_CONFLICT', 'This visit request cannot be matched safely. Check the patient visit history before starting another visit.');
+      if (existing?.kind === 'replay') {
+        visit = existing.visit;
+        assessment = existing.assessment;
+        patientType = existing.patientType;
+        patientName = existing.patientName;
+        replayed = true;
+      }
+    }
+
+    if (!replayed) {
+      const rules = await latestRules();
+      const recent = await query('SELECT COUNT(*)::int AS count FROM visits WHERE patient_id=$1', [input.patientId]);
+      assessment = assessRisk(visitRiskInput(input, recent.rows[0]?.count || 0), rules);
+      if (assessment.status === 'incomplete' && !riskAllowsAcknowledgedIncomplete(assessment)) {
+        return errorResponse(res, 400, 'RISK_INPUT_INCOMPLETE', assessment.rationale, { missingFields: assessment.missingFields });
+      }
+      if (riskNeedsNurseAcknowledgement(assessment) && !input.riskAcknowledgement) {
+        const isHighRisk = assessment.category === 'high';
+        return errorResponse(
+          res,
+          400,
+          isHighRisk ? 'HIGH_RISK_ACKNOWLEDGEMENT_REQUIRED' : 'RISK_REVIEW_ACKNOWLEDGEMENT_REQUIRED',
+          isHighRisk ? 'Document the nurse acknowledgement before saving a high-risk visit.' : 'Document the nurse review and action before saving this assessment.',
+          { riskAcknowledgement: isHighRisk ? 'Required for high-risk results.' : 'Required for incomplete or review-required results.' },
+        );
+      }
+      if (input.summaryApproved && !input.summaryDraft) return errorResponse(res, 400, 'SUMMARY_REQUIRED', 'A nurse-approved summary must contain text.');
+
+      try {
+        const outcome = await clinicDataTransaction((client) => createOrReplayVisitRequest(client, {
+          requestId,
           userId: req.user.id,
-        });
-        await audit(req, 'CLINIC_VISIT_CREATED', { category: assessment.category, ruleVersion: assessment.ruleVersion, inventoryItemsDispensed: resolvedDispensations.length }, 'visit', visitId, client);
-      });
-    } catch (error) {
-      if (error.status) return errorResponse(res, error.status, error.code || 'VISIT_SAVE_FAILED', error.message);
-      throw error;
+          fingerprint: requestFingerprint,
+          create: async () => {
+            const patient = await client.query('SELECT id,patient_type,data FROM patients WHERE id=$1 FOR SHARE', [input.patientId]);
+            if (!patient.rowCount) {
+              const error = new Error('The selected patient was not found.');
+              error.status = 404;
+              error.code = 'PATIENT_NOT_FOUND';
+              throw error;
+            }
+            patientType = patient.rows[0].patient_type;
+            patientName = patient.rows[0].data?.name || '';
+            const createdAt = new Date();
+            const { resolved: resolvedDispensations, lockOrder } = await resolveInventoryDispensations(client, input.dispensations);
+            const legacyMedicine = input.medicineId ? resolvedDispensations.find((entry) => entry.itemId === input.medicineId) : null;
+            visit = {
+              id: visitId,
+              patientId: input.patientId,
+              studentId: input.patientId,
+              date: clinicCalendarDate(createdAt),
+              time: createdAt.toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' }),
+              createdAt: createdAt.toISOString(),
+              type: input.visitType,
+              chiefComplaint: input.chiefComplaint,
+              treatment: input.treatment,
+              disposition: input.disposition,
+              followUp: input.followUp,
+              ...(input.followUpDate ? { followUpDate: input.followUpDate } : {}),
+              medicineId: input.medicineId || null,
+              medicineQuantity: input.medicineId ? input.medicineQuantity : 0,
+              medicineName: legacyMedicine?.itemName || null,
+              dispensations: resolvedDispensations.map(({ itemId, itemName, itemType, quantity }) => ({ itemId, itemName, itemType, quantity })),
+              temperature: input.temperature,
+              pulse: input.pulse,
+              painScore: input.painScore,
+              riskAssessment: assessment,
+              riskAcknowledgement: input.riskAcknowledgement || '',
+              notes: input.notes || '',
+              consultationSummary: input.summaryApproved ? input.summaryDraft : '',
+              summaryProvider: input.summaryApproved ? 'approved-nurse-workflow' : null,
+              summaryApprovedBy: input.summaryApproved ? req.user.id : null,
+              nurseName: req.user.name,
+              ...(requestId ? { _requestFingerprint: requestFingerprint } : {}),
+            };
+            await persistVisitAndDispensations(client, {
+              persistVisit: async () => {
+                await client.query(
+                  'INSERT INTO visits(id,patient_id,data,created_by) VALUES($1,$2,$3::jsonb,$4)',
+                  [visitId, input.patientId, JSON.stringify(visit), req.user.id],
+                );
+                await client.query(
+                  'INSERT INTO risk_assessments(id,visit_id,rule_version,result,acknowledged_by,acknowledged_at,override_reason) VALUES($1,$2,$3,$4::jsonb,$5,CASE WHEN $6 THEN NOW() ELSE NULL END,$7)',
+                  [crypto.randomUUID(), visitId, Number(assessment.ruleVersion || 0), JSON.stringify(assessment), riskNeedsNurseAcknowledgement(assessment) ? req.user.id : null, riskNeedsNurseAcknowledgement(assessment) && Boolean(input.riskAcknowledgement), riskNeedsNurseAcknowledgement(assessment) ? (input.riskAcknowledgement || null) : null],
+                );
+              },
+              resolved: resolvedDispensations,
+              lockOrder,
+              visitId,
+              createdAt,
+              userId: req.user.id,
+            });
+            await audit(req, 'CLINIC_VISIT_CREATED', { category: assessment.category, ruleVersion: assessment.ruleVersion, inventoryItemsDispensed: resolvedDispensations.length }, 'visit', visitId, client);
+            return { visit, assessment, patientName, patientType };
+          },
+        }));
+        if (outcome.kind === 'conflict') return errorResponse(res, 409, 'VISIT_REQUEST_CONFLICT', 'This visit request cannot be matched safely. Check the patient visit history before starting another visit.');
+        const saved = outcome.kind === 'replay' ? outcome : outcome.value;
+        ({ visit, assessment, patientName, patientType } = saved);
+        replayed = outcome.kind === 'replay';
+      } catch (error) {
+        if (error.status) return errorResponse(res, error.status, error.code || 'VISIT_SAVE_FAILED', error.message);
+        throw error;
+      }
     }
     let guardianNotification = { recipientCount: 0, emailSentCount: 0, emailFailedCount: 0, skipped: patientType !== 'student' };
     if (patientType === 'student') {
       try {
         const notice = clinicVisitCareSummary({ studentName: patientName, visit });
-        guardianNotification = await notifyLinkedUsers(input.patientId, { ...notice, dedupeKey: `visit:${visitId}` });
+        guardianNotification = replayed
+          ? await notificationDeliveryForDedupe(`visit:${visit.id}`, input.patientId)
+          : await notifyLinkedUsers(input.patientId, { ...notice, dedupeKey: `visit:${visit.id}` });
       } catch (error) {
         console.error('Visit notification failed:', error.message);
         guardianNotification = { recipientCount: 0, emailSentCount: 0, emailFailedCount: 0, deliveryUnavailable: true };
       }
     }
-    return res.status(201).json({ data: { visit, assessment, summaryPendingApproval: Boolean(input.summaryDraft && !input.summaryApproved), guardianNotification } });
+    return res.status(replayed ? 200 : 201).json({ data: { visit: publicVisitRecord(visit), assessment, replayed, summaryPendingApproval: Boolean(input.summaryDraft && !input.summaryApproved), guardianNotification } });
   });
 
   app.get('/api/risk/rules', requireRoles(...reportReadRoles), async (req, res) => {
@@ -1760,12 +1795,12 @@ export function createApp() {
   });
 
   app.get('/api/notifications', requireAuth, async (req, res) => {
-    const result = await query("SELECT * FROM notifications WHERE user_id=$1 AND type NOT IN ('immunization','immunization_reminder') ORDER BY created_at DESC LIMIT 100", [req.user.id]);
+    const result = await listInAppNotifications(req.user.id, query);
     return res.json({ data: { notifications: result.rows } });
   });
 
   app.patch('/api/notifications/:id/read', requireAuth, async (req, res) => {
-    const result = await query("UPDATE notifications SET status='read',read_at=NOW() WHERE id=$1 AND user_id=$2 RETURNING *", [req.params.id, req.user.id]);
+    const result = await markInAppNotificationRead(req.params.id, req.user.id, query);
     if (!result.rowCount) return errorResponse(res, 404, 'NOT_FOUND', 'Notification not found.');
     return res.json({ data: { notification: result.rows[0] } });
   });

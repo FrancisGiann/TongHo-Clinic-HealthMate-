@@ -389,6 +389,10 @@ nav a.protected-link:hover .lock-badge {
 .notification-link:focus-visible,
 .notification-heading button:focus-visible,
 .notification-panel .table-action:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.notification-state { margin: 10px 0; padding: 10px; color: var(--muted); font-size: 12px; }
+.notification-state[role="alert"] { color: var(--danger, #9f1239); }
+.dark .notification-state[role="alert"] { color: #fecdd3; }
+.notification-state button { border: 0; padding: 4px 0; background: transparent; color: var(--teal); font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 .dark .notification-panel { background: #1c1945; border-color: #383263; }
 .dark .notification-link:hover { background: rgba(255, 255, 255, .06); }
 .theme-toggle {
@@ -3515,6 +3519,9 @@ td small {
   color: var(--teal-dark);
   background: #eeedf9;
 }
+.logout-btn:disabled { cursor: wait; opacity: .7; }
+.logout-error { margin: 8px 10px; color: #9f1239; font-size: 12px; line-height: 1.45; }
+.dark .logout-error { color: #fecdd3; }
 .loading-screen {
   min-height: 100vh;
   display: grid;
@@ -3875,11 +3882,13 @@ td small {
     inset: 0 auto 0 0;
     transform: translateX(-100%);
     transition: 0.25s;
+    visibility: hidden;
     width: 270px;
     box-shadow: 10px 0 30px #183d3830;
   }
   .sidebar.mobile-open {
     transform: translateX(0);
+    visibility: visible;
   }
   .mobile-close,
   .mobile-menu {
@@ -6148,6 +6157,21 @@ nav a.active,
 }
 .visit-save-actions .primary-btn { min-width: 148px; justify-content: center; }
 .visit-save-actions .follow-up-date-field { width: min(100%, 280px); }
+.visit-inputs { width: 100%; min-width: 0; margin: 0; padding: 0; border: 0; }
+.visit-save-recovery { display: grid; gap: 8px; margin: 0 0 18px; padding: 14px 16px; border: 1px solid #c4e6df; border-radius: 12px; background: #f0faf7; color: var(--ink); }
+.visit-save-recovery p { margin: 0; color: var(--muted); font-size: 13px; }
+.visit-save-recovery > a { width: fit-content; color: var(--teal); font-size: 13px; font-weight: 600; text-underline-offset: 3px; }
+.visit-save-recovery > .secondary-btn { width: fit-content; }
+.visit-save-recovery.is-error { border-color: #fecdd3; background: #fff1f2; }
+.visit-save-recovery.is-error strong { color: #9f1239; }
+.visit-save-recovery.is-success { background: #f0faf7; }
+.dark .visit-save-recovery { background: #192523; border-color: #38504c; color: #edf5f2; }
+.dark .visit-save-recovery p { color: #b9cbc7; }
+.dark .visit-save-recovery.is-error { background: #351e2a; border-color: #75384c; }
+.dark .visit-save-recovery.is-error strong { color: #fecdd3; }
+.visit-save-actions .primary-btn:focus-visible,
+.visit-save-recovery button:focus-visible,
+.visit-save-recovery a:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
 
 .quick-entry-dialog {
   inset: 0;
@@ -6171,6 +6195,17 @@ nav a.active,
 .dark .selected-allergies { background: #1d2c2a; border-color: #38504c; }
 .dark .selected-allergies strong { color: #a9bfba; }
 .dark .selected-allergies p { color: #edf5f2; }
+.dark .selected-student { background: #1d2c2a; border-color: #38504c; }
+.dark .chip-row button { background: #263936; border-color: #4b635d; color: #d5e4df; }
+.dark .chip-row button:hover,
+.dark .chip-row button.selected { background: #315149; border-color: #5a9789; color: #f1fffb; }
+.dark .chip-row button.selected { background: linear-gradient(135deg, #315149, #2a4741); }
+.dark .risk-result { background: #192523; border-color: #38504c; color: #edf5f2; }
+.dark .risk-result p,
+.dark .risk-result small { color: #c8d8d4; }
+.dark .risk-result.risk-high { background: #351e2a; border-color: #75384c; color: #fecdd3; }
+.dark .risk-result.risk-high p,
+.dark .risk-result.risk-high small { color: #fecdd3; }
 .dark .inventory-empty-state { background: #192523; border-color: #38504c; }
 .dark .inventory-empty-state p,
 .dark .inventory-unavailable-list li strong { color: #edf5f2; }
@@ -6188,8 +6223,10 @@ nav a.active,
   .students-page .student-grid { grid-template-columns: minmax(0, 1fr); }
   .inventory-item-dialog .form-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .visit-save-actions { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .visit-save-actions { position: sticky; bottom: calc(8px + env(safe-area-inset-bottom)); z-index: 5; margin-inline: -4px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--white); box-shadow: 0 10px 24px rgba(23, 17, 74, .12); }
   .visit-save-actions .follow-up-date-field { width: 100%; }
   .visit-save-actions .primary-btn { width: 100%; }
+  .dark .visit-save-actions { background: #1c1945; border-color: #383263; }
   .quick-entry-dialog,
   .inventory-item-dialog { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); padding: 18px; }
   .quick-entry-dialog .two-fields { grid-template-columns: minmax(0, 1fr); gap: 0; }

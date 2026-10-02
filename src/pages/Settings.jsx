@@ -422,7 +422,7 @@ export default function Settings({ data, user, reload, section }) {
     setReminderMessage('');
     try {
       const result = await api.post('/api/admin/notifications/reminders', {});
-      setScopedFeedback(scope, setReminderMessage, `${result.triggered} due item${result.triggered === 1 ? '' : 's'} processed, including ${result.consents || 0} consent reminder${result.consents === 1 ? '' : 's'}; ${result.notificationFailures || 0} delivery failures. Repeated runs are deduplicated.`);
+      setScopedFeedback(scope, setReminderMessage, `${result.triggered} due item${result.triggered === 1 ? '' : 's'} processed, including ${result.consents || 0} consent reminder${result.consents === 1 ? '' : 's'}; ${result.notificationFailures || 0} email delivery failures or unconfirmed results. Repeated runs are deduplicated.`);
     } catch (error) {
       setScopedFeedback(scope, setReminderMessage, error.message);
     }

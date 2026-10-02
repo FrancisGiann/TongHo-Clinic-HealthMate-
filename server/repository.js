@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { query, transaction } from './db.js';
+import { publicVisitRecord } from './domain/visitRequests.js';
 
 const collectionMap = {
   visits: { table: 'visits', patient: true },
@@ -115,7 +116,7 @@ export async function loadClinicData(user, { includeClinical = false } = {}) {
     const result = config.patient && ids !== null
       ? await query(`SELECT data FROM ${config.table} WHERE patient_id=ANY($1::text[]) ORDER BY created_at`, [ids])
       : await query(`SELECT data FROM ${config.table} ORDER BY created_at`);
-    data[key] = result.rows.map((row) => row.data);
+    data[key] = result.rows.map((row) => key === 'visits' ? publicVisitRecord(row.data) : row.data);
   }
   return data;
 }
@@ -212,8 +213,10 @@ export async function syncCollection(client, key, records, actorId) {
       const pid = patientId(record);
       if (!pid) throw new Error(`${key} record ${id} is missing a patient id.`);
       await client.query(
-        `INSERT INTO ${table}(id,patient_id,data,created_by) VALUES($1,$2,$3::jsonb,$4)
-         ON CONFLICT(id) DO UPDATE SET patient_id=EXCLUDED.patient_id,data=EXCLUDED.data,updated_at=NOW()`,
+        `INSERT INTO ${table}(id,patient_id,data,created_by) VALUES($1,$2,$3::jsonb - '_requestFingerprint',$4)
+         ON CONFLICT(id) DO UPDATE SET patient_id=EXCLUDED.patient_id,
+           data=(EXCLUDED.data - '_requestFingerprint') || jsonb_strip_nulls(jsonb_build_object('_requestFingerprint',visits.data->'_requestFingerprint')),
+           updated_at=NOW()`,
         [id, pid, json, actorId],
       );
     } else if (key === 'appointments') {

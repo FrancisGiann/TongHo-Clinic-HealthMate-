@@ -73,7 +73,10 @@ export async function runClinicReminderSweep({
   let notificationFailures = 0;
   const notifySafely = async (patientId, notification, label) => {
     try {
-      await notifyPatient(patientId, notification);
+      const delivery = await notifyPatient(patientId, notification);
+      const failedEmails = Number(delivery?.emailFailedCount || 0);
+      if (Number.isFinite(failedEmails) && failedEmails > 0) notificationFailures += failedEmails;
+      else if (delivery?.deliveryUnavailable) notificationFailures += 1;
     } catch (error) {
       notificationFailures += 1;
       logger.error(`${label} reminder failed.`, { code: error.code || 'DELIVERY_ERROR' });

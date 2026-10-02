@@ -3,6 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import { ArrowUpRight, Check, ChevronDown, ClipboardPlus, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { api } from "../utils/api";
 import StudentPicker from "../components/StudentPicker";
+import { clearPendingVisitSubmission, getPendingVisitSubmission, rememberPendingVisitSubmission } from "../utils/visitSubmission";
 
   const complaints = [
   "Headache",
@@ -73,28 +74,33 @@ function inventoryAvailability(item, today) {
   return reasons;
 }
 
-export default function NewVisit({ data, user, reload, refreshInBackground }) {
+export default function NewVisit({ data, user, refreshInBackground }) {
   const location = useLocation();
-  const [selectedId, setSelectedId] = useState(() => String(location.state?.selectedStudent?.id || ""));
-  const [complaint, setComplaint] = useState("");
-  const [visitType, setVisitType] = useState("Illness");
-  const [treatment, setTreatment] = useState("");
-  const [disposition, setDisposition] = useState("Returned to class");
-  const [dispensations, setDispensations] = useState([{ itemId: "", quantity: "1" }]);
-  const [followUp, setFollowUp] = useState(false);
-  const [followUpDate, setFollowUpDate] = useState("");
-  const [temperature, setTemperature] = useState("");
-  const [pulse, setPulse] = useState("");
-  const [notes, setNotes] = useState("");
-  const [painScore, setPainScore] = useState("");
-  const [clinicianRedFlag, setClinicianRedFlag] = useState("");
-  const [riskAcknowledgement, setRiskAcknowledgement] = useState("");
+  const initialPendingSubmission = getPendingVisitSubmission(user?.id);
+  const initialDraft = initialPendingSubmission?.payload || {};
+  const initialPatientId = String(initialPendingSubmission?.patientId || location.state?.selectedStudent?.id || "");
+  const [selectedId, setSelectedId] = useState(initialPatientId);
+  const [complaint, setComplaint] = useState(initialDraft.chiefComplaint || "");
+  const [visitType, setVisitType] = useState(initialDraft.visitType || "Illness");
+  const [treatment, setTreatment] = useState(initialDraft.treatment || "");
+  const [disposition, setDisposition] = useState(initialDraft.disposition || "Returned to class");
+  const [dispensations, setDispensations] = useState(initialDraft.dispensations?.length ? initialDraft.dispensations.map((entry) => ({ itemId: String(entry.itemId), quantity: String(entry.quantity) })) : [{ itemId: "", quantity: "1" }]);
+  const [followUp, setFollowUp] = useState(Boolean(initialDraft.followUp));
+  const [followUpDate, setFollowUpDate] = useState(initialDraft.followUpDate || "");
+  const [temperature, setTemperature] = useState(initialDraft.temperature == null ? "" : String(initialDraft.temperature));
+  const [pulse, setPulse] = useState(initialDraft.pulse == null ? "" : String(initialDraft.pulse));
+  const [notes, setNotes] = useState(initialDraft.notes || "");
+  const [painScore, setPainScore] = useState(initialDraft.painScore == null ? "" : String(initialDraft.painScore));
+  const [clinicianRedFlag, setClinicianRedFlag] = useState(initialDraft.clinicianRedFlagAssessed ? String(Boolean(initialDraft.clinicianRedFlag)) : "");
+  const [riskAcknowledgement, setRiskAcknowledgement] = useState(initialDraft.riskAcknowledgement || "");
   const [riskResult, setRiskResult] = useState(null);
   const [saveError, setSaveError] = useState("");
-  const [summaryDraft, setSummaryDraft] = useState("");
+  const [summaryDraft, setSummaryDraft] = useState(initialDraft.summaryDraft || "");
   const [summaryMeta, setSummaryMeta] = useState(null);
-  const [summaryApproved, setSummaryApproved] = useState(false);
+  const [summaryApproved, setSummaryApproved] = useState(Boolean(initialDraft.summaryApproved));
   const [saved, setSaved] = useState(false);
+  const [saveOutcomeUnknown, setSaveOutcomeUnknown] = useState(() => Boolean(initialPendingSubmission?.outcomeUnknown));
+  const [visitRequestConflict, setVisitRequestConflict] = useState(false);
   const [guardianNotification, setGuardianNotification] = useState(null);
   const [saving, setSaving] = useState(false);
   const [arrivalSaving, setArrivalSaving] = useState(false);
@@ -105,18 +111,51 @@ export default function NewVisit({ data, user, reload, refreshInBackground }) {
   const [inventoryRefreshError, setInventoryRefreshError] = useState("");
   const inventoryRecoveryPending = useRef(false);
   const inventoryRefreshLock = useRef(false);
-  const selectedPatientIdRef = useRef(String(location.state?.selectedStudent?.id || ''));
+  const selectedPatientIdRef = useRef(initialPatientId);
   const arrivalRequestRef = useRef(null);
   const arrivalLock = useRef(false);
+  const visitSubmissionRef = useRef(initialPendingSubmission);
+  const saveRecoveryRef = useRef(null);
   const clinicToday = clinicDate(new Date());
   const selected = data.students.find((student) => String(student.id) === selectedId);
+  const resetDraftFields = () => {
+    setComplaint('');
+    setVisitType('Illness');
+    setTreatment('');
+    setDisposition('Returned to class');
+    setDispensations([{ itemId: '', quantity: '1' }]);
+    setFollowUp(false);
+    setFollowUpDate('');
+    setTemperature('');
+    setPulse('');
+    setNotes('');
+    setPainScore('');
+    setClinicianRedFlag('');
+    setRiskAcknowledgement('');
+    setRiskResult(null);
+    setSummaryDraft('');
+    setSummaryMeta(null);
+    setSummaryApproved(false);
+  };
   const changeSelectedPatient = (value) => {
     const nextId = String(value || '');
+    const priorRequest = visitSubmissionRef.current;
     selectedPatientIdRef.current = nextId;
     arrivalRequestRef.current = null;
+    visitSubmissionRef.current = priorRequest?.requestId && !priorRequest.outcomeUnknown
+      ? { ...priorRequest, patientId: nextId, payload: { patientId: nextId } }
+      : null;
+    if (visitSubmissionRef.current) rememberPendingVisitSubmission(user?.id, visitSubmissionRef.current);
+    else clearPendingVisitSubmission(user?.id);
+    setSaveOutcomeUnknown(false);
+    setVisitRequestConflict(false);
+    setSaved(false);
+    setSaveError('');
+    setGuardianNotification(null);
     setArrivalResult(null);
     setArrivalError('');
     setSelectedId(nextId);
+    resetDraftFields();
   };
   const recordArrival = async () => {
     if (!selected || selected.patientType !== 'student' || user?.role !== 'school_nurse' || saving || arrivalLock.current) return;
@@ -193,6 +232,9 @@ export default function NewVisit({ data, user, reload, refreshInBackground }) {
       document.removeEventListener("visibilitychange", refreshAfterInventoryReturn);
     };
   }, [refreshInventory]);
+  useEffect(() => {
+    if (saveOutcomeUnknown || saved || visitRequestConflict) saveRecoveryRef.current?.focus();
+  }, [saveOutcomeUnknown, saved, visitRequestConflict]);
   const generateSummary = async () => {
     setSaveError("");
     try {
@@ -204,9 +246,69 @@ export default function NewVisit({ data, user, reload, refreshInBackground }) {
       setSaveError(error.message);
     }
   };
+  const submitVisitRequest = async (submission) => {
+    const pending = { ...submission, outcomeUnknown: true };
+    visitSubmissionRef.current = pending;
+    rememberPendingVisitSubmission(user?.id, pending);
+    setSaving(true);
+    setSaveError('');
+    try {
+      const result = await api.post('/api/visits', { ...submission.payload, requestId: submission.requestId });
+      clearPendingVisitSubmission(user?.id);
+      visitSubmissionRef.current = null;
+      setSaveOutcomeUnknown(false);
+      setVisitRequestConflict(false);
+      setRiskResult(result.assessment);
+      setGuardianNotification(result.guardianNotification || null);
+      setSaved(true);
+      try {
+        const refreshed = await refreshInBackground?.();
+        if (!refreshed) setSaveError('Visit saved, but the clinic list could not refresh. Reload the page to see the latest activity.');
+      } catch {
+        setSaveError('Visit saved, but the clinic list could not refresh. Reload the page to see the latest activity.');
+      }
+    } catch (error) {
+      const outcomeUnknown = !error.status || error.status === 408 || error.status >= 500 || error.code === 'VISIT_REQUEST_CONFLICT';
+      if (outcomeUnknown) {
+        const unresolved = { ...submission, outcomeUnknown: true };
+        visitSubmissionRef.current = unresolved;
+        rememberPendingVisitSubmission(user?.id, unresolved);
+        setSaveOutcomeUnknown(true);
+        setVisitRequestConflict(error.code === 'VISIT_REQUEST_CONFLICT');
+      } else {
+        const editableDraft = { ...submission, outcomeUnknown: false };
+        visitSubmissionRef.current = editableDraft;
+        rememberPendingVisitSubmission(user?.id, editableDraft);
+        setSaveOutcomeUnknown(false);
+        setVisitRequestConflict(false);
+      }
+      setSaveError(error.message || 'The visit could not be saved. Review the form and try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+  const startAnotherVisit = () => {
+    clearPendingVisitSubmission(user?.id);
+    visitSubmissionRef.current = null;
+    setSaveOutcomeUnknown(false);
+    setVisitRequestConflict(false);
+    setSaved(false);
+    setSaveError('');
+    setGuardianNotification(null);
+    arrivalRequestRef.current = null;
+    arrivalLock.current = false;
+    setArrivalResult(null);
+    setArrivalError('');
+    resetDraftFields();
+  };
   const save = async (event) => {
     event?.preventDefault();
     if (saving || arrivalSaving) return;
+    if (visitSubmissionRef.current?.outcomeUnknown) {
+      if (visitRequestConflict) return;
+      await submitVisitRequest(visitSubmissionRef.current);
+      return;
+    }
     setSaved(false);
     setGuardianNotification(null);
     if (!selected) return setSaveError('Select a patient before saving the visit.');
@@ -262,9 +364,7 @@ export default function NewVisit({ data, user, reload, refreshInBackground }) {
       setSaving(false);
       return;
     }
-    let result;
-    try {
-      result = await api.post('/api/visits', {
+    const payload = {
         patientId: selected.id,
         visitType,
         chiefComplaint: complaint,
@@ -282,16 +382,16 @@ export default function NewVisit({ data, user, reload, refreshInBackground }) {
         notes,
         summaryDraft: summaryDraft.trim(),
         summaryApproved,
-      });
+    };
+    let requestId = visitSubmissionRef.current?.requestId;
+    try {
+      requestId ||= newEventId();
     } catch (error) {
-      return setSaveError(error.message);
-    } finally {
+      setSaveError(error.message);
       setSaving(false);
+      return;
     }
-    setRiskResult(result.assessment);
-    setGuardianNotification(result.guardianNotification || null);
-    setSaved(true);
-    await reload?.();
+    await submitVisitRequest({ patientId: String(selected.id), requestId, payload });
   };
   return (
     <div className="form-page">
@@ -303,8 +403,34 @@ export default function NewVisit({ data, user, reload, refreshInBackground }) {
       </div>
       <div className="form-layout">
         <form className="panel form-panel" onSubmit={save}>
+          {(saveOutcomeUnknown || saved) && (
+            <div ref={saveRecoveryRef} tabIndex={-1} className={`visit-save-recovery ${visitRequestConflict ? 'is-error' : saved ? 'is-success' : ''}`} role={visitRequestConflict || saveOutcomeUnknown ? 'alert' : 'status'}>
+              {visitRequestConflict ? (
+                <>
+                  <strong>This visit request conflicts with a saved record.</strong>
+                  <p>Review the patient history before starting a separate visit.</p>
+                  {selected && <Link to={`/students/${encodeURIComponent(selected.id)}`}>Review patient history</Link>}
+                  <button type="button" className="secondary-btn" onClick={startAnotherVisit}>Start another visit</button>
+                </>
+              ) : saved ? (
+                <>
+                  <strong>Visit saved to today’s activity.</strong>
+                  {guardianNotification && !guardianNotification.skipped && <p>{guardianEmailMessage(guardianNotification, 'Care summary')}</p>}
+                  <button type="button" className="secondary-btn" onClick={startAnotherVisit}>Start another visit</button>
+                </>
+              ) : (
+                <>
+                  <strong>We couldn’t confirm whether this visit saved.</strong>
+                  <p>Retry the same visit to safely check its status. The saved draft is locked while the result is uncertain.</p>
+                  {selected && <Link to={`/students/${encodeURIComponent(selected.id)}`}>Review patient history</Link>}
+                </>
+              )}
+            </div>
+          )}
+          <fieldset className="visit-inputs" disabled={saving || saved || saveOutcomeUnknown}>
+            <legend className="sr-only">Visit information</legend>
           <FormStep number="01" title="Select patient">
-            <StudentPicker students={data.students} value={selectedId} onChange={changeSelectedPatient} label="Patient" required disabled={saving || arrivalSaving} />
+            <StudentPicker students={data.students} value={selectedId} onChange={changeSelectedPatient} label="Patient" required disabled={saving || arrivalSaving || saved || saveOutcomeUnknown} />
             {selected && (
               <div className="selected-student">
                 <div className="avatar small teal">
@@ -326,7 +452,7 @@ export default function NewVisit({ data, user, reload, refreshInBackground }) {
             {selected && <div className="selected-allergies"><strong>Allergies</strong><p>{selected.allergies?.trim() || 'None recorded'}</p></div>}
             {selected?.patientType === 'student' && user?.role === 'school_nurse' && (
               <div className="arrival-action-panel">
-                <button type="button" className="secondary-btn" onClick={recordArrival} disabled={arrivalSaving || saving || Boolean(arrivalResult)}>
+                <button type="button" className="secondary-btn" onClick={recordArrival} disabled={arrivalSaving || saving || saved || saveOutcomeUnknown || Boolean(arrivalResult)}>
                   {arrivalSaving ? 'Recording arrival…' : arrivalError ? 'Check arrival status' : arrivalResult ? 'Arrival recorded' : 'Record arrival & notify guardian'}
                 </button>
                 {arrivalError && <p className="error-banner" role="alert">{arrivalError}</p>}
@@ -439,23 +565,18 @@ export default function NewVisit({ data, user, reload, refreshInBackground }) {
             <button type="button" className="secondary-btn" onClick={generateSummary} disabled={!complaint || saving}>Generate summary draft</button>
             {summaryDraft && <div className="risk-result"><strong>Review AI-assisted draft</strong><textarea className="summary-draft-input" aria-label="AI-assisted visit summary draft" rows="6" value={summaryDraft} onChange={(event) => { setSummaryDraft(event.target.value); setSummaryApproved(false); }} disabled={saving} />{user?.role === 'school_nurse' ? <label className="check-label"><input type="checkbox" checked={summaryApproved} onChange={(event) => setSummaryApproved(event.target.checked)} disabled={saving} /> I reviewed and approve this summary for the record</label> : <small>A school nurse must approve this draft before it can be saved to the record.</small>}<small>Provider: {summaryMeta?.provider}. The risk score is calculated separately and is never controlled by AI.</small></div>}
           </FormStep>
+          </fieldset>
           <div className="form-actions visit-save-actions">
             <div className="follow-up-control">
-              <label className="check-label"><input type="checkbox" checked={followUp} onChange={(e) => { setFollowUp(e.target.checked); if (!e.target.checked) setFollowUpDate(""); }} /> Schedule follow-up</label>
+              <label className="check-label"><input type="checkbox" checked={followUp} onChange={(e) => { setFollowUp(e.target.checked); if (!e.target.checked) setFollowUpDate(""); }} disabled={saving || saved || saveOutcomeUnknown} /> Schedule follow-up</label>
               {followUp && <label className="follow-up-date-field">Follow-up due date
-                <input type="date" value={followUpDate} min={clinicToday} onChange={(e) => setFollowUpDate(e.target.value)} required />
+                <input type="date" value={followUpDate} min={clinicToday} onChange={(e) => setFollowUpDate(e.target.value)} required disabled={saving || saved || saveOutcomeUnknown} />
               </label>}
             </div>
-            <button type="submit" className="primary-btn" disabled={saving || arrivalSaving}>
-              <ClipboardPlus size={16} /> {saving ? 'Saving visit…' : 'Save visit'}
+            <button type="submit" className="primary-btn" disabled={saving || arrivalSaving || saved || visitRequestConflict}>
+              <ClipboardPlus size={16} /> {saving ? 'Saving visit…' : saveOutcomeUnknown ? 'Retry same visit' : 'Save visit'}
             </button>
           </div>
-          {saved && (
-            <p className="success-message" role="status">
-              Visit saved to today’s activity.
-              {guardianNotification && !guardianNotification.skipped && ` ${guardianEmailMessage(guardianNotification, 'Care summary')}`}
-            </p>
-          )}
           {saveError && <div className="error-banner" role="alert">{saveError}</div>}
           {riskResult && <div className={`risk-result risk-${riskResult.category}`}><strong>{riskResult.priority === 'requires-review' ? 'Nurse review required' : riskResult.priority === 'urgent' ? 'Urgent nurse review required' : `Decision-support result: ${riskResult.category}`}</strong><p>{riskResult.rationale}</p>{riskResult.decisionSupportMode === 'conservative_triage_v1' && <small>No-match remains unclassified and never means low risk or routine disposition. This prompt cannot replace the nurse’s assessment.</small>}<small>{riskResult.disclaimer} Rule version: {riskResult.ruleVersion} ({riskResult.ruleStatus}).</small></div>}
         </form>
