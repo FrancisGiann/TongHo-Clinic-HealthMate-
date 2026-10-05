@@ -85,7 +85,6 @@ export default function Settings({ data, user, reload, section }) {
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [attempts, setAttempts] = useState(0);
-  const [pendingRegistrations, setPendingRegistrations] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditLoading, setAuditLoading] = useState(section === 'security');
   const [auditError, setAuditError] = useState('');
@@ -212,7 +211,6 @@ export default function Settings({ data, user, reload, section }) {
     }
     if (activeSection === 'users') {
       getUsersForAdmin().then((accounts) => {
-        setPendingRegistrations(accounts.filter((account) => account.status === 'invited' && account.role === 'school_nurse'));
         setUsers(accounts);
       });
     }
@@ -298,29 +296,11 @@ export default function Settings({ data, user, reload, section }) {
     }
   };
 
-  const refreshReviewData = async () => {
+  const refreshUsers = async () => {
     const accounts = await getUsersForAdmin();
-    setPendingRegistrations(accounts.filter((account) => account.status === 'invited' && account.role === 'school_nurse'));
     setUsers(accounts);
   };
 
-  const handleApprove = async (username) => {
-    const scope = feedbackScopeRef.current;
-    clearUserActionFeedback();
-    const account = users.find((entry) => entry.username === username);
-    const result = account ? await updateUserStatus(account.id, 'active') : { success: false, error: 'Invitation not found.' };
-    showScopedUserActionFeedback(scope, result.success ? 'success' : 'error', result.success ? `${account.name} is now active.` : result.error);
-    await refreshReviewData();
-  };
-
-  const handleReject = async (username) => {
-    const scope = feedbackScopeRef.current;
-    clearUserActionFeedback();
-    const account = users.find((entry) => entry.username === username);
-    const result = account ? await updateUserStatus(account.id, 'deactivated') : { success: false, error: 'Invitation not found.' };
-    showScopedUserActionFeedback(scope, result.success ? 'success' : 'error', result.success ? `${account.name} was deactivated.` : result.error);
-    await refreshReviewData();
-  };
   const openNurseLicenseEditor = (account) => {
     setNurseLicenseTarget(account);
     setNurseLicenseNumber('');
@@ -343,7 +323,7 @@ export default function Settings({ data, user, reload, section }) {
       showScopedUserActionFeedback(scope, 'success', result.user.prcLicenseVerified
         ? `A verified PRC license is now recorded by an administrator for ${nurseLicenseTarget.name}.`
         : `The PRC license record was cleared for ${nurseLicenseTarget.name}.`);
-      await refreshReviewData();
+      await refreshUsers();
     } catch (error) {
       showScopedUserActionFeedback(scope, 'error', error.message);
     } finally {
@@ -555,7 +535,7 @@ export default function Settings({ data, user, reload, section }) {
     if (result.success) {
       setNewUser({ name: '', email: '', role: 'Nurse', patientId: '', relationship: 'Guardian' });
       setShowUserForm(false);
-      await refreshReviewData();
+      await refreshUsers();
     }
   };
   const handleUserStatus = async (account) => {
@@ -563,13 +543,22 @@ export default function Settings({ data, user, reload, section }) {
     clearUserActionFeedback();
     const result = await updateUserStatus(account.id, account.status === 'active' ? 'deactivated' : 'active');
     showScopedUserActionFeedback(scope, result.success ? 'success' : 'error', result.success ? `${account.name} is now ${account.status === 'active' ? 'inactive' : 'active'}.` : result.error);
-    await refreshReviewData();
+    await refreshUsers();
   };
   const handleResendInvitation = async (account) => {
     const scope = feedbackScopeRef.current;
     clearUserActionFeedback();
     const result = await resendInvitation(account.id);
     showScopedUserActionFeedback(scope, result.success ? 'success' : 'error', result.success ? result.message : result.error);
+    if (result.success) await refreshUsers();
+  };
+  const handleCancelInvitation = async (account) => {
+    if (!window.confirm(`Cancel ${account.name}'s invitation? Its activation link will stop working.`)) return;
+    const scope = feedbackScopeRef.current;
+    clearUserActionFeedback();
+    const result = await updateUserStatus(account.id, 'deactivated');
+    showScopedUserActionFeedback(scope, result.success ? 'success' : 'error', result.success ? `Invitation canceled for ${account.name}.` : result.error);
+    if (result.success) await refreshUsers();
   };
   const saveGuardianLink = async (event) => {
     event.preventDefault();
@@ -581,7 +570,7 @@ export default function Settings({ data, user, reload, section }) {
       await api.patch(`/api/admin/users/${encodeURIComponent(guardianLinkTarget.id)}/patient-link`, guardianLinkForm);
       showScopedUserActionFeedback(scope, 'success', `${guardianLinkTarget.name} is linked to the selected student. Activate the account separately if it is suspended.`);
       setGuardianLinkTarget(null);
-      await refreshReviewData();
+      await refreshUsers();
     } catch (error) {
       showScopedUserActionFeedback(scope, 'error', error.message || 'The guardian link could not be saved.');
     } finally { setGuardianLinkSaving(false); }
@@ -703,7 +692,7 @@ export default function Settings({ data, user, reload, section }) {
         <section className="panel settings-tab-panel">
           <div className="settings-panel-heading"><div><p className="section-kicker">Access control</p><h3>User management</h3></div><button className="primary-btn" onClick={() => setShowUserForm(!showUserForm)}><UserCog size={15} /> Add new user</button></div>
           <div className="settings-users-toolbar">
-            <p className="tab-description">Manage who can access clinic records. Nurses can be assigned a grade or section after their account is approved.</p>
+            <p className="tab-description">Invite staff and guardians by email. Invited accounts become active after they accept their secure email link. Administrators record nurse PRC verification here.</p>
             <label>Show accounts
               <select value={['all', 'active', 'invited', 'nurses', 'restricted'].includes(userFilter) ? userFilter : 'all'} onChange={(event) => updateUserFilter(event.target.value)}>
                 <option value="all">All accounts</option>
@@ -724,27 +713,7 @@ export default function Settings({ data, user, reload, section }) {
             {Boolean(nurseLicenseNumber.trim()) && <label className="check-label"><input type="checkbox" checked={licenseVerificationConfirmed} onChange={(event) => setLicenseVerificationConfirmed(event.target.checked)} required /> I independently verified this license against an authoritative source.</label>}
             <div className="form-actions"><button type="submit" className="primary-btn" disabled={licenseSaving || (Boolean(nurseLicenseNumber.trim()) && !licenseVerificationConfirmed) || (!nurseLicenseNumber.trim() && !nurseLicenseTarget.prcLicenseNumber)}>{licenseSaving ? 'Saving…' : nurseLicenseNumber.trim() ? 'Record verified license' : 'Clear license record'}</button><button type="button" className="secondary-btn" onClick={() => setNurseLicenseTarget(null)} disabled={licenseSaving}>Cancel</button></div>
           </form>}
-          <div className="admin-table-wrap"><table className="admin-table settings-users-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>PRC license</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{visibleUsers.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student (login removed)', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.role === 'school_nurse' ? <span className={`status-chip ${account.prcLicenseVerified ? 'success' : 'warn'}`}>{account.prcLicenseVerified ? 'Recorded by admin' : 'Not recorded'}</span> : '—'}</td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.role === 'student' ? 'Student sign-in is disabled' : <>{account.status === 'invited' ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}{account.role === 'guardian' && <button type="button" className="table-action" onClick={() => { setGuardianLinkTarget(account); setGuardianLinkForm({ patientId: '', relationship: 'Parent' }); }}>Link student</button>}{account.role === 'school_nurse' && <button type="button" className="table-action" onClick={() => openNurseLicenseEditor(account)}>{account.prcLicenseVerified ? 'Update or clear license' : 'Record verified license'}</button>}</>}</td></tr>)}</tbody></table>{visibleUsers.length === 0 && <p className="empty-state">{users.length ? 'No accounts match this filter.' : 'No system accounts are available yet.'}</p>}</div>
-          <div className="settings-subsection nurse-verifications">
-            <div><h4>Pending nurse verifications</h4><p>Review the school and license details submitted with nurse registrations.</p></div>
-            {pendingRegistrations.length === 0 ? <p className="muted-copy">No pending nurse registrations at the moment.</p> : (
-              <div className="nurse-verification-list">
-                {pendingRegistrations.map((entry) => (
-                  <article className="nurse-verification-row" key={entry.username}>
-                    <div>
-                      <strong>{entry.name}</strong>
-                      <p>{entry.email} · {entry.schoolName || 'School not provided'}</p>
-                      <small>School ID: {entry.schoolId || 'Not provided'} · PRC: {entry.prcLicenseNumber || 'Not provided'}</small>
-                    </div>
-                    <div className="nurse-verification-actions">
-                      <button type="button" className="primary-btn" onClick={() => handleApprove(entry.username)}>Approve</button>
-                      <button type="button" className="secondary-btn" onClick={() => handleReject(entry.username)}>Reject</button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </div>
+          <div className="admin-table-wrap"><table className="admin-table settings-users-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>PRC license</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{visibleUsers.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student (login removed)', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.role === 'school_nurse' ? <span className={`status-chip ${account.prcLicenseVerified ? 'success' : 'warn'}`}>{account.prcLicenseVerified ? 'Recorded by admin' : 'Not recorded'}</span> : '—'}</td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.role === 'student' ? 'Student sign-in is disabled' : <>{account.status === 'invited' ? <><button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button><button type="button" className="table-action" onClick={() => handleCancelInvitation(account)}>Cancel invitation</button></> : account.status === 'deactivated' && !account.invitationAccepted && account.username === `invited-${account.id.slice(0, 8)}` ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Send new invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}{account.role === 'guardian' && <button type="button" className="table-action" onClick={() => { setGuardianLinkTarget(account); setGuardianLinkForm({ patientId: '', relationship: 'Parent' }); }}>Link student</button>}{account.role === 'school_nurse' && <button type="button" className="table-action" onClick={() => openNurseLicenseEditor(account)}>{account.prcLicenseVerified ? 'Update or clear license' : 'Record verified license'}</button>}</>}</td></tr>)}</tbody></table>{visibleUsers.length === 0 && <p className="empty-state">{users.length ? 'No accounts match this filter.' : 'No system accounts are available yet.'}</p>}</div>
         </section>
       )}
 

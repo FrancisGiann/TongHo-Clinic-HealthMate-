@@ -55,6 +55,7 @@ import { acceptedProfileFields, normalizeDocumentReceiptStatus, normalizeHealthR
 import { clinicArrivalNotice, clinicVisitCareSummary, notificationDeliveryCounts, recordClinicArrival, validateClinicArrivalPayload } from './domain/clinicArrivals.js';
 import { listInAppNotifications, markInAppNotificationRead } from './domain/notifications.js';
 import { createOrReplayVisitRequest, findVisitRequest, publicVisitRecord, validVisitRequestId, visitRequestFingerprint } from './domain/visitRequests.js';
+import { activateInvitedAccount, changeAccountStatus, renewPendingInvitation } from './domain/account-access.js';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const distDir = join(currentDir, '..', 'dist');
@@ -277,6 +278,7 @@ export function createApp() {
   });
   const resetRequestLimiter = rateLimit({ limit: 60, windowMs: 60 * 60 * 1000 });
   const resetConfirmLimiter = rateLimit({ limit: 60, windowMs: 15 * 60 * 1000 });
+  const activationLimiter = rateLimit({ limit: 20, windowMs: 15 * 60 * 1000 });
   const otpVerifyLimiter = rateLimit({ limit: 120, windowMs: 15 * 60 * 1000 });
   const reauthLimiter = rateLimit({
     limit: 20,
@@ -428,33 +430,21 @@ export function createApp() {
     return res.json({ data: { success: true, message: 'Password reset successfully.' } });
   });
 
-  app.post('/api/auth/activate', async (req, res) => {
-    const tokenHash = hashSecret(req.body?.token || '');
+  app.post('/api/auth/activate', activationLimiter, async (req, res) => {
+    if (typeof req.body?.token !== 'string' || !req.body.token || req.body.token.length > 512) {
+      return errorResponse(res, 400, 'INVALID_INVITATION', 'The invitation is invalid, expired, or no longer active.');
+    }
+    const tokenHash = hashSecret(req.body.token);
     const passwordError = validatePassword(req.body?.password);
     if (passwordError) return errorResponse(res, 400, 'WEAK_PASSWORD', passwordError);
     const username = normalizeIdentifier(req.body?.username).replace(/\s+/g, '.');
     if (!/^[a-z0-9._-]{3,80}$/.test(username)) return errorResponse(res, 400, 'INVALID_USERNAME', 'Use 3–80 letters, numbers, dots, underscores, or dashes. Spaces become dots.');
-    const invitationResult = await query('SELECT * FROM invitations WHERE token_hash=$1 AND accepted_at IS NULL AND expires_at>NOW()', [tokenHash]);
-    const invitation = invitationResult.rows[0];
-    if (!invitation) return errorResponse(res, 400, 'INVALID_INVITATION', 'The invitation is invalid or expired.');
-    if (invitation.role === 'student') return errorResponse(res, 410, 'STUDENT_INVITATIONS_REMOVED', 'Students do not activate accounts. A parent or guardian can sign in after receiving a guardian invitation.');
-    const userResult = await query('SELECT * FROM users WHERE LOWER(email)=LOWER($1)', [invitation.email]);
-    const user = userResult.rows[0];
-    if (user?.role === 'guardian') {
-      const linkedStudent = await query(
-        `SELECT 1 FROM guardian_patient_links l JOIN patients p ON p.id=l.patient_id
-         WHERE l.guardian_user_id=$1 AND p.patient_type='student' LIMIT 1`,
-        [user.id],
-      );
-      if (!linkedStudent.rowCount) return errorResponse(res, 409, 'GUARDIAN_LINK_REQUIRED', 'A guardian account must be linked to a student before activation.');
-    }
     try {
-      await transaction(async (client) => {
-        await client.query("UPDATE users SET username=$1,password_hash=$2,status='active',updated_at=NOW() WHERE id=$3", [username, await hashPassword(req.body.password), user.id]);
-        await client.query('UPDATE invitations SET accepted_at=NOW() WHERE id=$1', [invitation.id]);
-      });
+      const passwordHash = await hashPassword(req.body.password);
+      await transaction((client) => activateInvitedAccount(client, { tokenHash, username, passwordHash }));
     } catch (error) {
       if (error.code === '23505') return errorResponse(res, 409, 'USERNAME_TAKEN', 'That username or email is already in use.');
+      if (error.status) return errorResponse(res, error.status, error.code, error.message);
       throw error;
     }
     return res.json({ data: { success: true, message: 'Account activated. You can now sign in.' } });
@@ -564,19 +554,19 @@ export function createApp() {
   });
 
   app.post('/api/admin/users/:id/resend-invitation', requireRoles('system_administrator'), async (req, res) => {
-    const result = await query("SELECT id,email,name,role,status FROM users WHERE id=$1", [req.params.id]);
-    const account = result.rows[0];
-    if (!account) return errorResponse(res, 404, 'NOT_FOUND', 'User not found.');
-    if (account.status !== 'invited') return errorResponse(res, 409, 'NOT_INVITED', 'Only pending invitations can be resent.');
     const rawToken = createRawToken();
-    await transaction(async (client) => {
-      await client.query('UPDATE invitations SET accepted_at=NOW() WHERE LOWER(email)=LOWER($1) AND accepted_at IS NULL', [account.email]);
-      await client.query(
-        `INSERT INTO invitations(id,token_hash,email,role,patient_id,invited_by,expires_at)
-         VALUES($1,$2,$3,$4,(SELECT patient_id FROM invitations WHERE LOWER(email)=LOWER($3) ORDER BY created_at DESC LIMIT 1),$5,NOW()+INTERVAL '72 hours')`,
-        [crypto.randomUUID(), hashSecret(rawToken), account.email, account.role, req.user.id],
-      );
-    });
+    let account;
+    try {
+      account = await transaction((client) => renewPendingInvitation(client, {
+        userId: req.params.id,
+        invitationId: crypto.randomUUID(),
+        tokenHash: hashSecret(rawToken),
+        invitedBy: req.user.id,
+      }));
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code, error.message);
+      throw error;
+    }
     const activationUrl = buildInvitationActivationUrl(rawToken);
     try {
       await sendEmail({
@@ -595,24 +585,19 @@ export function createApp() {
 
   app.patch('/api/admin/users/:id/status', requireRoles('system_administrator'), async (req, res) => {
     const status = String(req.body?.status || '');
-    if (!['active', 'suspended', 'deactivated'].includes(status)) return errorResponse(res, 400, 'INVALID_STATUS', 'Invalid account status.');
-    if (req.params.id === req.user.id && status !== 'active') return errorResponse(res, 400, 'SELF_DEACTIVATION', 'You cannot deactivate your own account.');
-    const current = await query('SELECT status,role FROM users WHERE id=$1', [req.params.id]);
-    if (!current.rowCount) return errorResponse(res, 404, 'NOT_FOUND', 'User not found.');
-    if (current.rows[0].role === 'student' && status === 'active') return errorResponse(res, 409, 'STUDENT_LOGIN_REMOVED', 'Student accounts cannot be reactivated. Invite a guardian account instead.');
-    if (current.rows[0].role === 'guardian' && status === 'active') {
-      const linkedStudent = await query(
-        `SELECT 1 FROM guardian_patient_links l JOIN patients p ON p.id=l.patient_id
-         WHERE l.guardian_user_id=$1 AND p.patient_type='student' LIMIT 1`,
-        [req.params.id],
-      );
-      if (!linkedStudent.rowCount) return errorResponse(res, 409, 'GUARDIAN_LINK_REQUIRED', 'Link this guardian account to a student before restoring access.');
+    let updatedUser;
+    try {
+      updatedUser = await transaction((client) => changeAccountStatus(client, {
+        userId: req.params.id,
+        status,
+        actorId: req.user.id,
+      }));
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code, error.message);
+      throw error;
     }
-    if (current.rows[0].status === 'invited' && status === 'active') return errorResponse(res, 409, 'ACTIVATION_REQUIRED', 'Invited users must activate their account from the secure email link.');
-    const result = await query('UPDATE users SET status=$1,updated_at=NOW() WHERE id=$2 RETURNING *', [status, req.params.id]);
-    if (status !== 'active') await query('DELETE FROM sessions WHERE user_id=$1', [req.params.id]);
     await audit(req, 'ACCOUNT_STATUS_CHANGED', { status }, 'user', req.params.id);
-    return res.json({ data: { user: publicUser(result.rows[0]) } });
+    return res.json({ data: { user: publicUser(updatedUser) } });
   });
 
   app.get('/api/admin/audit-logs', requireRoles('system_administrator'), async (req, res) => {

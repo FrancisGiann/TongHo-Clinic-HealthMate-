@@ -98,6 +98,7 @@ export async function getUsersForAdmin({ throwOnError = false } = {}) {
       prcLicenseNumber: user.prc_license_number || '',
       prcLicenseVerified: Boolean(user.prc_license_number?.trim() && user.prc_license_verified_at && user.prc_license_verified_by),
       schoolName: user.school_name || '',
+      invitationAccepted: Boolean(user.invitation_accepted),
       contactNumber: user.contact_number || '',
       lastLogin: user.last_login_at || null,
     }));

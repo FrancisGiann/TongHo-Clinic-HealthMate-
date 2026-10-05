@@ -293,7 +293,8 @@ export async function linkUserToPatient(userId, patientId, role, relationship = 
 
 export async function listUsers() {
   const result = await query(
-    `SELECT id,username,email,name,role,status,school_id,prc_license_number,prc_license_verified_at,prc_license_verified_by,contact_number,school_name,last_login_at,created_at
+    `SELECT id,username,email,name,role,status,school_id,prc_license_number,prc_license_verified_at,prc_license_verified_by,contact_number,school_name,last_login_at,created_at,
+            EXISTS(SELECT 1 FROM invitations i WHERE LOWER(i.email)=LOWER(users.email) AND i.accepted_at IS NOT NULL) AS invitation_accepted
      FROM users ORDER BY created_at DESC`,
   );
   return result.rows;

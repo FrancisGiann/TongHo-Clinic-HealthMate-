@@ -19,6 +19,32 @@ test('application factory exposes an Express request handler', () => {
   }
 });
 
+test('account activation is rate limited before password hashing and database access', () => {
+  const app = createApp();
+  const route = app.router.stack.find((layer) => layer.route?.path === '/api/auth/activate' && layer.route.methods.post);
+  assert.ok(route);
+  const limiter = route.route.stack[0].handle;
+  let accepted = 0;
+  const invoke = () => {
+    let statusCode = 200;
+    let body;
+    const response = {
+      setHeader() {},
+      status(code) { statusCode = code; return this; },
+      json(value) { body = value; return this; },
+    };
+    limiter({ ip: 'activation-rate-limit-test' }, response, () => { accepted += 1; });
+    return { statusCode, body };
+  };
+
+  for (let attempt = 0; attempt < 20; attempt += 1) assert.deepEqual(invoke(), { statusCode: 200, body: undefined });
+  assert.deepEqual(invoke(), {
+    statusCode: 429,
+    body: { error: { code: 'RATE_LIMITED', message: 'Too many requests. Please wait and try again.' } },
+  });
+  assert.equal(accepted, 20);
+});
+
 test('session management endpoints are available to each authenticated account', () => {
   const app = createApp();
   const routes = app.router.stack
