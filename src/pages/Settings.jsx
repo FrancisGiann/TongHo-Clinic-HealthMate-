@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
-import { Check, Database, Download, Lock, RotateCcw, Save, ShieldCheck, Upload, X, UserCog, Bell, FileBarChart, Building2, KeyRound } from "lucide-react";
+import { Check, Database, Download, Lock, RotateCcw, ShieldCheck, Upload, X, UserCog, Bell, FileBarChart, KeyRound } from "lucide-react";
 import { downloadCsv } from "../utils/csv";
 import { api } from "../utils/api";
 import ImportPanel from "../components/ImportPanel";
@@ -80,8 +80,6 @@ const newBroadcastRequestId = () => {
 export default function Settings({ data, user, reload, section }) {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [form, setForm] = useState(data.settings);
-  const [saved, setSaved] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState(true);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [password, setPassword] = useState("");
@@ -198,7 +196,6 @@ export default function Settings({ data, user, reload, section }) {
     setSessionsError('');
     setBroadcastMessage(null);
     setRiskMessage(null);
-    setSaved(false);
     return () => {
       if (userActionFeedbackTimerRef.current) window.clearTimeout(userActionFeedbackTimerRef.current);
       userActionFeedbackTimerRef.current = null;
@@ -353,21 +350,6 @@ export default function Settings({ data, user, reload, section }) {
       setLicenseSaving(false);
     }
   };
-  const update = (event) =>
-    setForm({ ...form, [event.target.name]: event.target.value });
-  const save = async () => {
-    const scope = feedbackScopeRef.current;
-    setReviewMessage('');
-    try {
-      const result = await api.patch('/api/admin/settings/clinic', form);
-      setForm(result.settings);
-      await reload?.();
-      setScopedFeedback(scope, setSaved, true);
-    } catch (error) {
-      setScopedFeedback(scope, setReviewMessage, error.message);
-    }
-    setTimeout(() => setSaved(false), 1800);
-  };
   const exportOversightSnapshot = () => {
     const snapshot = {
       ...data,
@@ -392,7 +374,6 @@ export default function Settings({ data, user, reload, section }) {
   const adminPageDetails = {
     account: ['My Account', 'Manage your password and sign-in preferences.'],
     users: ['Users', 'Manage account access and invitations.'],
-    school: ['School & Clinic', 'Keep school identity and clinic contact details current.'],
     data: ['Data & Imports', 'Review oversight exports and roster imports.'],
     notifications: ['Communications', 'Send a clinic notice or process due reminders.'],
     risk: ['Risk Rules', 'Manage versioned decision support rules for nurse review.'],
@@ -682,11 +663,7 @@ export default function Settings({ data, user, reload, section }) {
           {activeSection !== 'data' && <h2>{isAdmin ? adminPageTitle : nursePageTitle}</h2>}
           <p>{isAdmin ? adminPageDescription : nursePageDescription}</p>
         </div>
-        {isAdmin && activeSection === 'school' && <button className="primary-btn" onClick={save}>
-          <Save size={16} /> Save clinic settings
-        </button>}
       </div>
-      {activeSection === 'school' && reviewMessage && <div className="error-banner" role="alert">{reviewMessage}</div>}
 
       {activeSection === 'account' && (
         <section className="panel settings-tab-panel">
@@ -747,7 +724,7 @@ export default function Settings({ data, user, reload, section }) {
             {Boolean(nurseLicenseNumber.trim()) && <label className="check-label"><input type="checkbox" checked={licenseVerificationConfirmed} onChange={(event) => setLicenseVerificationConfirmed(event.target.checked)} required /> I independently verified this license against an authoritative source.</label>}
             <div className="form-actions"><button type="submit" className="primary-btn" disabled={licenseSaving || (Boolean(nurseLicenseNumber.trim()) && !licenseVerificationConfirmed) || (!nurseLicenseNumber.trim() && !nurseLicenseTarget.prcLicenseNumber)}>{licenseSaving ? 'Saving…' : nurseLicenseNumber.trim() ? 'Record verified license' : 'Clear license record'}</button><button type="button" className="secondary-btn" onClick={() => setNurseLicenseTarget(null)} disabled={licenseSaving}>Cancel</button></div>
           </form>}
-          <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>PRC license</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{visibleUsers.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student (login removed)', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.role === 'school_nurse' ? <span className={`status-chip ${account.prcLicenseVerified ? 'success' : 'warn'}`}>{account.prcLicenseVerified ? 'Recorded by admin' : 'Not recorded'}</span> : '—'}</td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.role === 'student' ? 'Student sign-in is disabled' : <>{account.status === 'invited' ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}{account.role === 'guardian' && <button type="button" className="table-action" onClick={() => { setGuardianLinkTarget(account); setGuardianLinkForm({ patientId: '', relationship: 'Parent' }); }}>Link student</button>}{account.role === 'school_nurse' && <button type="button" className="table-action" onClick={() => openNurseLicenseEditor(account)}>{account.prcLicenseVerified ? 'Update or clear license' : 'Record verified license'}</button>}</>}</td></tr>)}</tbody></table>{visibleUsers.length === 0 && <p className="empty-state">{users.length ? 'No accounts match this filter.' : 'No system accounts are available yet.'}</p>}</div>
+          <div className="admin-table-wrap"><table className="admin-table settings-users-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>PRC license</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{visibleUsers.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student (login removed)', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.role === 'school_nurse' ? <span className={`status-chip ${account.prcLicenseVerified ? 'success' : 'warn'}`}>{account.prcLicenseVerified ? 'Recorded by admin' : 'Not recorded'}</span> : '—'}</td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.role === 'student' ? 'Student sign-in is disabled' : <>{account.status === 'invited' ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}{account.role === 'guardian' && <button type="button" className="table-action" onClick={() => { setGuardianLinkTarget(account); setGuardianLinkForm({ patientId: '', relationship: 'Parent' }); }}>Link student</button>}{account.role === 'school_nurse' && <button type="button" className="table-action" onClick={() => openNurseLicenseEditor(account)}>{account.prcLicenseVerified ? 'Update or clear license' : 'Record verified license'}</button>}</>}</td></tr>)}</tbody></table>{visibleUsers.length === 0 && <p className="empty-state">{users.length ? 'No accounts match this filter.' : 'No system accounts are available yet.'}</p>}</div>
           <div className="settings-subsection nurse-verifications">
             <div><h4>Pending nurse verifications</h4><p>Review the school and license details submitted with nurse registrations.</p></div>
             {pendingRegistrations.length === 0 ? <p className="muted-copy">No pending nurse registrations at the moment.</p> : (
@@ -964,115 +941,6 @@ export default function Settings({ data, user, reload, section }) {
       {activeSection === 'schedule' && !isAdmin && <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><p className="section-kicker">Assigned by administrator</p><h3>My schedule</h3></div><span className="settings-badge">View only</span></div><div className="schedule-card"><strong>Monday – Friday</strong><span>08:00 AM – 04:00 PM</span><small>Assigned grade / section: All clinic referrals</small></div></section>}
       {activeSection === 'reports' && !isAdmin && <section className="panel settings-tab-panel narrow-panel"><div className="settings-panel-heading"><div><h3>My reports</h3><p className="field-hint">Staff reports are available from the Reports page.</p></div></div><p className="disabled-note">A personal export is not available yet because report access is scoped to authorized clinic-wide aggregates.</p><button className="secondary-btn" onClick={() => window.location.assign('/reports')}><FileBarChart size={15} /> Open reports</button></section>}
 
-      {activeSection === 'school' && isAdmin && <div className="settings-layout">
-        <section className="panel form-panel">
-          <div className="form-step">
-            <div className="step-heading">
-              <span>01</span>
-              <h3>School information</h3>
-            </div>
-            <div className="two-fields">
-              <label>
-                School name
-                <input
-                  name="schoolName"
-                  value={form.schoolName}
-                  onChange={update}
-                />
-              </label>
-              <label>
-                School year
-                <input
-                  name="schoolYear"
-                  value={form.schoolYear}
-                  onChange={update}
-                />
-              </label>
-            </div>
-            <label>
-              School address
-              <input name="address" value={form.address} onChange={update} />
-            </label>
-          </div>
-          <div className="form-step">
-            <div className="step-heading">
-              <span>02</span>
-              <h3>Clinic details</h3>
-            </div>
-            <div className="two-fields">
-              <label>
-                Clinic name
-                <input
-                  name="clinicName"
-                  value={form.clinicName}
-                  onChange={update}
-                />
-              </label>
-              <label>
-                Nurse name
-                <input
-                  name="nurseName"
-                  value={form.nurseName}
-                  onChange={update}
-                />
-              </label>
-            </div>
-            <label>
-              Contact number
-              <input
-                name="contactNumber"
-                value={form.contactNumber}
-                onChange={update}
-              />
-            </label>
-            <div className="two-fields">
-              <label>Clinic opens<input type="time" name="clinicOpenTime" value={form.clinicOpenTime || '08:00'} onChange={update} /></label>
-              <label>Clinic closes<input type="time" name="clinicCloseTime" value={form.clinicCloseTime || '16:00'} onChange={update} /></label>
-            </div>
-            <label>Appointment slot length<select name="appointmentDurationMinutes" value={form.appointmentDurationMinutes || 30} onChange={update}><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">60 minutes</option></select></label>
-          </div>
-          {saved && (
-            <p className="success-message">
-              <Check size={14} /> Settings saved successfully.
-            </p>
-          )}
-
-        </section>
-        <aside className="settings-aside">
-          <div className="workspace-card">
-            <div className="workspace-card-topline">
-              <div className="workspace-icon"><Database size={18} /></div>
-              <span className="workspace-status"><i /> Central database</span>
-            </div>
-            <h3>Workspace data</h3>
-            <p>Records are stored in the secured PostgreSQL database and shared only with authorized accounts.</p>
-            <div className="workspace-stats">
-              <div><strong>{data.students.length}</strong><span>{isAdmin ? 'Roster records' : 'Students'}</span></div>
-              <div><strong>{isAdmin ? '—' : data.visits.length}</strong><span>{isAdmin ? 'Clinical details hidden' : 'Visits'}</span></div>
-              {!isAdmin && <div><strong>{data.inventory.length}</strong><span>Stock items</span></div>}
-            </div>
-          </div>
-          {isAdmin && <>
-          <button
-            className="data-action"
-            onClick={exportData}
-          >
-            <Download size={17} />
-            <span>
-              <strong>Export CSV report</strong>
-              <small>Download spreadsheet-compatible records</small>
-            </span>
-          </button>
-          <button className="data-action primary-data-action" onClick={exportOversightSnapshot}>
-            <Database size={17} />
-            <span><strong>Download oversight snapshot</strong><small>Visible settings and roster JSON</small></span>
-          </button>
-          <p className="disabled-note" title="Sample reset is unavailable for server-backed records">
-            <RotateCcw size={17} /> Sample data cannot replace server-backed records.
-          </p>
-          </>}
-        </aside>
-      </div>}
     </div>
   );
 }

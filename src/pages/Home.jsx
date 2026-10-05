@@ -48,7 +48,7 @@ export default function Home({ authError = '' }) {
         <div className="hm-home-portal-list">
           <article className="hm-home-portal hm-home-portal-staff">
             <h3>For school clinic staff</h3>
-            <p>Nurses manage student profiles, consultations, appointment requests, supplies, and reports. System administrators manage accounts and clinic settings.</p>
+            <p>Nurses manage student profiles, consultations, appointment requests, supplies, and reports. System administrators manage account access and system activity.</p>
           </article>
           <article className="hm-home-portal hm-home-portal-guardians">
             <h3>For parents and guardians</h3>

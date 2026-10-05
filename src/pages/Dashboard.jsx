@@ -71,8 +71,8 @@ export default function Dashboard({ data, user }) {
           <h2>{isAdmin ? "Administration overview" : `${greeting}, ${userFirstName}`}</h2>
           <p className="welcome-copy">
             {isAdmin
-              ? "Review account access, update clinic details, and open school reports."
-              : "Manage accounts, clinic settings, reports, and system activity from one place."}
+              ? "Review account access and open school reports."
+              : "Review clinic reports and system activity from one place."}
           </p>
           <p className="dashboard-school-year">School year · {data.settings?.schoolYear || 'School clinic'}</p>
         </div>
@@ -150,13 +150,6 @@ export default function Dashboard({ data, user }) {
           </div>
           <div className="action-list admin-action-list">
             <Action
-              icon={Plus}
-              label="School & clinic"
-              text="Update school identity and clinic details"
-              tone="teal"
-              onClick={() => navigate('/school-clinic')}
-            />
-            <Action
               icon={Siren}
               label="Manage users"
               text="Review accounts and invitations"
@@ -199,7 +192,7 @@ export default function Dashboard({ data, user }) {
              </div>
         </section>
       </div>
-      <footer style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-3)', padding: '2rem 0 1rem' }}>
+      <footer style={{ textAlign: 'center', fontSize: 'var(--type-compact)', color: 'var(--text-3)', padding: '2rem 0 1rem' }}>
         {data.settings.schoolYear} · <Heart size={12} aria-hidden="true" /> HealthMate+
       </footer>
     </div>

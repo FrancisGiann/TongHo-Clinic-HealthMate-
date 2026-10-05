@@ -37,6 +37,9 @@
   --radius-control: 8px;
   --radius-panel: 12px;
   --radius-feature: 16px;
+  --type-body: 1rem;
+  --type-compact: 0.875rem;
+  --type-section-heading: 1.125rem;
   --focus-ring: 0 0 0 3px color-mix(in srgb, var(--color-primary) 18%, transparent);
   --font-body: 'Inter', sans-serif;
   --font-display: 'Outfit', sans-serif;

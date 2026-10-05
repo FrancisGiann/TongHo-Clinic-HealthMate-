@@ -54,6 +54,10 @@ export default function App() {
     localStorage.setItem('schoolcare-theme', value ? 'dark' : 'light');
   };
 
+  const legacySchoolSettings = location.pathname === '/school-clinic'
+    || (location.pathname === '/settings' && new URLSearchParams(location.search).get('tab') === 'school');
+  if (legacySchoolSettings) return <Navigate to="/" replace />;
+
   if (authLoading) return <div className="loading-screen">Checking secure session…</div>;
   if (!user) {
     const legacyActivation = location.pathname === '/' && new URLSearchParams(location.search).has('activate');
@@ -119,7 +123,6 @@ export default function App() {
               <Route path="/" element={<Dashboard data={data} user={user} />} />
               <Route path="/reports" element={<Reports />} />
               <Route path="/users" element={<Settings data={data} user={user} reload={clinic.reload} section="users" />} />
-              <Route path="/school-clinic" element={<Settings data={data} user={user} reload={clinic.reload} section="school" />} />
               <Route path="/data-imports" element={<Settings data={data} user={user} reload={clinic.reload} section="data" />} />
               <Route path="/communications" element={<Settings data={data} user={user} reload={clinic.reload} section="notifications" />} />
               <Route path="/risk-rules" element={<Settings data={data} user={user} reload={clinic.reload} section="risk" />} />
@@ -157,7 +160,6 @@ function AdminSettingsEntry({ data, user, reload }) {
   const legacyDestinations = {
     account: '/settings',
     users: '/users',
-    school: '/school-clinic',
     data: '/data-imports',
     notifications: '/communications',
     risk: '/risk-rules',

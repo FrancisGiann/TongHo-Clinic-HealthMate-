@@ -3,7 +3,6 @@ import { Link, matchPath, NavLink, Outlet, useLocation, useNavigate } from "reac
 import {
   ArrowUpRight,
   Bell,
-  Building2,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
@@ -51,7 +50,6 @@ const adminNavGroups = [
   ] },
   { label: "Administration", items: [
     { to: "/users", label: "Users", icon: Users },
-    { to: "/school-clinic", label: "School & Clinic", icon: Building2 },
     { to: "/data-imports", label: "Data & Imports", icon: Database },
     { to: "/communications", label: "Communications", icon: Bell },
     { to: "/risk-rules", label: "Risk Rules", icon: ShieldCheck },
@@ -402,7 +400,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
                     )
                   ))
                 ) : !notificationsLoading && !notificationsError ? (
-                  <div style={{ padding: '20px', textAlign: 'center', color: 'var(--muted)', fontSize: '13px' }}>
+                  <div style={{ padding: '20px', textAlign: 'center', color: 'var(--muted)', fontSize: 'var(--type-compact)' }}>
                     No alerts at this time
                   </div>
                 ) : null}
