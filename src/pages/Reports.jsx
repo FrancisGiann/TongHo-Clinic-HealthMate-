@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { BarChart3, Download, FileText, PieChart, Save } from "lucide-react";
 import { api } from "../utils/api";
+import "./Reports.css";
 export default function Reports() {
   const exportReport = () => window.print();
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
@@ -69,7 +70,7 @@ export default function Reports() {
   const gradeCounts = serverReport?.grades || {};
   
   return (
-    <div className="form-page">
+    <div className="form-page reports-page">
       <div className="page-intro">
         <div>
           <h2>Reports & insights</h2>

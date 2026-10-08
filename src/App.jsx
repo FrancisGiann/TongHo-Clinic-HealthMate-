@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import MainLayout from './layouts/MainLayout';
 import Dashboard from './pages/Dashboard';
@@ -18,7 +18,9 @@ import PortalVisits from './pages/PortalVisits';
 import GuardianHealthRecords from './pages/GuardianHealthRecords';
 import HealthRecordReview from './pages/HealthRecordReview';
 import Appointments from './pages/Appointments';
+import StartupScreen from './components/StartupScreen';
 import { useClinicData } from './hooks/useClinicData';
+import { CLINIC_DATA_SLOW_NOTICE_MS } from './utils/api';
 import { getCurrentUser, logoutUser } from './utils/auth';
 
 export default function App() {
@@ -27,8 +29,20 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState('');
   const [logoutError, setLogoutError] = useState('');
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [clinicLoadSlow, setClinicLoadSlow] = useState(false);
+  const logoutInFlightRef = useRef(false);
   const [data, setData, clinic] = useClinicData(user);
   const location = useLocation();
+
+  useEffect(() => {
+    setClinicLoadSlow(false);
+    if (!user || !clinic.loading) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setClinicLoadSlow(true), CLINIC_DATA_SLOW_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [clinic.loading, user, user?.id, user?.role]);
 
   useEffect(() => {
     getCurrentUser()
@@ -38,6 +52,9 @@ export default function App() {
   }, []);
 
   const handleLogout = async () => {
+    if (logoutInFlightRef.current) return false;
+    logoutInFlightRef.current = true;
+    setLoggingOut(true);
     setLogoutError('');
     try {
       await logoutUser();
@@ -46,6 +63,9 @@ export default function App() {
     } catch {
       setLogoutError('Could not confirm sign-out. Check your connection and try again.');
       return false;
+    } finally {
+      logoutInFlightRef.current = false;
+      setLoggingOut(false);
     }
   };
 
@@ -58,7 +78,7 @@ export default function App() {
     || (location.pathname === '/settings' && new URLSearchParams(location.search).get('tab') === 'school');
   if (legacySchoolSettings) return <Navigate to="/" replace />;
 
-  if (authLoading) return <div className="loading-screen">Checking secure session…</div>;
+  if (authLoading) return <StartupScreen state="session" dark={dark} />;
   if (!user) {
     const legacyActivation = location.pathname === '/' && new URLSearchParams(location.search).has('activate');
     if (legacyActivation) {
@@ -75,12 +95,24 @@ export default function App() {
       />
     );
   }
-  if (!['guardian', 'school_nurse', 'system_administrator'].includes(user.role)) return <div className="loading-screen"><p role="alert">This account has no supported HealthMate+ role.</p>{logoutError && <p role="alert">{logoutError}</p>}<button className="primary-btn" onClick={handleLogout}>Sign out</button></div>;
-  if (!clinic.ready) return (
-    <div className="loading-screen">
-      {clinic.error ? <><p role="alert">Authorized clinic records could not be loaded. {clinic.error}</p><button className="primary-btn" onClick={clinic.reload}>Try again</button></> : 'Loading authorized clinic records…'}
-    </div>
-  );
+  if (!['guardian', 'school_nurse', 'system_administrator'].includes(user.role)) {
+    return <StartupScreen state="unsupported" user={user} dark={dark} logoutError={logoutError} signingOut={loggingOut} onSignOut={handleLogout} />;
+  }
+  if (!clinic.ready) {
+    return (
+      <StartupScreen
+        state={clinic.error ? 'error' : 'loading'}
+        user={user}
+        dark={dark}
+        slow={clinicLoadSlow && !clinic.error}
+        error={clinic.error}
+        logoutError={logoutError}
+        signingOut={loggingOut}
+        onRetry={clinic.reload}
+        onSignOut={handleLogout}
+      />
+    );
+  }
 
   const isNurse = user.role === 'school_nurse';
   const isAdmin = user.role === 'system_administrator';

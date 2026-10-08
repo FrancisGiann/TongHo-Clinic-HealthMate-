@@ -1,6 +1,9 @@
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Search } from 'lucide-react';
 import { findStudentMatches, nextStudentIndex } from '../utils/studentPicker.js';
+import './StudentPicker.css';
+
+const selectedStudentLabel = (student) => `${student.name || 'Unnamed record'} · ${student.studentId || student.facultyId || student.id}`;
 
 export default function StudentPicker({
   students = [],
@@ -9,25 +12,39 @@ export default function StudentPicker({
   label = 'Student',
   required = false,
   disabled = false,
+  itemLabel = 'patient',
+  searchPlaceholder = 'Search by patient name or ID',
+  description = '',
 }) {
   const id = useId();
   const listId = `${id}-options`;
+  const descriptionId = `${id}-description`;
   const selected = students.find((student) => String(student.id) === String(value));
+  const itemPlural = `${itemLabel}s`;
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const editingQueryRef = useRef(false);
 
   useEffect(() => {
-    setQuery(selected ? `${selected.name} · ${selected.studentId}` : '');
-  }, [selected?.id, selected?.name, selected?.studentId]);
+    if (selected) {
+      setQuery(selectedStudentLabel(selected));
+      editingQueryRef.current = false;
+    } else if (editingQueryRef.current) {
+      editingQueryRef.current = false;
+    } else {
+      setQuery('');
+    }
+  }, [selected?.id, selected?.name, selected?.studentId, selected?.facultyId]);
 
   const matches = useMemo(() => {
-    return findStudentMatches(students, query);
-  }, [query, students]);
+    const filterQuery = selected && query === selectedStudentLabel(selected) ? '' : query;
+    return findStudentMatches(students, filterQuery);
+  }, [query, selected, students]);
 
   const choose = (student) => {
     onChange?.(String(student.id));
-    setQuery(`${student.name} · ${student.studentId}`);
+    setQuery(selectedStudentLabel(student));
     setOpen(false);
     setActiveIndex(-1);
   };
@@ -63,16 +80,19 @@ export default function StudentPicker({
           aria-expanded={open}
           aria-controls={open ? listId : undefined}
           aria-activedescendant={open && activeIndex >= 0 ? `${id}-option-${activeIndex}` : undefined}
+          aria-describedby={description ? descriptionId : undefined}
           aria-required={required}
           aria-invalid={required && !value ? 'true' : undefined}
           autoComplete="off"
           value={query}
-          placeholder="Search by patient name or ID"
+          placeholder={searchPlaceholder}
           disabled={disabled}
           onFocus={() => setOpen(true)}
+          onClick={() => setOpen(true)}
           onBlur={() => setOpen(false)}
           onKeyDown={handleKeyDown}
           onChange={(event) => {
+            editingQueryRef.current = true;
             setQuery(event.target.value);
             onChange?.('');
             setOpen(true);
@@ -90,16 +110,18 @@ export default function StudentPicker({
               id={`${id}-option-${index}`}
               key={student.id}
               className={index === activeIndex ? 'active' : ''}
+              tabIndex={-1}
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => choose(student)}
             >
               <strong>{student.name}</strong>
-              <span>{student.patientType === 'faculty' ? student.facultyId || student.studentId : student.studentId} · {student.patientType === 'faculty' ? [student.department, student.position].filter(Boolean).join(' · ') || 'Faculty' : `${student.gradeLevel || 'Grade not recorded'}${student.section ? ` · ${student.section}` : ''}`}</span>
+              <span>{student.studentId || student.facultyId || student.id} · {student.patientType === 'faculty' ? [student.department, student.position].filter(Boolean).join(' · ') || 'Faculty' : `${student.gradeLevel || 'Grade not recorded'}${student.section ? ` · ${student.section}` : ''}`}</span>
             </button>
-          )) : <p className="student-picker-empty">No patients match that name or ID.</p>}
+          )) : <p className="student-picker-empty">{students.length ? `No ${itemPlural} match that name or ID.` : `No ${itemPlural} are available.`}</p>}
         </div>
       )}
-      <span className="sr-only" aria-live="polite">{open ? `${matches.length} patient matches` : ''}</span>
+      {description && <span className="student-picker-description field-hint" id={descriptionId}>{description}</span>}
+      <span className="sr-only" aria-live="polite">{open ? `${matches.length} ${matches.length === 1 ? itemLabel : itemPlural} found` : ''}</span>
     </div>
   );
 }

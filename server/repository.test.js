@@ -1,6 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advanceClinicDataVersion, hydrateAuthoritativeRecord, saveClinicData, saveClinicDataInTransaction, studentRecordForUser, syncCollection, syncPatients, validateClinicDataPayload, validateVersionAfterAdvance } from './repository.js';
+import { advanceClinicDataVersion, hydrateAuthoritativeRecord, loadClinicData, saveClinicData, saveClinicDataInTransaction, studentRecordForUser, syncCollection, syncPatients, validateClinicDataPayload, validateVersionAfterAdvance } from './repository.js';
+
+function clinicReadResult(overrides = {}) {
+  return { rows: [{
+    settings: {},
+    version: 48,
+    students: [],
+    visits: [],
+    appointments: [],
+    inventory: [],
+    dispenseLogs: [],
+    stockAdjustments: [],
+    ...overrides,
+  }] };
+}
 
 test('repository hydration keeps appointment patient and scheduling state authoritative', () => {
   const result = hydrateAuthoritativeRecord('appointments', {
@@ -187,4 +201,152 @@ test('dedicated transactional writes reject a stale clinic snapshot version', as
 test('administrator clinic snapshots expose demographic linkage fields without clinical details', () => {
   const result = studentRecordForUser({ id: 'student-1', studentId: 'PTHI-1', name: 'Fictional Student', gradeLevel: 'Grade 4', allergies: 'Peanuts', conditions: 'Asthma' }, { role: 'system_administrator' });
   assert.deepEqual(result, { id: 'student-1', studentId: 'PTHI-1', name: 'Fictional Student', gradeLevel: 'Grade 4' });
+});
+
+test('administrator bootstrap projects the roster and settings in one read while preserving explicit nulls', async () => {
+  const source = { name: 'Example Student', gradeLevel: 'Grade 4', birthDate: null, gender: false, allergies: 'Confidential clinical value' };
+  const calls = [];
+  const queryFn = async (sql, params = []) => {
+    calls.push({ sql, params });
+    const fields = params[0];
+    const data = Object.fromEntries(fields.filter((field) => Object.hasOwn(source, field)).map((field) => [field, source[field]]));
+    return clinicReadResult({ students: [{ id: 'student-1', patient_type: 'student', data }] });
+  };
+
+  const data = await loadClinicData({ id: 'admin-1', role: 'system_administrator' }, { queryFn });
+  const [read] = calls;
+  assert.equal(calls.length, 1);
+  assert.match(read.sql, /clinic_settings/);
+  assert.match(read.sql, /jsonb_object_agg/);
+  assert.match(read.sql, /patients\.data \?/);
+  assert.ok(read.params[0].includes('birthDate'));
+  assert.ok(!read.params[0].includes('allergies'));
+  assert.doesNotMatch(read.sql, /FROM (visits|appointments|inventory_items|dispense_logs|stock_adjustments)\b/);
+  assert.deepEqual(data.students[0], { id: 'student-1', patientType: 'student', name: 'Example Student', gradeLevel: 'Grade 4', birthDate: null, gender: false });
+  assert.deepEqual(data.visits, []);
+  assert.deepEqual(data.appointments, []);
+  assert.deepEqual(data.inventory, []);
+});
+
+test('guardian bootstrap resolves linked IDs first, then reads only parameter-scoped projected data', async () => {
+  const source = {
+    name: 'Example Student',
+    allergies: null,
+    allergiesStatus: 'none_reported',
+    g6pdDeficiency: false,
+    guardianHealthRecord: { allergies: null, allergiesStatus: 'none_reported' },
+    email: 'private@example.test',
+  };
+  const calls = [];
+  const queryFn = async (sql, params = []) => {
+    calls.push({ sql, params });
+    if (/FROM guardian_patient_links/.test(sql)) return { rows: [{ id: 'linked-student-1' }] };
+    const fields = params[1];
+    const data = Object.fromEntries(fields.filter((field) => Object.hasOwn(source, field)).map((field) => [field, source[field]]));
+    return clinicReadResult({ students: [{ id: 'linked-student-1', patient_type: 'student', data }] });
+  };
+
+  const data = await loadClinicData({ id: 'guardian-1', role: 'guardian' }, { queryFn });
+  assert.equal(calls.length, 2, 'guardian lookup remains a dependency before the single scoped bootstrap query');
+  assert.match(calls[0].sql, /FROM guardian_patient_links/);
+  const [read] = calls.slice(1);
+  assert.match(read.sql, /FROM clinic_settings/);
+  assert.match(read.sql, /patients\.id=ANY\(\$1::text\[\]\)/);
+  assert.match(read.sql, /FROM visits WHERE patient_id=ANY\(\$1::text\[\]\)/);
+  assert.match(read.sql, /FROM appointments WHERE patient_id=ANY\(\$1::text\[\]\)/);
+  assert.deepEqual(read.params[0], ['linked-student-1']);
+  assert.ok(read.params[1].includes('guardianHealthRecord'));
+  assert.ok(!read.params[1].includes('email'));
+  assert.doesNotMatch(read.sql, /linked-student-1/);
+  assert.deepEqual(data.students[0], {
+    id: 'linked-student-1',
+    patientType: 'student',
+    name: 'Example Student',
+    allergies: null,
+    allergiesStatus: 'none_reported',
+    g6pdDeficiency: false,
+    guardianHealthRecord: { allergies: null, allergiesStatus: 'none_reported' },
+  });
+});
+
+test('nurse bootstrap reads all permitted groups once and preserves authoritative hydration and visit sanitization', async () => {
+  const fullProfile = {
+    name: 'Example Student',
+    allergies: 'Peanuts',
+    allergiesStatus: 'reported',
+    guardianHealthRecord: { allergies: 'Peanuts', allergiesStatus: 'reported' },
+    futureClinicalField: { value: 'preserved' },
+  };
+  const calls = [];
+  const queryFn = async (sql, params = []) => {
+    calls.push({ sql, params });
+    return clinicReadResult({
+      students: [{ id: 'student-1', patient_type: 'student', data: fullProfile }],
+      visits: [{ data: { id: 'visit-1', _requestFingerprint: 'internal', chiefComplaint: 'Headache' } }],
+      appointments: [{
+        id: 'appointment-1', patient_id: 'student-1', status: 'Scheduled',
+        starts_at: '2026-09-24T01:00:00+00:00', created_at: '2026-09-23T02:00:00+00:00', updated_at: '2026-09-23T02:10:00+00:00',
+        data: { patientId: 'wrong-student', startsAt: 'legacy-time', status: 'Requested', reason: 'Follow-up' },
+      }],
+      inventory: [{ id: 'medicine-1', quantity: 3, data: { name: 'Bandages', quantity: 99, archived: true } }],
+    });
+  };
+
+  const data = await loadClinicData({ id: 'nurse-1', role: 'school_nurse' }, { queryFn });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].params, []);
+  for (const table of ['patients', 'visits', 'appointments', 'inventory_items', 'dispense_logs', 'stock_adjustments']) {
+    assert.match(calls[0].sql, new RegExp(`FROM ${table}\\b`));
+  }
+  assert.deepEqual(data.students[0], { ...fullProfile, id: 'student-1', patientType: 'student' });
+  assert.deepEqual(data.visits, [{ id: 'visit-1', chiefComplaint: 'Headache' }]);
+  assert.deepEqual(data.appointments, [{
+    patientId: 'student-1', startsAt: '2026-09-24T01:00:00.000Z', status: 'Scheduled',
+    createdAt: '2026-09-23T02:00:00.000Z', updatedAt: '2026-09-23T02:10:00.000Z',
+    id: 'appointment-1', reason: 'Follow-up',
+  }]);
+  assert.deepEqual(data.inventory, [{ id: 'medicine-1', quantity: 3, name: 'Bandages', archived: true }]);
+});
+
+test('administrator bootstrap omits restricted groups unless clinical access is explicitly requested', async () => {
+  const calls = [];
+  const queryFn = async (sql, params = []) => {
+    calls.push({ sql, params });
+    return clinicReadResult();
+  };
+
+  const defaultData = await loadClinicData({ id: 'admin-1', role: 'system_administrator' }, { queryFn });
+  assert.equal(calls.length, 1);
+  assert.doesNotMatch(calls[0].sql, /FROM (visits|appointments|inventory_items|dispense_logs|stock_adjustments)\b/);
+  assert.deepEqual(defaultData.visits, []);
+  assert.deepEqual(defaultData.appointments, []);
+  assert.deepEqual(defaultData.inventory, []);
+  assert.deepEqual(defaultData.dispenseLogs, []);
+  assert.deepEqual(defaultData.stockAdjustments, []);
+
+  calls.length = 0;
+  await loadClinicData({ id: 'admin-1', role: 'system_administrator' }, { queryFn, includeClinical: true });
+  assert.equal(calls.length, 1);
+  for (const table of ['visits', 'appointments', 'inventory_items', 'dispense_logs', 'stock_adjustments']) {
+    assert.match(calls[0].sql, new RegExp(`FROM ${table}\\b`));
+  }
+});
+
+test('guardian bootstrap handles no linked students with one parameterized empty scope', async () => {
+  const calls = [];
+  const queryFn = async (sql, params = []) => {
+    calls.push({ sql, params });
+    if (/FROM guardian_patient_links/.test(sql)) return { rows: [] };
+    return clinicReadResult();
+  };
+
+  const data = await loadClinicData({ id: 'guardian-1', role: 'guardian' }, { queryFn });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].params[0], []);
+  assert.match(calls[1].sql, /patients\.id=ANY\(\$1::text\[\]\)/);
+  assert.match(calls[1].sql, /FROM visits WHERE patient_id=ANY\(\$1::text\[\]\)/);
+  assert.deepEqual(data.students, []);
+  assert.deepEqual(data.visits, []);
+  assert.deepEqual(data.appointments, []);
+  assert.deepEqual(data.inventory, []);
 });

@@ -16,6 +16,11 @@ test('student picker matches names, IDs, grade and section without selecting a r
   assert.deepEqual(findStudentMatches(students, ''), students, 'empty search offers options but leaves explicit selection to the caller');
 });
 
+test('student picker matches the record ID used when no student or faculty ID is available', () => {
+  const recordWithoutSchoolId = { id: 'patient-record-42', name: 'Casey Lee' };
+  assert.deepEqual(findStudentMatches([recordWithoutSchoolId], 'patient-record-42'), [recordWithoutSchoolId]);
+});
+
 test('student picker caps suggestions and keeps keyboard movement within valid options', () => {
   assert.equal(findStudentMatches(Array.from({ length: 60 }, (_, index) => ({ id: index })), '').length, 50);
   assert.equal(nextStudentIndex(-1, 1, 2), 0);

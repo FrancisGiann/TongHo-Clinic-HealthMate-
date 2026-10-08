@@ -5,6 +5,7 @@ import { downloadCsv } from "../utils/csv";
 import { api } from "../utils/api";
 import ImportPanel from "../components/ImportPanel";
 import RiskRuleBuilder, { RiskRuleDetails } from "../components/RiskRuleBuilder";
+import StudentPicker from "../components/StudentPicker";
 import {
   getAuditLogs,
   getUsersForAdmin,
@@ -123,6 +124,7 @@ export default function Settings({ data, user, reload, section }) {
     : riskRules.find((rule) => rule.status === 'clinician_approved');
   const [users, setUsers] = useState([]);
   const [showUserForm, setShowUserForm] = useState(false);
+  const [inviteSaving, setInviteSaving] = useState(false);
   const [newUser, setNewUser] = useState({ name: '', email: '', role: 'Nurse', patientId: '', relationship: 'Guardian' });
   const [guardianLinkTarget, setGuardianLinkTarget] = useState(null);
   const [guardianLinkForm, setGuardianLinkForm] = useState({ patientId: '', relationship: 'Parent' });
@@ -131,6 +133,9 @@ export default function Settings({ data, user, reload, section }) {
   const [nurseLicenseNumber, setNurseLicenseNumber] = useState('');
   const [licenseVerificationConfirmed, setLicenseVerificationConfirmed] = useState(false);
   const [licenseSaving, setLicenseSaving] = useState(false);
+  const linkableStudents = Array.isArray(data?.students)
+    ? data.students.filter((student) => student.patientType === 'student')
+    : [];
   const activeSection = section || 'account';
   const feedbackScope = `${location.pathname}:${activeSection}`;
   const feedbackScopeRef = useRef(feedbackScope);
@@ -527,15 +532,25 @@ export default function Settings({ data, user, reload, section }) {
   };
   const handleCreateUser = async (event) => {
     event.preventDefault();
+    if (inviteSaving) return;
     const scope = feedbackScopeRef.current;
     clearUserActionFeedback();
-    const result = await createManagedUser(newUser);
-    const invitationSent = result.success && result.emailSent !== false;
-    showScopedUserActionFeedback(scope, invitationSent ? 'success' : 'error', result.success ? (result.emailSent === false ? result.message : 'Invitation sent successfully.') : result.error);
-    if (result.success) {
-      setNewUser({ name: '', email: '', role: 'Nurse', patientId: '', relationship: 'Guardian' });
-      setShowUserForm(false);
-      await refreshUsers();
+    if (newUser.role === 'Guardian' && !linkableStudents.some((student) => String(student.id) === String(newUser.patientId))) {
+      showScopedUserActionFeedback(scope, 'error', 'Choose a student from the search results before sending this guardian invitation.');
+      return;
+    }
+    setInviteSaving(true);
+    try {
+      const result = await createManagedUser(newUser);
+      const invitationSent = result.success && result.emailSent !== false;
+      showScopedUserActionFeedback(scope, invitationSent ? 'success' : 'error', result.success ? (result.emailSent === false ? result.message : 'Invitation sent successfully.') : result.error);
+      if (result.success) {
+        setNewUser({ name: '', email: '', role: 'Nurse', patientId: '', relationship: 'Guardian' });
+        setShowUserForm(false);
+        await refreshUsers();
+      }
+    } finally {
+      setInviteSaving(false);
     }
   };
   const handleUserStatus = async (account) => {
@@ -562,8 +577,12 @@ export default function Settings({ data, user, reload, section }) {
   };
   const saveGuardianLink = async (event) => {
     event.preventDefault();
-    if (!guardianLinkTarget || !guardianLinkForm.patientId || !guardianLinkForm.relationship.trim()) return;
+    if (guardianLinkSaving || !guardianLinkTarget || !guardianLinkForm.relationship.trim()) return;
     const scope = feedbackScopeRef.current;
+    if (!linkableStudents.some((student) => String(student.id) === String(guardianLinkForm.patientId))) {
+      showScopedUserActionFeedback(scope, 'error', 'Choose a student from the search results before saving this link.');
+      return;
+    }
     setGuardianLinkSaving(true);
     clearUserActionFeedback();
     try {
@@ -703,8 +722,43 @@ export default function Settings({ data, user, reload, section }) {
               </select>
             </label>
           </div>
-          {showUserForm && <form className="inline-user-form" onSubmit={handleCreateUser}><label>Name<input value={newUser.name} onChange={(event) => setNewUser({ ...newUser, name: event.target.value })} required /></label><label>Email<input type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} required /></label><label>Role<select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value, patientId: '' })}><option>Admin</option><option>Nurse</option><option>Guardian</option></select></label>{newUser.role === 'Guardian' && <><label>Linked student<select value={newUser.patientId} onChange={(event) => setNewUser({ ...newUser, patientId: event.target.value })} required><option value="">Select student…</option>{data.students.filter((student) => student.patientType !== 'faculty').map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label><label>Relationship<input value={newUser.relationship} onChange={(event) => setNewUser({ ...newUser, relationship: event.target.value })} required /></label></>}<button type="submit" className="primary-btn">Send invitation</button></form>}
-          {guardianLinkTarget && <form className="inline-user-form" onSubmit={saveGuardianLink}><div><h4>Link student to {guardianLinkTarget.name}</h4><p className="field-hint">Only student roster records can be linked. Suspended accounts require a separate activation after relinking.</p></div><label>Student record<select value={guardianLinkForm.patientId} onChange={(event) => setGuardianLinkForm((current) => ({ ...current, patientId: event.target.value }))} required><option value="">Select student…</option>{data.students.filter((student) => student.patientType !== 'faculty').map((student) => <option key={student.id} value={student.id}>{student.name} · {student.studentId || student.id}</option>)}</select></label><label>Guardian relationship<input maxLength={80} value={guardianLinkForm.relationship} onChange={(event) => setGuardianLinkForm((current) => ({ ...current, relationship: event.target.value }))} required /></label><button type="submit" className="primary-btn" disabled={guardianLinkSaving || !guardianLinkForm.patientId}>{guardianLinkSaving ? 'Saving…' : 'Save guardian link'}</button><button type="button" className="secondary-btn" onClick={() => setGuardianLinkTarget(null)} disabled={guardianLinkSaving}>Cancel</button></form>}
+          {showUserForm && <form className="inline-user-form" onSubmit={handleCreateUser}>
+            <label>Name<input value={newUser.name} onChange={(event) => setNewUser({ ...newUser, name: event.target.value })} required disabled={inviteSaving} /></label>
+            <label>Email<input type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} required disabled={inviteSaving} /></label>
+            <label>Role<select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value, patientId: '' })} disabled={inviteSaving}><option>Admin</option><option>Nurse</option><option>Guardian</option></select></label>
+            {newUser.role === 'Guardian' && <>
+              <StudentPicker
+                students={linkableStudents}
+                value={newUser.patientId}
+                onChange={(patientId) => setNewUser((current) => ({ ...current, patientId }))}
+                label="Linked student"
+                itemLabel="student"
+                searchPlaceholder="Search by student name or ID"
+                description="Choose a student from the results. Typing alone does not select a record."
+                required
+                disabled={inviteSaving}
+              />
+              <label>Relationship<input value={newUser.relationship} onChange={(event) => setNewUser({ ...newUser, relationship: event.target.value })} required disabled={inviteSaving} /></label>
+            </>}
+            <button type="submit" className="primary-btn" disabled={inviteSaving || (newUser.role === 'Guardian' && !newUser.patientId)}>{inviteSaving ? 'Sending…' : 'Send invitation'}</button>
+          </form>}
+          {guardianLinkTarget && <form className="inline-user-form" onSubmit={saveGuardianLink}>
+            <div><h4>Link student to {guardianLinkTarget.name}</h4><p className="field-hint">Only student roster records can be linked. Suspended accounts require a separate activation after relinking.</p></div>
+            <StudentPicker
+              students={linkableStudents}
+              value={guardianLinkForm.patientId}
+              onChange={(patientId) => setGuardianLinkForm((current) => ({ ...current, patientId }))}
+              label="Student record"
+              itemLabel="student"
+              searchPlaceholder="Search by student name or ID"
+              description="Choose a student from the results. Typing alone does not select a record."
+              required
+              disabled={guardianLinkSaving}
+            />
+            <label>Guardian relationship<input maxLength={80} value={guardianLinkForm.relationship} onChange={(event) => setGuardianLinkForm((current) => ({ ...current, relationship: event.target.value }))} required disabled={guardianLinkSaving} /></label>
+            <button type="submit" className="primary-btn" disabled={guardianLinkSaving || !guardianLinkForm.patientId}>{guardianLinkSaving ? 'Saving…' : 'Save guardian link'}</button>
+            <button type="button" className="secondary-btn" onClick={() => setGuardianLinkTarget(null)} disabled={guardianLinkSaving}>Cancel</button>
+          </form>}
           {userActionFeedback && <div className={userActionFeedback.tone === 'error' ? 'error-banner' : 'success-message'} role={userActionFeedback.tone === 'error' ? 'alert' : 'status'}>{userActionFeedback.tone === 'success' && <Check size={14} aria-hidden="true" />} {userActionFeedback.message}</div>}
           <p className="disabled-note nurse-license-admin-note">Only administrators can record a nurse’s PRC license, after independently verifying it against an authoritative source. This list shows the recording status without displaying the license number.</p>
           {nurseLicenseTarget && <form className="nurse-license-editor" onSubmit={updateNurseLicense}>

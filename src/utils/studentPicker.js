@@ -5,7 +5,7 @@ export function findStudentMatches(students, query, limit = MAX_STUDENT_MATCHES)
   const searchableStudents = Array.isArray(students) ? students : [];
   const matches = normalized
     ? searchableStudents.filter((student) => (
-      `${student.name || ''} ${student.studentId || ''} ${student.facultyId || ''} ${student.gradeLevel || ''} ${student.section || ''} ${student.department || ''} ${student.position || ''}`
+      `${student.name || ''} ${student.studentId || ''} ${student.facultyId || ''} ${student.id || ''} ${student.gradeLevel || ''} ${student.section || ''} ${student.department || ''} ${student.position || ''}`
         .toLocaleLowerCase()
         .includes(normalized)
     ))

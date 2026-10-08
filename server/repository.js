@@ -14,6 +14,17 @@ const staffRoles = new Set(['school_nurse', 'system_administrator']);
 const clinicalCollections = new Set(['visits', 'appointments', 'dispenseLogs', 'stockAdjustments']);
 const adminRestrictedCollections = new Set([...clinicalCollections, 'inventory']);
 const snapshotWritableCollections = [];
+const guardianPatientFields = [
+  'patientType', 'studentId', 'name', 'gradeLevel', 'section', 'birthDate', 'gender',
+  'motherName', 'fatherName', 'guardianName', 'guardianPhone', 'guardianRelation',
+  'bloodType', 'allergies', 'allergiesStatus', 'conditions', 'conditionsStatus', 'medications', 'medicationsStatus', 'pastIllness', 'presentIllness',
+  'hospitalizationHistory', 'hospitalizationDetails', 'g6pdDeficiency', 'medicationAtHome',
+  'takingRegularMedication', 'regularMedicationName', 'onTherapy', 'lastTreatmentDate',
+  'therapistName', 'therapyInterventions', 'hasConcerns', 'concernsDetails', 'documentsSubmitted', 'documentsReceived', 'guardianHealthRecord',
+];
+const administratorPatientFields = [
+  'patientType', 'studentId', 'facultyId', 'name', 'gradeLevel', 'section', 'adviser', 'department', 'position', 'email', 'contactNumber', 'birthDate', 'gender', 'guardianName', 'guardianPhone', 'guardianRelation',
+];
 
 function recordId(record) {
   const value = record?.id;
@@ -30,24 +41,20 @@ function patientId(record) {
 }
 
 function timestampValue(value) {
-  return value instanceof Date ? value.toISOString() : value || null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'string') {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.valueOf()) ? value : parsed.toISOString();
+  }
+  return value || null;
 }
 
 export function studentRecordForUser(record, user) {
   if (user.role === 'school_nurse') return { ...record, id: record.id };
   if (user.role === 'guardian') {
-    const fields = [
-      'patientType', 'studentId', 'name', 'gradeLevel', 'section', 'birthDate', 'gender',
-      'motherName', 'fatherName', 'guardianName', 'guardianPhone', 'guardianRelation',
-      'bloodType', 'allergies', 'allergiesStatus', 'conditions', 'conditionsStatus', 'medications', 'medicationsStatus', 'pastIllness', 'presentIllness',
-      'hospitalizationHistory', 'hospitalizationDetails', 'g6pdDeficiency', 'medicationAtHome',
-      'takingRegularMedication', 'regularMedicationName', 'onTherapy', 'lastTreatmentDate',
-      'therapistName', 'therapyInterventions', 'hasConcerns', 'concernsDetails', 'documentsSubmitted', 'documentsReceived', 'guardianHealthRecord',
-    ];
-    return { id: record.id, ...Object.fromEntries(fields.filter((field) => record[field] !== undefined).map((field) => [field, record[field]])) };
+    return { id: record.id, ...Object.fromEntries(guardianPatientFields.filter((field) => record[field] !== undefined).map((field) => [field, record[field]])) };
   }
-  const fields = ['patientType', 'studentId', 'facultyId', 'name', 'gradeLevel', 'section', 'adviser', 'department', 'position', 'email', 'contactNumber', 'birthDate', 'gender', 'guardianName', 'guardianPhone', 'guardianRelation'];
-  return { id: record.id, ...Object.fromEntries(fields.filter((field) => record[field] !== undefined).map((field) => [field, record[field]])) };
+  return { id: record.id, ...Object.fromEntries(administratorPatientFields.filter((field) => record[field] !== undefined).map((field) => [field, record[field]])) };
 }
 
 export function hydrateAuthoritativeRecord(key, row) {
@@ -80,43 +87,58 @@ async function accessiblePatientIds(user, client = { query }) {
   return result.rows.map((row) => String(row.id));
 }
 
-export async function loadClinicData(user, { includeClinical = false } = {}) {
-  const settingsResult = await query('SELECT data,version FROM clinic_settings WHERE id=1');
-  const ids = await accessiblePatientIds(user);
+function patientDataProjection(fieldParameter) {
+  return `(SELECT COALESCE(jsonb_object_agg(allowed_patient_field.key,patients.data->allowed_patient_field.key),'{}'::jsonb)
+          FROM unnest($${fieldParameter}::text[]) AS allowed_patient_field(key)
+          WHERE patients.data ? allowed_patient_field.key)`;
+}
+
+function clinicDataReadQuery(user, ids, includeClinical) {
+  const params = [];
+  const patientFields = user.role === 'guardian'
+    ? guardianPatientFields
+    : user.role === 'system_administrator' ? administratorPatientFields : null;
+  const patientIdsParameter = ids === null ? null : (params.push(ids), `$${params.length}::text[]`);
+  const fieldParameter = patientFields ? (params.push(patientFields), params.length) : null;
+  const patientData = patientFields ? patientDataProjection(fieldParameter) : 'patients.data';
+  const patientScope = patientIdsParameter ? ` WHERE patients.id=ANY(${patientIdsParameter})` : '';
+  const columns = [
+    `COALESCE((SELECT data FROM clinic_settings WHERE id=1),'{}'::jsonb) AS settings`,
+    `COALESCE((SELECT version FROM clinic_settings WHERE id=1),1) AS version`,
+    `COALESCE((SELECT jsonb_agg(jsonb_build_object('id',patients.id,'patient_type',patients.patient_type,'data',${patientData}) ORDER BY patients.created_at) FROM patients${patientScope}),'[]'::jsonb) AS students`,
+  ];
   const staff = staffRoles.has(user.role);
-  const patientResult = ids === null
-    ? await query('SELECT id,patient_type,data FROM patients ORDER BY created_at')
-    : await query('SELECT id,patient_type,data FROM patients WHERE id=ANY($1::text[]) ORDER BY created_at', [ids]);
+  for (const [key, config] of Object.entries(collectionMap)) {
+    if (user.role === 'system_administrator' && adminRestrictedCollections.has(key) && !includeClinical) continue;
+    if (config.staffOnly && !staff) continue;
+    const scope = config.patient && patientIdsParameter ? ` WHERE patient_id=ANY(${patientIdsParameter})` : '';
+    const column = `"${key}"`;
+    if (key === 'appointments') {
+      columns.push(`COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'patient_id',patient_id,'status',status,'starts_at',starts_at,'created_at',created_at,'updated_at',updated_at,'data',data) ORDER BY created_at) FROM ${config.table}${scope}),'[]'::jsonb) AS ${column}`);
+    } else if (key === 'inventory') {
+      columns.push(`COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'quantity',quantity,'data',data) ORDER BY created_at) FROM ${config.table}),'[]'::jsonb) AS ${column}`);
+    } else {
+      columns.push(`COALESCE((SELECT jsonb_agg(jsonb_build_object('data',data) ORDER BY created_at) FROM ${config.table}${scope}),'[]'::jsonb) AS ${column}`);
+    }
+  }
+  return { sql: `SELECT ${columns.join(',\n       ')}`, params };
+}
+
+export async function loadClinicData(user, { includeClinical = false, queryFn = query } = {}) {
+  const ids = await accessiblePatientIds(user, { query: queryFn });
+  const { sql, params } = clinicDataReadQuery(user, ids, includeClinical);
+  const result = await queryFn(sql, params);
+  const recordGroups = result.rows[0] || {};
   const data = {
-    schemaVersion: settingsResult.rows[0]?.version || 1,
-    settings: settingsResult.rows[0]?.data || {},
-    students: patientResult.rows.map((row) => studentRecordForUser({ ...row.data, id: row.id, patientType: row.patient_type }, user)),
+    schemaVersion: recordGroups.version || 1,
+    settings: recordGroups.settings || {},
+    students: (recordGroups.students || []).map((row) => studentRecordForUser({ ...row.data, id: row.id, patientType: row.patient_type }, user)),
   };
 
-  for (const [key, config] of Object.entries(collectionMap)) {
-    if (user.role === 'system_administrator' && adminRestrictedCollections.has(key) && !includeClinical) {
-      data[key] = [];
-      continue;
-    }
-    if (config.staffOnly && !staff) {
-      data[key] = [];
-      continue;
-    }
-    if (key === 'appointments') {
-      const scope = ids !== null ? ' WHERE patient_id=ANY($1::text[])' : '';
-      const result = await query(`SELECT id,patient_id,status,starts_at,created_at,updated_at,data FROM appointments${scope} ORDER BY created_at`, ids !== null ? [ids] : []);
-      data[key] = result.rows.map((row) => hydrateAuthoritativeRecord(key, row));
-      continue;
-    }
-    if (key === 'inventory') {
-      const result = await query('SELECT id,quantity,data FROM inventory_items ORDER BY created_at');
-      data[key] = result.rows.map((row) => hydrateAuthoritativeRecord(key, row));
-      continue;
-    }
-    const result = config.patient && ids !== null
-      ? await query(`SELECT data FROM ${config.table} WHERE patient_id=ANY($1::text[]) ORDER BY created_at`, [ids])
-      : await query(`SELECT data FROM ${config.table} ORDER BY created_at`);
-    data[key] = result.rows.map((row) => key === 'visits' ? publicVisitRecord(row.data) : row.data);
+  for (const key of Object.keys(collectionMap)) {
+    data[key] = (recordGroups[key] || []).map((row) => key === 'appointments' || key === 'inventory'
+      ? hydrateAuthoritativeRecord(key, row)
+      : key === 'visits' ? publicVisitRecord(row.data) : row.data);
   }
   return data;
 }
