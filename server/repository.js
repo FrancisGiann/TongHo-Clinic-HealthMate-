@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { query, transaction } from './db.js';
+import { normalizeRosterIdentifier, patientRosterIdentitySql, rosterIdTrimCharacters } from './domain/roster.js';
 import { publicVisitRecord } from './domain/visitRequests.js';
 
 const collectionMap = {
@@ -25,6 +26,147 @@ const guardianPatientFields = [
 const administratorPatientFields = [
   'patientType', 'studentId', 'facultyId', 'name', 'gradeLevel', 'section', 'adviser', 'department', 'position', 'email', 'contactNumber', 'birthDate', 'gender', 'guardianName', 'guardianPhone', 'guardianRelation',
 ];
+const studentRosterFields = ['studentId', 'name', 'gradeLevel', 'section', 'adviser'];
+const validStudentGrades = new Set(['Kindergarten', ...Array.from({ length: 10 }, (_, index) => `Grade ${index + 1}`)]);
+
+function rosterError(status, code, message) {
+  const error = new Error(message);
+  error.status = status;
+  error.code = code;
+  return error;
+}
+
+function rosterIdentity(record, patientType) {
+  const studentId = normalizeRosterIdentifier(record.studentId);
+  const facultyId = normalizeRosterIdentifier(record.facultyId);
+  return patientType === 'faculty' ? facultyId || studentId : studentId;
+}
+
+function sameRosterValue(field, current, next) {
+  return Object.is(current?.[field] ?? '', next?.[field] ?? '');
+}
+
+function validateChangedStudentRoster(record) {
+  const values = {};
+  for (const [field, maxLength] of Object.entries({ studentId: 80, name: 160, gradeLevel: 40, section: 80, adviser: 160 })) {
+    const value = record[field] ?? '';
+    if (typeof value !== 'string') {
+      throw rosterError(400, 'VALIDATION_ERROR', `${field} must be text.`);
+    }
+    values[field] = value.trim();
+    if (values[field].length > maxLength) {
+      throw rosterError(400, 'VALIDATION_ERROR', `${field} must be ${maxLength} characters or fewer.`);
+    }
+  }
+  if (!values.studentId) throw rosterError(400, 'VALIDATION_ERROR', 'Student ID is required.');
+  if (!values.name) throw rosterError(400, 'VALIDATION_ERROR', 'Student name is required.');
+  if (!values.gradeLevel) throw rosterError(400, 'VALIDATION_ERROR', 'Grade level is required.');
+  if (!validStudentGrades.has(values.gradeLevel)) {
+    throw rosterError(400, 'VALIDATION_ERROR', 'Grade level must be Kindergarten or Grade 1 through Grade 10.');
+  }
+  Object.assign(record, values);
+}
+
+function validateChangedFacultyRoster(record) {
+  for (const field of ['facultyId', 'studentId']) {
+    if (record[field] !== undefined && record[field] !== null && typeof record[field] !== 'string') {
+      throw rosterError(400, 'VALIDATION_ERROR', 'Faculty ID fields must be text.');
+    }
+  }
+  if (typeof record.facultyId === 'string') record.facultyId = record.facultyId.trim();
+  if (typeof record.studentId === 'string') record.studentId = record.studentId.trim();
+  const identifierField = typeof record.facultyId === 'string' && record.facultyId.trim() ? 'facultyId' : 'studentId';
+  const identifier = record[identifierField];
+  const name = record.name ?? '';
+  if (typeof identifier !== 'string' || !identifier.trim() || identifier.trim().length > 80) {
+    throw rosterError(400, 'VALIDATION_ERROR', 'Faculty ID must be between 1 and 80 characters.');
+  }
+  if (typeof name !== 'string' || !name.trim() || name.trim().length > 160) {
+    throw rosterError(400, 'VALIDATION_ERROR', 'Faculty name must be between 1 and 160 characters.');
+  }
+  if (record.facultyId && record.studentId && record.facultyId.toLowerCase() !== record.studentId.toLowerCase()) {
+    throw rosterError(400, 'VALIDATION_ERROR', 'Faculty ID fields must match.');
+  }
+  record[identifierField] = identifier.trim();
+  record.name = name.trim();
+}
+
+export async function validateRosterSnapshot(client, records) {
+  if (!records.length) return;
+  const recordIds = new Set();
+  const ids = [];
+  const identityKeys = [];
+  for (const record of records) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) {
+      throw rosterError(400, 'VALIDATION_ERROR', 'Each patient record must be an object.');
+    }
+    if (record.id !== undefined && record.id !== null && record.id !== '') {
+      if (typeof record.id !== 'string' || !record.id.trim() || record.id.length > 120 || record.id !== record.id.trim()) {
+        throw rosterError(400, 'VALIDATION_ERROR', 'Patient record IDs must be non-empty text of 120 characters or fewer.');
+      }
+      if (recordIds.has(record.id)) throw rosterError(409, 'DUPLICATE_RECORD', 'The snapshot contains the same patient record more than once.');
+      recordIds.add(record.id);
+      ids.push(record.id);
+    }
+    if (record.patientType !== undefined && !['student', 'faculty'].includes(record.patientType)) {
+      throw rosterError(400, 'VALIDATION_ERROR', 'Patient type must be student or faculty.');
+    }
+    for (const field of ['studentId', 'facultyId']) {
+      const identity = normalizeRosterIdentifier(record[field]);
+      if (identity) identityKeys.push(identity);
+    }
+  }
+
+  const persisted = await client.query(
+    `SELECT id,patient_type,data FROM patients
+     WHERE id=ANY($1::text[])
+        OR LOWER(${patientRosterIdentitySql(3)})=ANY($2::text[])`,
+    [ids, [...new Set(identityKeys)], rosterIdTrimCharacters],
+  );
+  const existingById = new Map(persisted.rows.map((row) => [String(row.id), row]));
+  const duplicateCandidates = new Map();
+  const changedEntries = [];
+
+  for (const record of records) {
+    const existing = record.id ? existingById.get(record.id) : null;
+    const currentType = existing?.patient_type || null;
+    const patientType = record.patientType || currentType || 'student';
+    if (currentType && patientType !== currentType) {
+      throw rosterError(400, 'VALIDATION_ERROR', 'A patient record cannot change between student and faculty.');
+    }
+    record.patientType = patientType;
+
+    const identity = rosterIdentity(record, patientType);
+    const rosterChanged = !existing || (patientType === 'student'
+      ? studentRosterFields.some((field) => !sameRosterValue(field, existing.data || {}, record))
+      : ['facultyId', 'studentId', 'name'].some((field) => !sameRosterValue(field, existing.data || {}, record)));
+    if (!identity) {
+      if (patientType === 'student' && rosterChanged) validateChangedStudentRoster(record);
+      if (patientType === 'faculty' && rosterChanged) validateChangedFacultyRoster(record);
+      continue;
+    }
+
+    const currentIdentity = existing ? rosterIdentity(existing.data || {}, currentType) : '';
+    const identityChanged = !existing || identity !== currentIdentity;
+    if (patientType === 'student' && rosterChanged) validateChangedStudentRoster(record);
+    if (patientType === 'faculty' && rosterChanged) validateChangedFacultyRoster(record);
+    if (identityChanged) {
+      const previous = duplicateCandidates.get(identity);
+      if (previous && previous !== record) throw rosterError(409, 'DUPLICATE_RECORD', 'A student or faculty ID is repeated in the submitted snapshot.');
+      duplicateCandidates.set(identity, record);
+      changedEntries.push({ record, identity, existing });
+    }
+  }
+
+  for (const { record, identity, existing } of changedEntries) {
+    const collision = persisted.rows.find((row) => {
+      if (String(row.id) === String(existing?.id || record.id || '')) return false;
+      const rowIdentity = rosterIdentity(row.data || {}, row.patient_type);
+      return rowIdentity === identity;
+    });
+    if (collision) throw rosterError(409, 'DUPLICATE_RECORD', 'A student or faculty record already uses this ID.');
+  }
+}
 
 function recordId(record) {
   const value = record?.id;
@@ -285,6 +427,7 @@ export async function saveClinicDataInTransaction(client, nextData, user, expect
     error.code = 'VERSION_CONFLICT';
     throw error;
   }
+  await validateRosterSnapshot(client, nextData.students);
   await syncPatients(client, nextData.students);
   const writableCollections = internal ? Object.keys(collectionMap) : snapshotWritableCollections;
   for (const key of writableCollections) await syncCollection(client, key, nextData[key], user.id);

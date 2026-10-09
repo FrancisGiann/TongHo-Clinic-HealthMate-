@@ -48,10 +48,12 @@ import { broadcastBatchId, validateBroadcastPayload, validateConsentUpdate } fro
 import { clinicDataTransaction, linkUserToPatient, listUsers, loadClinicData, saveClinicData, validateVersionAfterAdvance } from './repository.js';
 import { runClinicReminderSweep } from './reminders.js';
 import { canRollbackImport, normalizeImportRows, selectedImportRows } from './domain/imports.js';
+import { patientRosterIdentitySql, rosterIdTrimCharacters } from './domain/roster.js';
 import { ensureSameOrigin, loginOtpRequired, rateLimit, requestOriginAllowed, trustProxyHops } from './security.js';
 import { buildInvitationActivationUrl } from './invitationUrl.js';
 import { recordNurseLicenseVerification, validateNurseLicenseUpdate } from './domain/nurseLicense.js';
 import { acceptedProfileFields, normalizeDocumentReceiptStatus, normalizeHealthRecordAnswers, validatePaperSignatureForAcceptance } from './domain/health-records.js';
+import { persistHealthRecordStatusNotifications } from './domain/healthRecordNotifications.js';
 import { clinicArrivalNotice, clinicVisitCareSummary, notificationDeliveryCounts, recordClinicArrival, validateClinicArrivalPayload } from './domain/clinicArrivals.js';
 import { listInAppNotifications, markInAppNotificationRead } from './domain/notifications.js';
 import { createOrReplayVisitRequest, findVisitRequest, publicVisitRecord, validVisitRequestId, visitRequestFingerprint } from './domain/visitRequests.js';
@@ -159,6 +161,20 @@ async function notifyLinkedUsers(patientId, { type, subject, body, dedupeKey }) 
   return notificationDeliveryCounts(statuses, users.rows.length);
 }
 
+async function deliverHealthRecordStatusNotice(notification) {
+  if (!notification) return;
+  try {
+    await notifyLinkedUsers(notification.patientId, {
+      type: notification.type,
+      subject: notification.subject,
+      body: notification.body,
+      dedupeKey: notification.dedupeKey,
+    });
+  } catch (error) {
+    console.error('Health record notification delivery failed:', error.message);
+  }
+}
+
 async function notificationDeliveryForDedupe(dedupeKey, patientId) {
   const result = await query(
     'SELECT user_id,channel,status FROM notifications WHERE dedupe_key LIKE $1',
@@ -211,8 +227,8 @@ async function inspectImportRows(type, rows, client = { query }) {
     if (type === 'students' || type === 'faculty') {
       const identifier = type === 'faculty' ? row.record.facultyId : row.record.studentId;
       const existing = await client.query(
-        "SELECT id FROM patients WHERE LOWER(COALESCE(data->>'studentId',data->>'facultyId',''))=LOWER($1) LIMIT 1",
-        [identifier],
+        `SELECT id FROM patients WHERE LOWER(${patientRosterIdentitySql(2)})=LOWER(BTRIM($1,$2)) LIMIT 1`,
+        [identifier, rosterIdTrimCharacters],
       );
       if (existing.rowCount) {
         row.duplicate = true;
@@ -974,7 +990,7 @@ export function createApp() {
       return errorResponse(res, 400, 'ATTESTATION_REQUIRED', 'Save the draft and confirm the guardian attestation before submitting.');
     }
     try {
-      const submission = await transaction(async (client) => {
+      const submitted = await transaction(async (client) => {
         const patient = await client.query(
           `SELECT p.id FROM patients p JOIN guardian_patient_links l ON l.patient_id=p.id
            WHERE p.id=$1 AND p.patient_type='student' AND l.guardian_user_id=$2 FOR UPDATE OF p`,
@@ -1010,7 +1026,7 @@ export function createApp() {
            WHERE patient_id=$1 AND guardian_user_id=$2 AND school_year=$3 AND draft_version=$4`,
           [patientId, req.user.id, schoolYear, expectedVersion],
         );
-        if (duplicateSubmission.rowCount) return duplicateSubmission.rows[0];
+        if (duplicateSubmission.rowCount) return { submission: duplicateSubmission.rows[0], notification: null };
         await client.query(
           `UPDATE health_record_submissions SET status='superseded',version=version+1,updated_at=NOW()
            WHERE patient_id=$1 AND guardian_user_id=$2 AND school_year=$3 AND status='changes_requested'`,
@@ -1027,10 +1043,12 @@ export function createApp() {
            RETURNING id,patient_id,school_year,revision,source,status,payload,version,guardian_attested_at,created_at,updated_at`,
           [id, patientId, req.user.id, schoolYear, revisionResult.rows[0].revision, JSON.stringify(draftResult.rows[0].payload), expectedVersion, 'I am this student’s parent or legal guardian. The information I provided is accurate to the best of my knowledge. I authorize the school nurse to review it for school health support. I understand that the nurse reviews submissions before they update the student health profile.'],
         );
+        const notification = await persistHealthRecordStatusNotifications(client, result.rows[0], { includeNurses: true });
         await audit(req, 'GUARDIAN_HEALTH_RECORD_SUBMITTED', { schoolYear, revision: result.rows[0].revision }, 'health_record_submission', id, client);
-        return result.rows[0];
+        return { submission: result.rows[0], notification };
       });
-      return res.status(201).json({ data: { submission } });
+      await deliverHealthRecordStatusNotice(submitted.notification);
+      return res.status(201).json({ data: { submission: submitted.submission } });
     } catch (error) {
       if (error.status) return errorResponse(res, error.status, error.code, error.message);
       throw error;
@@ -1069,7 +1087,7 @@ export function createApp() {
     }
     if (!validation.valid) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Review the transcribed health record fields.', validation.errors);
     try {
-      const submission = await transaction(async (client) => {
+      const transcribed = await transaction(async (client) => {
         const patient = await client.query("SELECT id FROM patients WHERE id=$1 AND patient_type='student' FOR UPDATE", [patientId]);
         if (!patient.rowCount) {
           const error = new Error('Student patient record not found.');
@@ -1089,10 +1107,12 @@ export function createApp() {
            RETURNING id,patient_id,school_year,revision,source,status,payload,version,paper_signature_presence,created_at`,
           [id, patientId, guardian.rows[0]?.guardian_user_id || null, schoolYear, revision.rows[0].revision, JSON.stringify(validation.value), JSON.stringify(signatures)],
         );
+        const notification = await persistHealthRecordStatusNotifications(client, result.rows[0], { includeNurses: true });
         await audit(req, 'PAPER_HEALTH_RECORD_TRANSCRIBED', { schoolYear, revision: result.rows[0].revision, paperSignaturePresence: signatures }, 'health_record_submission', id, client);
-        return result.rows[0];
+        return { submission: result.rows[0], notification };
       });
-      return res.status(201).json({ data: { submission } });
+      await deliverHealthRecordStatusNotice(transcribed.notification);
+      return res.status(201).json({ data: { submission: transcribed.submission } });
     } catch (error) {
       if (error.status) return errorResponse(res, error.status, error.code, error.message);
       throw error;
@@ -1110,7 +1130,7 @@ export function createApp() {
       return errorResponse(res, 400, 'VALIDATION_ERROR', 'Provide a valid review action, version, and notes.');
     }
     try {
-      const reviewed = await transaction(async (client) => {
+      const reviewResult = await transaction(async (client) => {
         const locked = await client.query('SELECT * FROM health_record_submissions WHERE id=$1 FOR UPDATE', [submissionId]);
         if (!locked.rowCount) {
           const error = new Error('Health record submission not found.');
@@ -1190,10 +1210,12 @@ export function createApp() {
            WHERE id=$5 RETURNING id,patient_id,school_year,revision,source,status,version,nurse_notes,nurse_reviewed_at,documents_received`,
           [status, req.user.id, notes, receiptValidation.value ? JSON.stringify(receiptValidation.value) : null, submissionId],
         );
+        const notification = await persistHealthRecordStatusNotifications(client, result.rows[0]);
         await audit(req, action === 'accept' ? 'HEALTH_RECORD_SUBMISSION_ACCEPTED' : 'HEALTH_RECORD_CHANGES_REQUESTED', { schoolYear: submission.school_year, revision: submission.revision, documentsReceived: receiptValidation.value ? Object.keys(receiptValidation.value).filter((key) => receiptValidation.value[key]) : undefined }, 'health_record_submission', submissionId, client);
-        return result.rows[0];
+        return { submission: result.rows[0], notification };
       });
-      return res.json({ data: { submission: reviewed } });
+      await deliverHealthRecordStatusNotice(reviewResult.notification);
+      return res.json({ data: { submission: reviewResult.submission } });
     } catch (error) {
       if (error.status) return errorResponse(res, error.status, error.code, error.message);
       throw error;
@@ -1209,8 +1231,8 @@ export function createApp() {
     try {
       await clinicDataTransaction(async (client) => {
         const duplicate = await client.query(
-          "SELECT id FROM patients WHERE LOWER(COALESCE(data->>'studentId',data->>'facultyId',''))=LOWER($1) LIMIT 1",
-          [record.facultyId],
+          `SELECT id FROM patients WHERE LOWER(${patientRosterIdentitySql(2)})=LOWER(BTRIM($1,$2)) LIMIT 1`,
+          [record.facultyId, rosterIdTrimCharacters],
         );
         if (duplicate.rowCount) {
           const error = new Error('A patient record already uses this faculty ID.');

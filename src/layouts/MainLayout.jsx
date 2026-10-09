@@ -350,7 +350,11 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
             <button
               ref={notificationButtonRef}
               className="icon-btn notification"
-              onClick={() => setShowNotifications(!showNotifications)}
+              onClick={() => {
+                const opening = !showNotifications;
+                setShowNotifications(opening);
+                if (opening) setNotificationLoadAttempt((attempt) => attempt + 1);
+              }}
               aria-label={`Open notifications (${clinicAlerts.length} items)`}
               aria-expanded={showNotifications}
               aria-controls="notification-panel"

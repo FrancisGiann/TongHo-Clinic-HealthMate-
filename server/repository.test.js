@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advanceClinicDataVersion, hydrateAuthoritativeRecord, loadClinicData, saveClinicData, saveClinicDataInTransaction, studentRecordForUser, syncCollection, syncPatients, validateClinicDataPayload, validateVersionAfterAdvance } from './repository.js';
+import crypto from 'node:crypto';
+import { advanceClinicDataVersion, hydrateAuthoritativeRecord, loadClinicData, saveClinicData, saveClinicDataInTransaction, studentRecordForUser, syncCollection, syncPatients, validateClinicDataPayload, validateRosterSnapshot, validateVersionAfterAdvance } from './repository.js';
 
 function clinicReadResult(overrides = {}) {
   return { rows: [{
@@ -187,6 +188,79 @@ test('nurse clinic snapshots cannot overwrite accepted guardian health fields', 
   assert.equal(stored.allergiesStatus, 'reported');
   assert.deepEqual(stored.medicationAtHome, { pain: true, painName: 'Acetaminophen' });
   assert.deepEqual(stored.guardianHealthRecord, accepted);
+});
+
+test('roster snapshot rejects a normalized student ID collision even when the existing student is omitted', async () => {
+  let queryArgs;
+  const client = { query: async (...args) => {
+    queryArgs = args;
+    return { rows: [{ id: 'existing-student', patient_type: 'student', data: { studentId: 'PTHI-42', name: 'Existing Student', gradeLevel: 'Grade 4' } }] };
+  } };
+  const rows = [{ id: 'new-student', patientType: 'student', studentId: '  pthi-42  ', name: 'New Student', gradeLevel: 'Grade 5', section: '', adviser: '' }];
+
+  await assert.rejects(() => validateRosterSnapshot(client, rows), (error) => error.status === 409 && error.code === 'DUPLICATE_RECORD');
+  assert.match(queryArgs[0], /LOWER\(CASE WHEN patient_type='faculty'/);
+  assert.deepEqual(queryArgs[1].slice(0, 2), [['new-student'], ['pthi-42']]);
+  assert.equal(rows[0].studentId, 'pthi-42');
+});
+
+test('roster snapshot accepts an unchanged self-update and does not require student fields for faculty', async () => {
+  const student = { id: 'student-self', patientType: 'student', studentId: 'PTHI-11', name: 'Example Student', gradeLevel: 'Grade 3', section: 'A', adviser: 'Example Adviser' };
+  const faculty = { id: 'faculty-self', patientType: 'faculty', facultyId: 'STAFF-11', studentId: 'STAFF-11', name: 'Example Faculty' };
+  const currentRows = [
+    { id: student.id, patient_type: 'student', data: { ...student } },
+    { id: faculty.id, patient_type: 'faculty', data: { ...faculty } },
+  ];
+  const client = { query: async () => ({ rows: currentRows }) };
+
+  await validateRosterSnapshot(client, [student, faculty]);
+  assert.equal(student.studentId, 'PTHI-11');
+  assert.equal(faculty.patientType, 'faculty');
+});
+
+test('roster snapshot rejects malformed student fields, duplicated record IDs, duplicate identities, and patient-type changes', async (t) => {
+  const noPersistedRows = { query: async () => ({ rows: [] }) };
+  const validStudent = (overrides = {}) => ({
+    id: crypto.randomUUID(), patientType: 'student', studentId: 'PTHI-12', name: 'Example Student', gradeLevel: 'Grade 3', section: '', adviser: '', ...overrides,
+  });
+  for (const [label, record] of [
+    ['missing ID', validStudent({ studentId: ' ' })],
+    ['unsupported grade', validStudent({ gradeLevel: 'Grade 11' })],
+    ['oversized name', validStudent({ name: 'N'.repeat(161) })],
+    ['non-text section', validStudent({ section: { value: 'A' } })],
+  ]) {
+    await t.test(label, async () => assert.rejects(
+      () => validateRosterSnapshot(noPersistedRows, [record]),
+      (error) => error.status === 400 && error.code === 'VALIDATION_ERROR',
+    ));
+  }
+
+  const sharedId = 'duplicate-row';
+  await assert.rejects(
+    () => validateRosterSnapshot(noPersistedRows, [validStudent({ id: sharedId }), validStudent({ id: sharedId, studentId: 'PTHI-13' })]),
+    (error) => error.status === 409 && error.code === 'DUPLICATE_RECORD',
+  );
+  await assert.rejects(
+    () => validateRosterSnapshot(noPersistedRows, [validStudent(), validStudent({ id: crypto.randomUUID(), studentId: ' pthi-12 ' })]),
+    (error) => error.status === 409 && error.code === 'DUPLICATE_RECORD',
+  );
+  await assert.rejects(
+    () => validateRosterSnapshot({ query: async () => ({ rows: [{ id: 'existing-student', patient_type: 'student', data: { studentId: 'PTHI-14' } }] }) }, [
+      { id: 'new-faculty', patientType: 'faculty', facultyId: ' ', studentId: ' pthi-14 ', name: 'Example Faculty' },
+    ]),
+    (error) => error.status === 409 && error.code === 'DUPLICATE_RECORD',
+  );
+  await assert.rejects(
+    () => validateRosterSnapshot(noPersistedRows, [
+      { id: 'mismatched-faculty', patientType: 'faculty', facultyId: 'FAC-14', studentId: 'STUDENT-14', name: 'Example Faculty' },
+    ]),
+    (error) => error.status === 400 && error.code === 'VALIDATION_ERROR',
+  );
+  const currentFaculty = { id: 'faculty-type-lock', patientType: 'student', studentId: 'STAFF-12', name: 'Example Staff', gradeLevel: 'Grade 3' };
+  await assert.rejects(
+    () => validateRosterSnapshot({ query: async () => ({ rows: [{ id: currentFaculty.id, patient_type: 'faculty', data: { ...currentFaculty, patientType: 'faculty', facultyId: 'STAFF-12' } }] }) }, [currentFaculty]),
+    (error) => error.status === 400 && error.code === 'VALIDATION_ERROR',
+  );
 });
 
 test('dedicated transactional writes reject a stale clinic snapshot version', async () => {
