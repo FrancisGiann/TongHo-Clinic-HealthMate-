@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createEmptyRiskRuleForm, describeRiskCondition, riskRuleFormFromRule, serializeRiskRuleForm } from './riskRules.js';
+import { createEmptyRiskRuleForm, describeRiskCondition, riskRuleFormFromRule, riskRuleStatusLabel, serializeRiskRuleForm } from './riskRules.js';
 
 function validForm() {
   const form = createEmptyRiskRuleForm();
@@ -70,4 +70,15 @@ test('warning-sign conditions require an explicit yes or no answer', () => {
 
 test('condition explanation uses readable clinical field names and operators', () => {
   assert.equal(describeRiskCondition({ field: 'temperature', operator: 'lt', value: 36 }), 'Temperature (°C) is below 36');
+});
+
+test('risk result labels explain sample and historical test statuses without exposing identifiers', () => {
+  assert.equal(riskRuleStatusLabel({ ruleStatus: 'sample' }), 'Sample rules · not approved by a nurse');
+  assert.equal(riskRuleStatusLabel({ ruleStatus: 'draft', ruleVersion: 0 }), 'Sample rules · not approved by a nurse');
+  assert.equal(riskRuleStatusLabel({ ruleStatus: 'draft', ruleVersion: '0' }), 'Sample rules · not approved by a nurse');
+  assert.equal(riskRuleStatusLabel({ ruleStatus: 'draft', ruleVersion: 4 }), 'Custom rules · waiting for nurse approval');
+  assert.equal(riskRuleStatusLabel({ ruleStatus: 'draft', ruleVersion: null }), 'Custom rules · waiting for nurse approval');
+  assert.equal(riskRuleStatusLabel({ ruleStatus: 'test_active' }), 'Development test · not approved by a nurse');
+  assert.equal(riskRuleStatusLabel({ ruleStatus: 'clinician_approved' }), 'Clinician approved');
+  assert.equal(riskRuleStatusLabel({ ruleStatus: 'retired' }), 'Retired rules · no longer active');
 });

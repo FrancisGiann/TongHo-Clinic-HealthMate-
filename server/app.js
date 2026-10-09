@@ -34,7 +34,7 @@ import {
   verifyPassword,
 } from './auth.js';
 import { emailConfigured, escapeHtml, sendEmail } from './email.js';
-import { activateRiskRuleForTesting, approveDraftRiskRule, assessRisk, createRiskRuleDraft, disableRiskRuleTesting, ensureConservativeCandidateDraft, getConservativeCandidateRuleDraft, getDemonstrationRules, readTestRiskRuleActivation, riskAllowsAcknowledgedIncomplete, riskNeedsNurseAcknowledgement, selectRiskRules, validateRiskRules } from './domain/risk.js';
+import { approveDraftRiskRule, assessRisk, createRiskRuleDraft, ensureConservativeCandidateDraft, getConservativeCandidateRuleDraft, getDemonstrationRules, riskAllowsAcknowledgedIncomplete, riskNeedsNurseAcknowledgement, selectRiskRules, validateRiskRules } from './domain/risk.js';
 import { buildClinicReport, reportForRole, reportSnapshotForStorage } from './domain/reporting.js';
 import { applyStockAdjustment, validateInventoryArchive, validateInventoryItem, validateStockAdjustment } from './domain/inventory.js';
 import { persistVisitAndDispensations, resolveInventoryDispensations } from './domain/dispensing.js';
@@ -1458,10 +1458,8 @@ export function createApp() {
 
   app.get('/api/risk/rules', requireRoles(...reportReadRoles), async (req, res) => {
     const result = await query('SELECT id,version,name,status,rules,approved_by,approved_at,created_at FROM risk_rules ORDER BY version DESC');
-    const testActivationAvailable = process.env.NODE_ENV === 'development';
-    const testActivation = await readTestRiskRuleActivation({ query });
     const currentUserLicenseVerified = Boolean(req.user.prc_license_number?.trim() && req.user.prc_license_verified_at && req.user.prc_license_verified_by);
-    return res.json({ data: { rules: result.rows, demonstrationRules: getDemonstrationRules(), candidateRuleDraft: getConservativeCandidateRuleDraft(), testActivationAvailable, testActivation, currentUserLicenseVerified } });
+    return res.json({ data: { rules: result.rows, demonstrationRules: getDemonstrationRules(), candidateRuleDraft: getConservativeCandidateRuleDraft(), currentUserLicenseVerified } });
   });
 
   app.post('/api/risk/rules/conservative-candidate', requireRoles('school_nurse', 'system_administrator'), async (req, res) => {
@@ -1508,41 +1506,6 @@ export function createApp() {
       throw error;
     }
     return res.status(201).json({ data: draft });
-  });
-
-  app.put('/api/risk/rules/:id/test-activation', requireRoles('school_nurse', 'system_administrator'), async (req, res) => {
-    if (process.env.NODE_ENV !== 'development') return errorResponse(res, 404, 'NOT_FOUND', 'Test rule activation is only available in development.');
-    if (!validUuid(req.params.id)) return errorResponse(res, 400, 'INVALID_RULE_ID', 'A valid risk rule id is required.');
-    try {
-      const result = await transaction(async (client) => {
-        const activation = await activateRiskRuleForTesting(client, req.params.id);
-        if (activation.changed) {
-          await audit(req, 'RISK_RULE_TEST_ACTIVATED', { version: activation.rule.version, mode: 'conservative_triage_v1' }, 'risk_rule', activation.rule.id, client);
-        }
-        return activation;
-      });
-      return res.json({ data: { testActivation: result.activation, changed: result.changed } });
-    } catch (error) {
-      if (error.status) return errorResponse(res, error.status, error.code || 'TEST_ACTIVATION_FAILED', error.message);
-      throw error;
-    }
-  });
-
-  app.delete('/api/risk/rules/test-activation', requireRoles('school_nurse', 'system_administrator'), async (req, res) => {
-    if (process.env.NODE_ENV !== 'development') return errorResponse(res, 404, 'NOT_FOUND', 'Test rule activation is only available in development.');
-    try {
-      const result = await transaction(async (client) => {
-        const disabled = await disableRiskRuleTesting(client);
-        if (disabled.changed) {
-          await audit(req, 'RISK_RULE_TEST_ACTIVATION_DISABLED', {}, 'risk_rule', disabled.ruleId, client);
-        }
-        return disabled;
-      });
-      return res.json({ data: { testActivation: null, changed: result.changed } });
-    } catch (error) {
-      if (error.status) return errorResponse(res, error.status, error.code || 'TEST_ACTIVATION_FAILED', error.message);
-      throw error;
-    }
   });
 
   app.patch('/api/risk/rules/:id/approve', requireRoles('school_nurse'), async (req, res) => {

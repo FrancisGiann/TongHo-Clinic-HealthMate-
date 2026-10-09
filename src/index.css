@@ -2701,7 +2701,6 @@ td small {
 .method-grid { display: flex; gap: 18px; margin: 0 0 20px; color: var(--muted); font-size: var(--type-compact); }
 .schedule-card { display: grid; gap: 7px; max-width: 420px; margin-top: 20px; padding: 20px; border: 1px solid #d5e8e1; border-radius: 10px; background: #f5fbf8; }.schedule-card strong { font-size: 18px; color: var(--ink); }.schedule-card span { color: var(--teal-dark); font: 600 14px "IBM Plex Mono", monospace; }.schedule-card small { color: var(--muted); }
 .disabled-note { display: flex; align-items: center; gap: 7px; align-self: end; padding: 9px; border-radius: 6px; background: #f4f6f5; color: var(--muted); font-size: var(--type-compact); }
-.risk-test-activation-note { display: grid; justify-items: start; gap: 7px; margin: 12px 0; }
 .nurse-license-admin-note { margin: 10px 0; }
 .nurse-license-editor { display: grid; gap: 12px; margin: 12px 0 18px; padding: 16px; border: 1px solid #cfe5dd; border-radius: 9px; background: #f5fbf8; }
 .nurse-license-editor h4, .nurse-license-editor p { margin: 0; }
@@ -7479,9 +7478,7 @@ fieldset.form-section { min-width: 0; border: 0; }
 .arrival-action-panel .error-banner { margin: 0; }
 
 /* Risk rule authoring and review */
-.risk-workflow-note,
 .risk-candidate-card,
-.risk-demo-note,
 .risk-license-note {
   margin: 14px 0;
   padding: 14px 16px;
@@ -7490,16 +7487,11 @@ fieldset.form-section { min-width: 0; border: 0; }
   background: #f7f6ff;
   color: var(--ink);
 }
-.risk-workflow-note strong,
 .risk-candidate-card h4 { color: #302078; }
-.risk-workflow-note p,
 .risk-candidate-card p,
 .risk-candidate-card li,
-.risk-demo-note,
 .risk-license-note { font-size: var(--type-compact); line-height: 1.55; }
-.risk-workflow-note p { margin: 5px 0 0; color: var(--muted); }
 .risk-candidate-card { display: grid; gap: 8px; }
-.risk-candidate-card > div:first-child .section-kicker { margin: 0 0 3px; }
 .risk-candidate-card h4 { margin: 0; font-size: 15px; }
 .risk-candidate-card p { margin: 0; color: var(--muted); }
 .risk-candidate-card ul { margin: 0; padding-left: 20px; color: var(--muted); }
@@ -7512,21 +7504,41 @@ fieldset.form-section { min-width: 0; border: 0; }
 .risk-candidate-details summary { width: fit-content; color: var(--teal-dark); cursor: pointer; font-size: var(--type-compact); font-weight: 650; text-underline-offset: 3px; }
 .risk-candidate-details > p { margin-top: 8px; }
 .risk-candidate-details ul { margin: 8px 0 0; padding-left: 20px; }
-.risk-test-activation-note {
+.risk-sample-card,
+.risk-current-rule {
   display: grid;
-  justify-items: start;
-  gap: 8px;
-  margin: 14px 0;
-  padding: 14px 16px;
-  border: 1px solid #eadbb0;
+  gap: 10px;
+  margin: 14px 0 18px;
+  padding: 16px;
+  border: 1px solid #d8d3f4;
   border-radius: 10px;
-  background: #fffaf0;
+  background: #f7f6ff;
   color: var(--ink);
-  font-size: var(--type-compact);
-  line-height: 1.5;
 }
-.risk-test-activation-note strong { color: #805b12; }
-.risk-demo-note { color: var(--muted); }
+.risk-current-rule { border-color: #b9e0d4; background: #f0faf6; }
+.risk-sample-heading,
+.risk-current-rule-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.risk-sample-heading h4,
+.risk-current-rule-heading h4 { margin: 0; color: #302078; font-size: 17px; }
+.risk-current-rule-heading p { margin: 4px 0 0; color: var(--muted); font-size: var(--type-compact); }
+.risk-sample-card > p,
+.risk-current-rule > p { margin: 0; color: var(--muted); font-size: var(--type-compact); line-height: 1.5; }
+.risk-sample-card ul { display: grid; gap: 7px; margin: 0; padding-left: 20px; color: var(--muted); font-size: var(--type-compact); line-height: 1.45; }
+.risk-sample-card li strong,
+.risk-sample-card li span { display: block; }
+.risk-sample-card li strong { color: var(--ink); }
+.risk-sample-card .risk-sample-next-step { padding-top: 9px; border-top: 1px solid #d8d3f4; color: var(--ink); }
+.risk-sample-details { padding-top: 9px; border-top: 1px solid #d8d3f4; }
+.risk-sample-details summary { width: fit-content; color: var(--teal-dark); cursor: pointer; font-size: var(--type-compact); font-weight: 650; text-underline-offset: 3px; }
+.risk-sample-details summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
+.risk-sample-details p { margin: 9px 0; color: var(--muted); font-size: var(--type-compact); line-height: 1.5; }
+.risk-sample-details ul { padding-top: 2px; }
+.risk-current-rule .risk-rule-details { margin-top: 0; }
+.risk-advanced { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 16px; }
+.risk-advanced > summary { width: fit-content; color: var(--teal-dark); cursor: pointer; font-weight: 700; text-underline-offset: 3px; }
+.risk-advanced > summary:focus-visible,
+.risk-candidate-details summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
+.risk-advanced-intro { margin: 10px 0; color: var(--muted); font-size: var(--type-compact); line-height: 1.5; }
 .risk-rule-builder {
   display: grid;
   gap: 16px;
@@ -7624,7 +7636,6 @@ fieldset.form-section { min-width: 0; border: 0; }
 .risk-rule-builder .primary-btn,
 .risk-rule-builder .secondary-btn,
 .risk-candidate-card .secondary-btn,
-.risk-test-activation-note .secondary-btn,
 .risk-feedback .secondary-btn,
 .risk-rule-card .primary-btn,
 .risk-rule-card .secondary-btn { min-height: 38px; }
@@ -7688,20 +7699,28 @@ fieldset.form-section { min-width: 0; border: 0; }
 .risk-rule-builder button:disabled,
 .risk-candidate-card button:disabled,
 .risk-rule-card button:disabled,
-.risk-test-activation-note button:disabled,
 .settings-panel-heading button:disabled { cursor: wait; opacity: .7; }
-.dark .risk-workflow-note,
 .dark .risk-candidate-card,
-.dark .risk-demo-note,
 .dark .risk-license-note { border-color: #49436f; background: #211e43; color: var(--ink); }
-.dark .risk-workflow-note strong,
 .dark .risk-candidate-card h4 { color: #ddd8ff; }
 .dark .risk-source-links a { color: #c3bcff; }
 .dark .risk-candidate-card > .risk-current-label { color: #bfe6dc; }
 .dark .risk-candidate-state { background: #302a51; color: #d2cfea !important; }
 .dark .risk-candidate-details summary { color: #c3bcff; }
-.dark .risk-test-activation-note { border-color: #66552b; background: #302a40; color: var(--ink); }
-.dark .risk-test-activation-note strong { color: #f0d28b; }
+.dark .risk-sample-card { border-color: #49436f; background: #211e43; color: var(--ink); }
+.dark .risk-current-rule { border-color: #38504c; background: #192523; color: var(--ink); }
+.dark .risk-sample-heading h4 { color: #ddd8ff; }
+.dark .risk-current-rule-heading h4 { color: #bfe6dc; }
+.dark .risk-sample-card > p,
+.dark .risk-current-rule > p,
+.dark .risk-sample-card ul,
+.dark .risk-current-rule-heading p { color: var(--muted); }
+.dark .risk-sample-card li strong { color: var(--ink); }
+.dark .risk-sample-card .risk-sample-next-step { border-color: #49436f; color: var(--ink); }
+.dark .risk-sample-details { border-color: #49436f; }
+.dark .risk-sample-details summary { color: #c3bcff; }
+.dark .risk-sample-details p { color: var(--muted); }
+.dark .risk-advanced > summary { color: #c3bcff; }
 .dark .risk-rule-builder { background: #1c1945; border-color: #3d3768; }
 .dark .risk-rule-builder-note { background: #252051; color: #d4d0e9; }
 .dark .risk-rule-builder input:not([type="checkbox"]),
@@ -7735,6 +7754,8 @@ fieldset.form-section { min-width: 0; border: 0; }
   .risk-rule-remove { justify-self: start; }
   .risk-rule-card-heading { align-items: flex-start; flex-direction: column; }
   .risk-rule-badges { justify-content: flex-start; }
+  .risk-sample-heading,
+  .risk-current-rule-heading { align-items: flex-start; flex-direction: column; }
   .risk-rule-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
   .risk-rule-actions button { width: 100%; justify-content: center; }
   .risk-feedback { align-items: flex-start; flex-direction: column; }
@@ -7861,12 +7882,12 @@ fieldset.form-section { min-width: 0; border: 0; }
 .app-shell .audit-entry-topline strong,
 .app-shell .admin-invite-row strong,
 .app-shell .admin-action-list .action-item strong,
-.app-shell .risk-workflow-note p,
 .app-shell .risk-candidate-card p,
 .app-shell .risk-candidate-card li,
-.app-shell .risk-demo-note,
 .app-shell .risk-license-note,
-.app-shell .risk-test-activation-note,
+.app-shell .risk-sample-card > p,
+.app-shell .risk-sample-card ul,
+.app-shell .risk-current-rule > p,
 .app-shell .risk-rule-builder-note,
 .app-shell .risk-rule-details,
 .app-shell .risk-rule-card-footer,
@@ -7895,6 +7916,8 @@ fieldset.form-section { min-width: 0; border: 0; }
 .app-shell .nurse-license-editor h4,
 .app-shell .admin-pending-block h4,
 .app-shell .risk-candidate-card h4,
+.app-shell .risk-sample-heading h4,
+.app-shell .risk-current-rule-heading h4,
 .app-shell .risk-rule-card-heading h5 { font-size: var(--type-section-heading); }
 .app-shell .notification i {
   width: auto;

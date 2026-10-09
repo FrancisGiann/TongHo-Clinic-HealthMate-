@@ -186,46 +186,12 @@ test('risk draft API rejects coerced versions and malformed rule payloads before
   }
 });
 
-test('risk-rule test activation is available to nurses and administrators behind dedicated routes', async () => {
+test('development risk-rule test activation routes are no longer registered', () => {
   const app = createApp();
   const routes = app.router.stack
     .filter((layer) => ['/api/risk/rules/:id/test-activation', '/api/risk/rules/test-activation'].includes(layer.route?.path))
-    .map((layer) => ({ path: layer.route.path, method: Object.keys(layer.route.methods)[0], guard: layer.route.stack[0].handle, handler: layer.route.stack.at(-1).handle }));
-  assert.deepEqual(routes.map(({ path, method }) => [path, method]), [
-    ['/api/risk/rules/:id/test-activation', 'put'],
-    ['/api/risk/rules/test-activation', 'delete'],
-  ]);
-  for (const route of routes) {
-    const invokeGuard = (role) => {
-      let statusCode = 200;
-      let nextCalled = false;
-      const response = { status(code) { statusCode = code; return { json: () => response }; } };
-      route.guard({ user: { role } }, response, () => { nextCalled = true; });
-      return { statusCode, nextCalled };
-    };
-    assert.deepEqual(invokeGuard('school_nurse'), { statusCode: 200, nextCalled: true });
-    assert.deepEqual(invokeGuard('system_administrator'), { statusCode: 200, nextCalled: true });
-    assert.deepEqual(invokeGuard('student'), { statusCode: 403, nextCalled: false });
-  }
-
-  const configuredNodeEnv = process.env.NODE_ENV;
-  process.env.NODE_ENV = 'production';
-  try {
-    for (const route of routes) {
-      let statusCode = 200;
-      let responseBody;
-      const response = {
-        status(code) { statusCode = code; return this; },
-        json(body) { responseBody = body; return this; },
-      };
-      await route.handler({ params: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }, user: { id: 'nurse-test' } }, response);
-      assert.equal(statusCode, 404);
-      assert.equal(responseBody.error.code, 'NOT_FOUND');
-    }
-  } finally {
-    if (configuredNodeEnv === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = configuredNodeEnv;
-  }
+    .map((layer) => layer.route.path);
+  assert.deepEqual(routes, []);
 });
 
 test('PRC license recording is administrator-only and requires explicit verification', async () => {

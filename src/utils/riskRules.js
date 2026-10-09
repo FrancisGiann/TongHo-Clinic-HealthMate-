@@ -90,3 +90,13 @@ export function describeRiskCondition(indicator) {
   const value = typeof indicator.value === 'boolean' ? (indicator.value ? 'Yes' : 'No') : indicator.value;
   return `${field} ${operator} ${value}`;
 }
+
+export function riskRuleStatusLabel(result) {
+  if (result?.ruleStatus === 'clinician_approved') return 'Clinician approved';
+  if (result?.ruleStatus === 'test_active') return 'Development test · not approved by a nurse';
+  const isLegacySample = result?.ruleStatus === 'draft' && (result.ruleVersion === 0 || result.ruleVersion === '0');
+  if (result?.ruleStatus === 'sample' || isLegacySample) return 'Sample rules · not approved by a nurse';
+  if (result?.ruleStatus === 'draft') return 'Custom rules · waiting for nurse approval';
+  if (result?.ruleStatus === 'retired') return 'Retired rules · no longer active';
+  return 'Approval status unavailable';
+}

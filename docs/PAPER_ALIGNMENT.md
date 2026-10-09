@@ -1,6 +1,6 @@
 # HealthMate+ paper alignment
 
-The editable paper is not in this repository. Use this as the single editing checklist for the supplied **Purpose and Description**, **Objectives**, and **Scope and Limitations** excerpts. Some passages appear in both excerpts; update every occurrence. These are proposed corrections to make the paper describe the intended and implemented prototype accurately, **not** evidence that deployment, clinical validation, migration of actual records, or user evaluation has happened. Retain academic citations only after checking that they support the revised claim.
+The editable paper is not in this repository. Use this as the single editing checklist for the supplied **Purpose and Description**, **Objectives**, and **Scope and Limitations** excerpts. Some passages appear in both excerpts; update every occurrence. These are proposed corrections to make the paper describe the intended and implemented prototype accurately, **not** evidence that deployment, clinical validation, or user evaluation has happened. Migration or backfill of historical paper clinical records is outside the study scope. Retain academic citations only after checking that they support the revised claim.
 
 ## Purpose and Description: AI and outcomes
 
@@ -10,10 +10,10 @@ Replace the paragraphs that call symptom scoring, appointment ranking, recurring
 
 The name explanation may keep the “+” as *assistance/augmentation*, but should not imply that a generative AI model calculates risk scores or diagnoses symptoms.
 
-## Objectives 1–3: records, migration, and scoring
+## Objectives 1–3: records and scoring
 
 1. **Web-based clinic management:** Describe one browser-based system for patient profiles, recorded medical history, clinic visits, appointments, and reports. Health screening, incident reporting, walk-in queue management, and immunization tracking are outside the current prototype scope and intended revised proposal scope; do not list them as current prototype capabilities. The original proposal still includes student incident self-reporting and needs revision before claiming that incident reporting is out of scope. Replace unqualified claims about *all patient information* or *past hospital visits* with “information entered or imported into HealthMate+.” Do not claim faster care or fewer errors as measured results before evaluation.
-2. **Digitization of existing records:** Replace “migrate all existing paper-based patient records” with “support the controlled entry or import of existing records after PTHI authorization, review, and validation.” Student and historical-visit imports exist, but the actual school paper archive has **not** been migrated. A schema migration creates database tables; it does not migrate paper records.
+2. **Creation and maintenance of digital records:** Describe creating and maintaining student and faculty digital profiles and clinical records from system adoption onward. Do not propose migration or backfill of historical paper clinical records. A minimal student roster import for setup may include student ID, name, grade, section, and adviser; roster identity import is not clinical-history import. Database schema migrations remain required technical steps to install or update the application database and do not transfer historical clinical content.
 3. **Predictive Risk and Indicator Scoring Module:** Use “rule-based Risk and Indicator Scoring Module” unless the study separately validates a predictive model. It records the paper's 1–10 pain score, applies versioned weighted indicators, and stores the result with the consultation/profile history. The bundled rules are demonstration-only; a licensed PTHI clinician must approve the real indicators and thresholds before clinical use. The output is triage support, not a diagnosis or a claim that elevated risk for a specific disease has been clinically predicted.
 
 ## Role-based access objective
@@ -42,7 +42,7 @@ The original proposal has not been edited and still contains a manual student in
 
 Replace the “initial login or unrecognized device/session” and “email or mobile number” description with:
 
-> Users sign in with their username or email and password. Under the current configuration, a time-limited one-time code is sent to the registered **email** for each new sign-in. A valid session allows navigation without repeating the code on every page. The system does not currently recognize trusted devices or deliver SMS codes. Server-side role checks restrict access, and relevant sign-in success, failure, and code-send events are audited.
+> Users sign in with their username or email and password. Under the current configuration, a time-limited one-time code is sent to the registered **email** for each new sign-in. A valid session allows navigation without repeating the code on every page. SMS one-time codes are outside the study scope. Trusted-device recognition is not implemented. Server-side role checks restrict access, and relevant sign-in success, failure, and code-send events are audited.
 
 Do not claim every rejected OTP, locked-out attempt, or other possible authentication event is logged until that coverage is verified. The account MFA toggle and the server-wide OTP requirement should be reconciled before describing OTP as user-optional. Do not present a 30-day remembered session as suitable for a shared clinic computer without a session-policy review.
 
@@ -50,7 +50,7 @@ Do not claim every rejected OTP, locked-out attempt, or other possible authentic
 
 - Student patient records cover Kindergarten through Grade 10. Roster import/register fields are limited to student ID, name, grade, section, and adviser; guardian contact and health answers are not asserted by the school roster import. The faculty patient type and its separately implemented workflows should be described only where the paper's tested evidence supports them.
 - Linked guardians can request appointments for students; the school nurse manages clinic scheduling and status. Students have no account or appointment-request access. The prototype supports one nurse and has no walk-in queue or triage workflow. Available appointment slots may be ranked from recent same-weekday clinic traffic; this is a rule-based suggestion, not AI optimization or a guarantee of shorter waits.
-- Prior clinic encounters, treatment notes, appointments, and imported historical visits are associated with the student record when entered. Do not claim a complete external hospital history or automatic migration from filing cabinets.
+- Clinic encounters, treatment notes, and appointments are recorded in the digital record from system adoption onward. Do not claim historical clinic-history import, backfill from filing cabinets, or a complete external hospital history. Setup may import only the minimal student roster identity and class-placement fields listed above.
 - Guardian health records support online drafts, guardian-only attestations and submissions, nurse review/change requests/acceptance, annual renewal, and updates at any time. Paper forms may be transcribed with signature-presence metadata only; scans are not stored. Clinic document receipt is nurse-verified. The UI says **Review before live use** because notice and process approval remain external tasks.
 
 ## Scope: alerts, notifications, and AI automation
@@ -79,7 +79,7 @@ The current prototype scope is one school nurse, with queue management and immun
 
 ## Evidence still needed before final paper claims
 
-- PTHI authorization and a validated dataset before importing **actual** paper records; use fictional demo records for development and screenshots.
+- Apply and verify the required database schema migrations for deployment; these do not migrate clinical records. Use fictional demo clinical records during development and for screenshots. Minimal student roster import remains a setup feature, while historical paper clinical-record migration and backfill are outside scope.
 - Licensed-clinician approval of real risk rules and review of any clinical claims.
 - Live end-to-end checks of nurse record/stock actions and guardian-only access, plus resolution of the blank nurse **Settings → Inventory requests** tab if that tab remains in scope.
 - Deployment and email-delivery tests on the chosen hosting services; current local success is not production proof.

@@ -9,6 +9,16 @@ const numericOperators = [
   ['lt', 'is below'],
 ];
 
+function sampleDraftForm(demonstrationRules) {
+  const sample = riskRuleFormFromRule(demonstrationRules, { copyName: false });
+  return sample ? { ...sample, name: 'Custom rules based on sample' } : createEmptyRiskRuleForm();
+}
+
+function hasRuleContent(form) {
+  return Boolean(form.name.trim() || form.thresholds.moderate || form.thresholds.high
+    || form.indicators.some((indicator) => indicator.label || indicator.value !== '' || indicator.weight));
+}
+
 export function RiskRuleDetails({ rule }) {
   const rules = rule?.rules || {};
   const requiredFields = (rules.requiredFields || []).map((key) => riskRuleFields.find((field) => field.key === key)?.label || key);
@@ -43,21 +53,27 @@ export function RiskRuleDetails({ rule }) {
 }
 
 export default function RiskRuleBuilder({ onSave, saving = false, busy = false, demonstrationRules, seed }) {
-  const [form, setForm] = useState(createEmptyRiskRuleForm);
+  const [form, setForm] = useState(() => sampleDraftForm(demonstrationRules));
   const [formError, setFormError] = useState('');
 
   useEffect(() => {
-    const next = seed?.rule ? riskRuleFormFromRule(seed.rule) : null;
-    setForm(next || createEmptyRiskRuleForm());
+    if (!seed?.rule) return;
+    const next = riskRuleFormFromRule(seed.rule);
+    if (!next) return;
+    setForm(next);
     setFormError('');
-    if (next) {
-      window.requestAnimationFrame(() => {
-        const nameField = document.getElementById('risk-rule-draft-name');
-        nameField?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        nameField?.focus({ preventScroll: true });
-      });
-    }
+    window.requestAnimationFrame(() => {
+      const nameField = document.getElementById('risk-rule-draft-name');
+      nameField?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      nameField?.focus({ preventScroll: true });
+    });
   }, [seed?.revision]);
+
+  useEffect(() => {
+    const sample = riskRuleFormFromRule(demonstrationRules, { copyName: false });
+    if (!sample) return;
+    setForm((current) => hasRuleContent(current) ? current : { ...sample, name: 'Custom rules based on sample' });
+  }, [demonstrationRules]);
 
   const disabled = busy || saving;
 
@@ -71,10 +87,7 @@ export default function RiskRuleBuilder({ onSave, saving = false, busy = false, 
     indicators: current.indicators.map((indicator, itemIndex) => itemIndex === index ? { ...indicator, [key]: value } : indicator),
   }));
   const useDemonstrationExample = () => {
-    const example = riskRuleFormFromRule(demonstrationRules, { copyName: false });
-    if (!example) return;
-    example.name = 'Copy of demonstration rules';
-    setForm(example);
+    setForm(sampleDraftForm(demonstrationRules));
     setFormError('');
   };
   const submit = async (event) => {
@@ -83,7 +96,7 @@ export default function RiskRuleBuilder({ onSave, saving = false, busy = false, 
     try {
       const payload = serializeRiskRuleForm(form);
       const saved = await onSave(payload);
-      if (saved) setForm(createEmptyRiskRuleForm());
+      if (saved) setForm(sampleDraftForm(demonstrationRules));
     } catch (error) {
       setFormError(error.message || 'Check the rule details and try again.');
     }
@@ -92,12 +105,12 @@ export default function RiskRuleBuilder({ onSave, saving = false, busy = false, 
   return (
     <form className="risk-rule-builder" onSubmit={submit} aria-labelledby="risk-rule-builder-title">
       <div className="risk-rule-builder-heading">
-        <div><h4 id="risk-rule-builder-title">Create a risk-rule draft</h4><p>Use clear conditions and point values. Saving creates an inactive draft for clinical review.</p></div>
-        <button type="button" className="secondary-btn" onClick={useDemonstrationExample} disabled={!demonstrationRules || disabled}>Load demonstration example</button>
+        <div><h4 id="risk-rule-builder-title">Create custom rules</h4><p>Start with the sample values, then save a copy for nurse review.</p></div>
+        <button type="button" className="secondary-btn" onClick={useDemonstrationExample} disabled={!demonstrationRules || disabled}>Start with sample rules</button>
       </div>
-      <p className="risk-rule-builder-note">Enter thresholds already reviewed for your clinic. A draft does not change assessments. Only a verified school nurse can approve and use it.</p>
+      <p className="risk-rule-builder-note">Saved rules do not affect assessments until a verified school nurse approves them for use.</p>
 
-      <label className="risk-rule-name-field">Draft name
+      <label className="risk-rule-name-field">Name for these rules
         <input id="risk-rule-draft-name" value={form.name} maxLength="120" onChange={(event) => updateField('name', event.target.value)} placeholder="For example, pain and visit-frequency draft" required disabled={disabled} />
       </label>
 
@@ -169,7 +182,7 @@ export default function RiskRuleBuilder({ onSave, saving = false, busy = false, 
 
       {formError && <p className="risk-feedback is-error" role="alert">{formError}</p>}
       <div className="form-actions">
-        <button className="primary-btn" type="submit" disabled={disabled}>{saving ? 'Saving inactive draft…' : 'Save inactive draft'}</button>
+        <button className="primary-btn" type="submit" disabled={disabled}>{saving ? 'Saving…' : 'Save for nurse review'}</button>
       </div>
     </form>
   );

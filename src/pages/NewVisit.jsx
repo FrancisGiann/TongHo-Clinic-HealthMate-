@@ -4,6 +4,7 @@ import { ArrowUpRight, Check, ChevronDown, ClipboardPlus, Plus, RefreshCw, Trash
 import { api } from "../utils/api";
 import StudentPicker from "../components/StudentPicker";
 import { clearPendingVisitSubmission, getPendingVisitSubmission, rememberPendingVisitSubmission } from "../utils/visitSubmission";
+import { riskRuleStatusLabel } from "../utils/riskRules";
 
   const complaints = [
   "Headache",
@@ -578,7 +579,7 @@ export default function NewVisit({ data, user, refreshInBackground }) {
             </button>
           </div>
           {saveError && <div className="error-banner" role="alert">{saveError}</div>}
-          {riskResult && <div className={`risk-result risk-${riskResult.category}`}><strong>{riskResult.priority === 'requires-review' ? 'Nurse review required' : riskResult.priority === 'urgent' ? 'Urgent nurse review required' : `Decision-support result: ${riskResult.category}`}</strong><p>{riskResult.rationale}</p>{riskResult.decisionSupportMode === 'conservative_triage_v1' && <small>No-match remains unclassified and never means low risk or routine disposition. This prompt cannot replace the nurse’s assessment.</small>}<small>{riskResult.disclaimer} Rule version: {riskResult.ruleVersion} ({riskResult.ruleStatus}).</small></div>}
+          {riskResult && <div className={`risk-result risk-${riskResult.category}`}><strong>{riskResult.priority === 'requires-review' ? 'Nurse review required' : riskResult.priority === 'urgent' ? 'Urgent nurse review required' : `Decision-support result: ${riskResult.category}`}</strong><p>{riskResult.rationale}</p>{riskResult.decisionSupportMode === 'conservative_triage_v1' && <small>No-match remains unclassified and never means low risk or routine disposition. This prompt cannot replace the nurse’s assessment.</small>}<small>{riskResult.disclaimer} {riskResult.ruleName || 'Risk rules'} · {riskRuleStatusLabel(riskResult)}.</small></div>}
         </form>
         <aside className="visit-aside">
           <div className="aside-card">

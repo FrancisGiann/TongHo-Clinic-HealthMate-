@@ -1,6 +1,6 @@
 # Conservative clinical risk-rule draft
 
-HealthMate+ exposes a versioned, non-weighted candidate named **WHO IITT-informed partial screening (draft)** in Settings → Risk Rules. An administrator can create the inactive draft with one idempotent action, or load the candidate JSON into the draft form, review it, choose the next version, and save it. Creation leaves it in `draft`; only a school nurse account with a PRC license explicitly verified and recorded by an administrator can approve it for use. Approval retires the prior approved version.
+HealthMate+ automatically uses the built-in **Sample risk rules** when no clinician-approved custom rules exist. The sample keeps the existing weighted indicators and is explicitly unapproved; it does not claim clinical validation. Settings explains the sample without requiring setup. Custom rules and the optional non-weighted **WHO IITT-informed partial screening** candidate remain available under Advanced settings. Saved rules stay out of use until a school nurse with a PRC license verified and recorded by an administrator approves them. Approval retires the previously approved version.
 
 ## Candidate behavior
 
@@ -15,11 +15,11 @@ The temperature signs are drawn from the WHO Interagency Integrated Triage Tool 
 
 The candidate deliberately does not calculate a weighted score. The current form and available inputs are not a clinically validated prediction model. An urgent warning sign takes precedence even if temperature is missing; the assessment remains marked incomplete and still requires nurse documentation. The warning-sign screen itself cannot be skipped and overridden with an acknowledgement.
 
-## Development-only testing
+## Rule selection and custom approval
 
-In a `NODE_ENV=development` environment, a school nurse or system administrator can use **Enable for testing** on the saved conservative candidate without a PRC number. This separate action stores test activation metadata in clinic settings, leaves the `risk_rules` row in `draft` with `approved_by` and `approved_at` unset, and writes `RISK_RULE_TEST_ACTIVATED` to the audit log. New assessments use the candidate with `ruleStatus: test_active`. The Settings page shows the active test version and provides **Disable test activation**, which restores the normal approved-rule or legacy fallback selection and records `RISK_RULE_TEST_ACTIVATION_DISABLED`.
+New assessments always use the newest clinician-approved custom rule, when one exists. Otherwise they use the built-in sample in every environment. Old `testRiskRuleActivation` values in clinic settings are ignored and are left untouched with the rest of the settings record. Previously saved assessments with `test_active` status remain unchanged; if displayed, the frontend labels them as development tests, not approvals.
 
-The test setting is considered only when the server runs in development. Production ignores it and selects only a `clinician_approved` rule (or the existing version-0 demonstration fallback when there is no approved rule). Test activation is not clinical approval and does not claim that the candidate is validated.
+Creating or saving custom rules does not change assessments. Only a school nurse whose PRC license was verified and recorded by an administrator can approve a rule for use; administrators may prepare drafts but cannot approve them. Approval records the nurse and date, and retires the prior approved version.
 
 To make a nurse eligible for clinical rule approval, an administrator opens Settings → Users, enters the PRC license number after checking it against an authoritative source, and confirms that independent verification. Nurses cannot record their own license. The user list shows whether an administrator recorded a verified license without displaying the number; clearing the record removes both the number and verification state. A pre-existing unverified number alone does not enable approval.
 
@@ -29,6 +29,6 @@ To make a nurse eligible for clinical rule approval, an administrator opens Sett
 - [WHO IITT, age 12 and older](https://cdn.who.int/media/docs/default-source/integrated-health-services-(ihs)/csy/iitt/iitt_adult.pdf)
 - [WHO IITT, under age 12](https://cdn.who.int/media/docs/default-source/integrated-health-services-(ihs)/csy/iitt/iitt_pediatric.pdf)
 
-## Legacy behavior
+## Built-in sample behavior
 
-The version-0 demonstration profile remains available as the fallback when no approved version exists. Its historical weighted indicators and routine no-match result are unchanged. It is still explicitly labeled a demonstration and must not be represented as clinically validated.
+The version-0 sample remains the automatic fallback when no approved custom rule exists. Its existing weighted indicators, thresholds, and no-match behavior are unchanged. It is labeled as sample and unapproved in Settings and on new assessment results; it must not be represented as clinically validated.
