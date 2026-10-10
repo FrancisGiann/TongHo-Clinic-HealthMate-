@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { BarChart3, Download, FileText, PieChart, Save } from "lucide-react";
 import { api } from "../utils/api";
+import { manilaCalendarDate, shiftCalendarDate } from "../utils/dateTime";
 import "./Reports.css";
 export default function Reports() {
   const exportReport = () => window.print();
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
+  const today = manilaCalendarDate();
   const [searchParams] = useSearchParams();
   const initialPeriod = searchParams.get('period') === 'daily' ? 'daily' : 'monthly';
   const [period, setPeriod] = useState(initialPeriod);
@@ -42,9 +43,8 @@ export default function Reports() {
   }, []);
   const choosePeriod = (value) => {
     setPeriod(value);
-    const date = new Date();
     if (value === 'daily') setStart(today);
-    if (value === 'weekly') { date.setDate(date.getDate() - 6); setStart(date.toISOString().slice(0, 10)); }
+    if (value === 'weekly') setStart(shiftCalendarDate(today, -6));
     if (value === 'monthly') setStart(`${today.slice(0, 8)}01`);
     setEnd(today);
   };

@@ -2313,11 +2313,19 @@ td small {
 .dark select {
   color: #edf5f2;
 }
+.dark input[type="date"],
+.dark input[type="datetime-local"] {
+  color-scheme: dark;
+}
 .dark .search-box input {
   color: #edf5f2;
 }
 .dark .search-box input::placeholder {
   color: #78918d;
+}
+.dark textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
 }
 .dark .clinic-card,
 .dark .full-btn,
@@ -2328,6 +2336,12 @@ td small {
 .dark .clinic-card strong,
 .dark .clinic-card span {
   color: #edf5f2;
+}
+.dark .primary-btn {
+  color: var(--violet);
+}
+.dark .primary-btn:hover {
+  background: linear-gradient(135deg, var(--teal-dark) 0%, var(--teal) 100%);
 }
 .dark .full-btn {
   color: #9be3d7;
@@ -2475,8 +2489,8 @@ td small {
 .adjust-actions button:active {
   transform: scale(0.95);
 }
-.adjust-actions .icon-btn-small { background: #f8f7fd; border-color: #dfdde7; color: var(--purple); }
-.adjust-actions .icon-btn-small:hover { border-color: var(--purple); background: #f0effa; }
+.adjust-actions .icon-btn-small { background: #f8f7fd; border-color: #dfdde7; color: var(--violet); }
+.adjust-actions .icon-btn-small:hover { border-color: var(--violet); background: #f0effa; }
 .adjust-actions .icon-btn-small.danger { background: #fff5f5; border-color: #ffd0d8; color: var(--rose); }
 .adjust-actions .icon-btn-small.danger:hover { border-color: var(--rose); background: #fff0f2; }
 .inventory-table table { min-width: 760px; table-layout: fixed; }
@@ -3676,7 +3690,7 @@ td small {
   border: 3px solid var(--teal);
   display: grid;
   place-items: center;
-  color: var(--purple);
+  color: var(--violet);
 }
 .auth-modal-header h2 {
   font: 600 24px Outfit;
@@ -5611,7 +5625,7 @@ nav a.active,
   transform: translateX(-50%);
   padding: 10px 16px;
   border-radius: 10px;
-  background: var(--navy);
+  background: var(--violet);
   color: #fff;
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.22);
 }
@@ -6354,7 +6368,7 @@ nav a.active,
   padding: 13px 15px;
   border: 1px solid color-mix(in srgb, var(--teal) 24%, var(--line));
   border-radius: 10px;
-  background: color-mix(in srgb, var(--teal) 7%, var(--surface));
+  background: color-mix(in srgb, var(--teal) 7%, var(--white));
   color: var(--ink);
   font-size: var(--type-compact);
   line-height: 1.55;
@@ -6376,7 +6390,7 @@ fieldset.form-section { min-width: 0; border: 0; }
 .guardian-attestation { padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft, #f8faf9); }
 .review-submission-list,
 .review-history-list { display: grid; gap: 14px; }
-.review-submission { min-width: 0; padding: 17px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.review-submission { min-width: 0; padding: 17px; border: 1px solid var(--line); border-radius: 12px; background: var(--white); }
 .review-submission > label { display: grid; gap: 6px; margin: 13px 0; }
 .review-submission details > summary,
 .review-history-item > summary { color: var(--teal-dark); font-size: var(--type-compact); font-weight: 700; cursor: pointer; }
