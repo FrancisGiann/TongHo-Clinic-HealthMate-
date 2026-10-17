@@ -1,18 +1,18 @@
 :root {
   /* Primitive palette */
-  --color-teal-700: #24125f;
-  --color-teal-600: #302078;
-  --color-teal-100: #eeeaff;
+  --color-teal-700: #204982;
+  --color-teal-600: #2b5dab;
+  --color-teal-100: #eaf2ff;
   --color-coral-600: #d9232e;
   --color-coral-100: #ffe8ea;
   --color-amber-600: #b7791f;
   --color-amber-100: #fff4dd;
-  --color-indigo-900: #21115f;
-  --color-indigo-800: #302078;
-  --color-slate-700: #414568;
-  --color-slate-500: #747991;
-  --color-slate-200: #e5e4ee;
-  --color-slate-50: #f8f8fc;
+  --color-indigo-900: #172d4b;
+  --color-indigo-800: #21477d;
+  --color-slate-700: #43516a;
+  --color-slate-500: #6a778c;
+  --color-slate-200: #d9e2ef;
+  --color-slate-50: #f7f9fc;
   --color-white: #ffffff;
 
   /* Semantic palette */
@@ -46,11 +46,11 @@
 }
 
 .dark {
-  --color-background: #17152f;
-  --color-surface: #242047;
-  --color-foreground: #f4f2ff;
-  --color-muted-foreground: #b9b6d0;
-  --color-border: #45416d;
-  --color-primary: #aaa2f2;
-  --color-primary-hover: #d1ccff;
+  --color-background: #101827;
+  --color-surface: #1b2638;
+  --color-foreground: #edf4ff;
+  --color-muted-foreground: #aebbd0;
+  --color-border: #36445c;
+  --color-primary: #9dbfff;
+  --color-primary-hover: #c6d9ff;
 }

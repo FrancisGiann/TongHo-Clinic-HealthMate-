@@ -177,10 +177,10 @@
 .dark.hm-startup { background: var(--paper); }
 .dark.hm-startup {
   --hm-startup-danger: #ff9aa3;
-  --hm-startup-muted: #b9b6d0;
+  --hm-startup-muted: #b6c1d0;
 }
 .dark .hm-startup-status-icon.is-error { background: color-mix(in srgb, var(--hm-startup-danger) 18%, var(--white)); }
-.dark.hm-startup .hm-startup-retry { color: #21115f; }
+.dark.hm-startup .hm-startup-retry { color: #11335f; }
 
 @keyframes hm-startup-pulse {
   0%, 100% { transform: scale(1); opacity: .82; }

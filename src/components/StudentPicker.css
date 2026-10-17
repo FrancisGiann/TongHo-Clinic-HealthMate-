@@ -1,5 +1,5 @@
 .student-picker { --student-picker-muted: #59627a; }
-.dark .student-picker { --student-picker-muted: #b9b6d0; }
+.dark .student-picker { --student-picker-muted: #b6c1d0; }
 .student-picker input::placeholder { color: var(--student-picker-muted); opacity: 1; }
 .student-picker .student-picker-options button span,
 .student-picker .student-picker-empty,
