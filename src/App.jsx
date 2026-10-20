@@ -4,6 +4,7 @@ import MainLayout from './layouts/MainLayout';
 import Dashboard from './pages/Dashboard';
 import Students from './pages/Students';
 import StudentProfile from './pages/StudentProfile';
+import VisitPrint from './pages/VisitPrint';
 import StudentRegistration from './pages/StudentRegistration';
 import FacultyRegistration from './pages/FacultyRegistration';
 import NewVisit from './pages/NewVisit';
@@ -142,6 +143,8 @@ export default function App() {
               <Route path="/faculty/new" element={<FacultyRegistration data={data} reload={clinic.reload} />} />
               <Route path="/students/:studentId" element={<StudentProfile data={data} commitData={clinic.commitData} reload={clinic.reload} />} />
               <Route path="/health-record-review" element={<HealthRecordReview data={data} />} />
+              <Route path="/students/:studentId/visits/:visitId/print" element={<VisitPrint data={data} user={user} />} />
+              <Route path="/students/:studentId/passes/:passType" element={<VisitPrint data={data} user={user} />} />
               <Route path="/new-visit" element={<NewVisit data={data} user={user} refreshInBackground={clinic.refreshInBackground} />} />
               <Route path="/inventory" element={<Inventory data={data} applyServerData={clinic.applyServerData} reload={clinic.reload} saving={clinic.saving} />} />
               <Route path="/reports" element={<Reports />} />

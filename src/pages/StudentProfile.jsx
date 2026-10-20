@@ -215,6 +215,7 @@ export default function StudentProfile({ data, commitData, reload }) {
           </p>
         </div>
         <div className="profile-actions">
+          {student.patientType === 'student' && <><Link className="secondary-btn" to={`/students/${encodeURIComponent(student.id)}/passes/clinic`}>Clinic Pass</Link><Link className="secondary-btn" to={`/students/${encodeURIComponent(student.id)}/passes/gate`}>Student Gate Pass</Link></>}
           <button className="secondary-btn" onClick={openEditor}><Pencil size={16} /> Edit profile</button>
           {(student.contactNumber || student.guardianPhone) && <button className="secondary-btn" onClick={() => window.location.href = `tel:${isFaculty ? student.contactNumber : student.guardianPhone}`}>
             <Phone size={16} /> {isFaculty ? 'Contact' : 'Guardian'}
@@ -278,6 +279,7 @@ export default function StudentProfile({ data, commitData, reload }) {
                   </p>
                 </div>
                 <span className="status-chip success">{visit.disposition}</span>
+                {student.patientType === 'student' && <div><Link className="text-btn" to={`/students/${encodeURIComponent(student.id)}/visits/${encodeURIComponent(visit.id)}/print`}>Print visit summary</Link>{['clinic', 'gate'].map((type) => <Link key={type} className="text-btn" to={`/students/${encodeURIComponent(student.id)}/passes/${type}?visit=${encodeURIComponent(visit.id)}`}>{type === 'clinic' ? 'Clinic Pass' : 'Gate Pass'}</Link>)}</div>}
               </div>
             ))
           ) : (

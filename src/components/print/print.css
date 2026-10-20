@@ -1,0 +1,45 @@
+.print-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+.pass-editor { padding: 24px; }
+.pass-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 20px 0; }
+.pass-fields label { display: grid; gap: 6px; }
+.pass-fields input, .pass-fields textarea, .pass-fields select { width: 100%; box-sizing: border-box; }
+.pass-fields .check-label { display: flex; }
+.pass-fields .check-label input { width: auto; }
+.document-print-root { color: #111; background: #fff; font: 11pt/1.35 Arial, sans-serif; margin: 24px auto; box-sizing: border-box; overflow-wrap: anywhere; }
+.document-print-root * { box-sizing: border-box; }
+.pass-preview { width: 277mm; }
+.summary-preview { width: 190mm; }
+.pass-sheet { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8mm; }
+.pass-copy { height: 190mm; padding: 5mm; border: 1px solid #555; break-inside: avoid; }
+.document-print-root header { text-align: center; margin-bottom: 5mm; }
+.document-print-root h2 { font: bold 16pt/1.2 Arial, sans-serif; margin: 2mm 0; color: #111; }
+.document-print-root p { margin: 2mm 0; color: #111; }
+.paper-field { margin: 2mm 0; break-inside: avoid; }
+.paper-field strong { display: block; font-size: 10pt; }
+.paper-field span { display: block; min-height: 6mm; border-bottom: 1px solid #777; white-space: pre-wrap; }
+.paper-field.handwriting span { min-height: 12mm; }
+.paper-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; }
+.paper-complaints { display: flex; flex-wrap: wrap; gap: 3mm; margin: 4mm 0; }
+.paper-choice { display: inline-flex; gap: 2mm; align-items: center; }
+.paper-check { display: inline-block; width: 4mm; height: 4mm; border: 1px solid #111; line-height: 4mm; text-align: center; }
+.nurse-attribution { margin-top: 8mm; text-align: center; }
+.summary-sheet { padding: 5mm; }
+.summary-sheet .paper-field { margin: 5mm 0; break-inside: auto; }
+.summary-sheet .paper-field strong { break-after: avoid; }
+@media (max-width: 760px) { .pass-fields { grid-template-columns: 1fr; } }
+@media screen { .document-print-root { outline: 1px solid #888; } body:has(.document-print-root) { overflow-x: auto; } }
+@media print {
+  body.document-print-active { margin: 0 !important; background: #fff !important; }
+  body.document-print-active > :not(.document-print-root) { display: none !important; }
+  body:not(.document-print-active) > .document-print-root { display: none !important; }
+  .document-print-root { margin: 0; padding: 0; outline: 0; }
+  body.document-print-blocked > .document-print-root { display: none !important; }
+  body.document-print-blocked::after { content: "Open a valid document preview before printing. If the form exceeds the page, shorten the temporary text."; display: block; color: #111; }
+  .summary-sheet { padding: 0; }
+}
+.pass-copy > .paper-field:not(.handwriting) { display: grid; grid-template-columns: 28mm minmax(0, 1fr); align-items: baseline; gap: 2mm; }
+
+.summary-sheet { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.summary-sheet td { padding: 0; border: 0; background: #fff; color: #111; white-space: normal; }
+.summary-sheet thead { display: table-header-group; }
+.summary-sheet tr { break-inside: auto; }
