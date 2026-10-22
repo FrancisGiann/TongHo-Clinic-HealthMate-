@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# Local Codex task attachments
+.codex-attachments/
+
 # Dependencies
 node_modules/
 yarn.lock
