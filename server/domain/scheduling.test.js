@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appointmentSettings, clinicDateTime, generateAppointmentSlots, isAppointmentTransitionAllowed, isValidAppointmentDate, normalizeAppointmentStatus, rankAppointmentSlots } from './scheduling.js';
+import { appointmentRowsOverlappingPeriod, appointmentSettings, clinicDateTime, generateAppointmentSlots, intervalsOverlap, isAppointmentTransitionAllowed, isValidAppointmentDate, normalizeAppointmentStatus, rankAppointmentSlots, sortedManilaDayLockKeys, unavailablePeriodsForSlot, validateUnavailablePeriod } from './scheduling.js';
 
 test('appointment slots respect clinic hours, weekdays, duration and conflicts', () => {
   const date = '2026-09-24';
@@ -34,6 +34,32 @@ test('appointment availability on today excludes elapsed clinic slots using Mani
     open: '08:00', close: '10:00', durationMinutes: 30,
     now: new Date('2026-09-24T00:45:00.000Z'),
   }), []);
+});
+
+test('unavailable periods validate Manila full-day and partial-day ranges', () => {
+  const fullDay = validateUnavailablePeriod({ date: '2026-10-21', fullDay: true, reason: 'School activity' });
+  assert.equal(fullDay.valid, true);
+  assert.equal(fullDay.value.startsAt.toISOString(), '2026-10-20T16:00:00.000Z');
+  assert.equal(fullDay.value.endsAt.toISOString(), '2026-10-21T16:00:00.000Z');
+  const partial = validateUnavailablePeriod({ date: '2026-10-21', startTime: '09:00', endTime: '10:30', reason: 'Clinic meeting' });
+  assert.equal(partial.valid, true);
+  assert.equal(partial.value.startsAt.toISOString(), '2026-10-21T01:00:00.000Z');
+  assert.equal(validateUnavailablePeriod({ date: '2026-10-21', startTime: '10:30', endTime: '09:00', reason: 'x' }).code, 'INVALID_TIME_RANGE');
+  assert.equal(validateUnavailablePeriod({ date: '2026-10-21', fullDay: true, reason: ' ' }).code, 'INVALID_REASON');
+});
+
+test('slot, block and appointment overlap checks use half-open duration intervals', () => {
+  assert.equal(intervalsOverlap('2026-10-21T01:00:00Z', '2026-10-21T01:30:00Z', '2026-10-21T01:30:00Z', '2026-10-21T02:00:00Z'), false);
+  const slot = '2026-10-21T01:00:00.000Z';
+  assert.equal(unavailablePeriodsForSlot(slot, 30, [{ starts_at: '2026-10-21T01:29:00Z', ends_at: '2026-10-21T02:00:00Z' }]), true);
+  assert.equal(unavailablePeriodsForSlot(slot, 30, [{ starts_at: '2026-10-21T01:30:00Z', ends_at: '2026-10-21T02:00:00Z' }]), false);
+  const rows = [
+    { status: 'Requested', starts_at: '2026-10-21T01:29:00Z' },
+    { status: 'Scheduled', starts_at: '2026-10-21T02:00:00Z' },
+    { status: 'Cancelled', starts_at: '2026-10-21T01:15:00Z' },
+  ];
+  assert.equal(appointmentRowsOverlappingPeriod(rows, '2026-10-21T01:00:00Z', '2026-10-21T02:00:00Z', 30).length, 1);
+  assert.deepEqual(sortedManilaDayLockKeys('2026-10-22', '2026-10-21', '2026-10-22'), ['appointment-day:2026-10-21', 'appointment-day:2026-10-22']);
 });
 
 test('appointment suggestions rank free slots by same-weekday Manila visit timestamps', () => {

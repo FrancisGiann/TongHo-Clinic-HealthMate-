@@ -285,6 +285,171 @@ export async function loadClinicData(user, { includeClinical = false, queryFn = 
   return data;
 }
 
+function appointmentTimestamp(appointment) {
+  const value = appointment.startsAt || (appointment.date
+    ? `${appointment.date}T${appointment.time || '00:00'}+08:00`
+    : '');
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function manilaDateKey(value) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(value).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function manilaTimeKey(value) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(value).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  return `${parts.hour}:${parts.minute}:${parts.second}.${String(value.getMilliseconds()).padStart(3, '0')}`;
+}
+
+export async function loadNurseDashboardData({ queryFn = query, now = new Date() } = {}) {
+  const currentTime = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  if (!Number.isFinite(currentTime)) throw new Error('A valid dashboard reference time is required.');
+  const today = manilaDateKey(new Date(currentTime));
+  const tomorrowStart = Date.parse(`${today}T00:00:00+08:00`) + 24 * 60 * 60 * 1000;
+  const todayTime = manilaTimeKey(new Date(currentTime));
+  const result = await queryFn(`
+    SELECT
+      COALESCE((SELECT jsonb_build_object(
+        'schoolYear', data->'schoolYear', 'nurseName', data->'nurseName'
+      ) FROM clinic_settings WHERE id=1), '{}'::jsonb) AS settings,
+      COALESCE((SELECT COUNT(*)::int FROM appointments WHERE status IN ('Requested','Pending')), 0) AS appointment_request_count,
+      COALESCE((
+        SELECT COUNT(*)::int FROM appointments
+        WHERE status='Scheduled' AND (
+          starts_at >= $1
+          OR (starts_at IS NULL AND (
+            (data->>'date' > $3
+              AND data->>'date' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+              AND COALESCE(NULLIF(btrim(data->>'time'),''),'00:00') ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$')
+            OR (data->>'date'=$3
+              AND COALESCE(NULLIF(btrim(data->>'time'),''),'00:00') ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+              AND (COALESCE(NULLIF(btrim(data->>'time'),''),'00:00') || ':00.000') >= $4)
+          ))
+        )
+      ), 0) AS upcoming_appointment_count,
+      COALESCE((
+        SELECT jsonb_agg(jsonb_build_object(
+          'id', today.id, 'patient_id', today.patient_id, 'status', today.status,
+          'starts_at', today.starts_at, 'date', today.data->'date',
+          'time', COALESCE(NULLIF(btrim(today.data->>'time'),''),'00:00'),
+          'reason', today.data->'reason', 'patient_name', p.data->'name'
+        ) ORDER BY today.sort_time, today.created_at)
+        FROM (
+          SELECT candidates.*
+          FROM (
+            SELECT a.id, a.patient_id, a.status, a.starts_at, a.data, a.created_at,
+              to_char(a.starts_at AT TIME ZONE 'Asia/Manila','HH24:MI:SS.MS') AS sort_time
+            FROM appointments a
+            WHERE a.status='Scheduled' AND a.starts_at >= $1 AND a.starts_at < $2
+            UNION ALL
+            SELECT a.id, a.patient_id, a.status, a.starts_at, a.data, a.created_at,
+              COALESCE(NULLIF(btrim(a.data->>'time'),''),'00:00') || ':00.000' AS sort_time
+            FROM appointments a
+            WHERE a.status='Scheduled' AND a.starts_at IS NULL
+              AND a.data->>'date'=$3
+              AND COALESCE(NULLIF(btrim(a.data->>'time'),''),'00:00') ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+              AND (COALESCE(NULLIF(btrim(a.data->>'time'),''),'00:00') || ':00.000') >= $4
+          ) candidates
+          ORDER BY candidates.sort_time, candidates.created_at
+          LIMIT 4
+        ) today
+        LEFT JOIN patients p ON p.id=today.patient_id
+      ), '[]'::jsonb) AS scheduled_appointments,
+      COALESCE((
+        SELECT jsonb_agg(jsonb_build_object(
+          'id', recent.id, 'patient_id', recent.patient_id,
+          'created_at', recent.created_at, 'date', recent.data->'date',
+          'time', recent.data->'time', 'chief_complaint', recent.data->'chiefComplaint',
+          'type', recent.data->'type', 'disposition', recent.data->'disposition',
+          'patient_name', p.data->'name'
+        ) ORDER BY recent.sort_date DESC, recent.created_at ASC)
+        FROM (
+          SELECT id, patient_id, data, created_at,
+            COALESCE(NULLIF(data->>'date',''), NULLIF(data->>'createdAt',''), '2000-01-01T00:00:00.000Z') AS sort_date
+          FROM visits
+          ORDER BY COALESCE(NULLIF(data->>'date',''), NULLIF(data->>'createdAt',''), '2000-01-01T00:00:00.000Z') DESC,
+            created_at ASC
+          LIMIT 4
+        ) recent
+        LEFT JOIN patients p ON p.id=recent.patient_id
+      ), '[]'::jsonb) AS recent_visits,
+      COALESCE((
+        SELECT jsonb_agg(jsonb_build_object(
+          'id', low_stock.id, 'quantity', low_stock.quantity,
+          'name', low_stock.data->'name', 'unit', low_stock.data->'unit',
+          'reorderLevel', low_stock.data->'reorderLevel'
+        ) ORDER BY low_stock.created_at)
+        FROM (
+          SELECT id, quantity, data, created_at
+          FROM inventory_items
+          WHERE COALESCE(data->>'archived','false') <> 'true'
+            AND quantity <= CASE
+              WHEN length(btrim(COALESCE(data->>'reorderLevel',''))) <= 16
+                AND btrim(COALESCE(data->>'reorderLevel','')) ~ '^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$'
+                THEN (btrim(data->>'reorderLevel'))::numeric
+              ELSE NULL
+            END
+          ORDER BY created_at
+          LIMIT 3
+        ) low_stock
+      ), '[]'::jsonb) AS inventory_alerts
+  `, [new Date(currentTime), new Date(tomorrowStart), today, todayTime]);
+  const row = result.rows[0] || {};
+  const todayAppointments = (row.scheduled_appointments || [])
+    .map((appointment) => {
+      const normalized = {
+        id: appointment.id,
+        patientId: appointment.patient_id,
+        startsAt: timestampValue(appointment.starts_at),
+        status: appointment.status,
+        date: appointment.date,
+        time: appointment.time,
+        reason: appointment.reason,
+        patientName: appointment.patient_name,
+      };
+      return { appointment: normalized, timestamp: appointmentTimestamp(normalized) };
+    })
+    .filter(({ timestamp }) => timestamp !== null && timestamp >= currentTime)
+    .sort((first, second) => first.timestamp - second.timestamp)
+    .filter(({ timestamp }) => manilaDateKey(new Date(timestamp)) === today)
+    .slice(0, 4);
+  const recentVisits = (row.recent_visits || []).map((visit) => ({
+    id: visit.id,
+    patientId: visit.patient_id,
+    createdAt: timestampValue(visit.created_at),
+    date: visit.date,
+    time: visit.time,
+    chiefComplaint: visit.chief_complaint,
+    type: visit.type,
+    disposition: visit.disposition,
+    patientName: visit.patient_name,
+  }));
+  const studentsById = new Map();
+  for (const record of [...recentVisits, ...todayAppointments.map(({ appointment }) => appointment)]) {
+    const id = String(record.patientId || '');
+    const name = record.patientName;
+    if (id && name) studentsById.set(id, { id, name });
+  }
+
+  return {
+    settings: row.settings || {},
+    students: [...studentsById.values()],
+    dashboardSummary: {
+      appointmentRequestCount: Number(row.appointment_request_count) || 0,
+      upcomingAppointmentCount: Number(row.upcoming_appointment_count) || 0,
+      todayAppointments,
+      recentVisits,
+      inventoryAlerts: row.inventory_alerts || [],
+    },
+  };
+}
+
 export function validateClinicDataPayload(nextData, expectedVersion, { internal = false } = {}) {
   if (!nextData || typeof nextData !== 'object' || !Array.isArray(nextData.students) || !nextData.settings || typeof nextData.settings !== 'object') {
     return { valid: false, message: 'Clinic data must include settings and a student collection.' };

@@ -4,6 +4,8 @@ import { closeDatabase, databaseConfigured, databaseTlsVerified, query } from '.
 import { emailConfigured } from './server/email.js';
 import { startClinicReminderScheduler } from './server/reminderScheduler.js';
 import { runReportArchiveSweep, startReportArchiveScheduler } from './server/reportArchives.js';
+import { startIncidentPhotoCleanupScheduler } from './server/incidentPhotoCleanup.js';
+import { startGuardianSignupOtpCleanupScheduler } from './server/authCleanup.js';
 import { productionStartupIssue } from './server/security.js';
 
 const port = Number(process.env.PORT || 3001);
@@ -37,6 +39,10 @@ const stopReportArchiveScheduler = startReportArchiveScheduler({
   run: () => runReportArchiveSweep(),
   databaseConfigured,
 });
+const stopIncidentPhotoCleanupScheduler = startIncidentPhotoCleanupScheduler({
+  databaseConfigured,
+});
+const stopGuardianSignupOtpCleanupScheduler = startGuardianSignupOtpCleanupScheduler({ databaseConfigured });
 
 let shuttingDown = false;
 async function shutdown(signal) {
@@ -44,6 +50,8 @@ async function shutdown(signal) {
   shuttingDown = true;
   stopReminderScheduler();
   stopReportArchiveScheduler();
+  stopIncidentPhotoCleanupScheduler();
+  stopGuardianSignupOtpCleanupScheduler();
   server.close(async (error) => {
     if (error) {
       console.error(`HTTP shutdown failed after ${signal}:`, error.message);
@@ -52,6 +60,8 @@ async function shutdown(signal) {
     try {
       await stopReminderScheduler.drain();
       await stopReportArchiveScheduler.drain();
+      await stopIncidentPhotoCleanupScheduler.drain();
+      await stopGuardianSignupOtpCleanupScheduler.drain();
       await closeDatabase();
     } catch (closeError) {
       console.error('Database shutdown failed:', closeError.message);

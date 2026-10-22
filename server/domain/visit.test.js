@@ -118,3 +118,12 @@ test('scheduled follow-up requires a real clinic date today or later and no date
   const staleDate = validateVisitPayload({ ...validVisit, followUp: false, followUpDate: '2026-08-20' }, { now });
   assert.equal(staleDate.valid, false);
 });
+
+
+test('clinical numeric fields reject boolean and array coercion while decimal temperatures remain valid', () => {
+  for (const patch of [{ painScore: true }, { painScore: [5] }, { temperature: [36.5] }, { pulse: [70] }, { medicineId: 'qa-item', medicineQuantity: true }, { dispensations: [{ itemId: 'qa-item', quantity: [1] }] }]) {
+    assert.equal(validateVisitPayload({ ...validVisit, ...patch }).valid, false, JSON.stringify(patch));
+  }
+  assert.equal(validateVisitPayload({ ...validVisit, temperature: 36.5, pulse: 70 }).valid, true);
+  assert.equal(validateVisitPayload({ ...validVisit, temperature: '36.5', pulse: '70' }).valid, true);
+});

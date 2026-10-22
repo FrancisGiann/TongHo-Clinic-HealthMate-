@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { advanceClinicDataVersion, hydrateAuthoritativeRecord, loadClinicData, saveClinicData, saveClinicDataInTransaction, studentRecordForUser, syncCollection, syncPatients, validateClinicDataPayload, validateRosterSnapshot, validateVersionAfterAdvance } from './repository.js';
+import { advanceClinicDataVersion, hydrateAuthoritativeRecord, loadClinicData, loadNurseDashboardData, saveClinicData, saveClinicDataInTransaction, studentRecordForUser, syncCollection, syncPatients, validateClinicDataPayload, validateRosterSnapshot, validateVersionAfterAdvance } from './repository.js';
 
 function clinicReadResult(overrides = {}) {
   return { rows: [{
@@ -423,4 +423,49 @@ test('guardian bootstrap handles no linked students with one parameterized empty
   assert.deepEqual(data.visits, []);
   assert.deepEqual(data.appointments, []);
   assert.deepEqual(data.inventory, []);
+});
+
+test('nurse dashboard summary returns bounded rows and preserves appointment counts and Manila times', async () => {
+  const now = new Date('2026-10-16T02:00:00.000Z');
+  let queryArgs;
+  const queryFn = async (...args) => {
+    queryArgs = args;
+    return { rows: [{
+      settings: { schoolYear: '2026–2027', nurseName: 'Nurse Maya' },
+      appointment_request_count: 2,
+      upcoming_appointment_count: 4,
+      scheduled_appointments: [
+        { id: 'today-persisted', patient_id: 'student-1', starts_at: '2026-10-16T03:00:00.000Z', status: 'Scheduled', patient_name: 'Ari Santos', reason: 'Follow-up' },
+        { id: 'today-legacy', patient_id: 'student-2', starts_at: null, date: '2026-10-16', time: '12:30', status: 'Scheduled', patient_name: 'Bea Cruz', reason: 'Check-in' },
+        { id: 'past-legacy', patient_id: 'student-3', starts_at: null, date: '2026-10-15', time: '10:00', status: 'Scheduled', patient_name: 'Cal Tan' },
+      ],
+      recent_visits: [{
+        id: 'visit-1', patient_id: 'student-1', created_at: '2026-10-16T01:00:00.000Z',
+        date: '2026-10-16', time: '09:00 AM', chief_complaint: 'Headache', type: 'Illness',
+        disposition: 'Returned to class', patient_name: 'Ari Santos',
+      }],
+      inventory_alerts: [{ id: 'stock-1', name: 'Bandages', quantity: 2, unit: 'pieces', reorderLevel: 5 }],
+    }] };
+  };
+
+  const data = await loadNurseDashboardData({ queryFn, now });
+
+  assert.equal(queryArgs.length, 2);
+  assert.deepEqual(queryArgs[1], [now, new Date('2026-10-16T16:00:00.000Z'), '2026-10-16', '10:00:00.000']);
+  assert.match(queryArgs[0], /COUNT\(\*\)::int FROM appointments/);
+  assert.match(queryArgs[0], /data->>'date' > \$3/);
+  assert.match(queryArgs[0], /data->>'date'=\$3/);
+  assert.match(queryArgs[0], /ORDER BY candidates\.sort_time, candidates\.created_at\s+LIMIT 4/);
+  assert.match(queryArgs[0], /LIMIT 4/);
+  assert.match(queryArgs[0], /LIMIT 3/);
+  assert.deepEqual(data.settings, { schoolYear: '2026–2027', nurseName: 'Nurse Maya' });
+  assert.equal(data.dashboardSummary.appointmentRequestCount, 2);
+  assert.equal(data.dashboardSummary.upcomingAppointmentCount, 4, 'the SQL count includes persisted and legacy scheduled appointments');
+  assert.deepEqual(data.dashboardSummary.todayAppointments.map(({ appointment }) => appointment.id), ['today-persisted', 'today-legacy']);
+  assert.deepEqual(data.dashboardSummary.recentVisits.map((visit) => visit.id), ['visit-1']);
+  assert.deepEqual(data.dashboardSummary.inventoryAlerts.map((item) => item.id), ['stock-1']);
+  assert.deepEqual(data.students, [
+    { id: 'student-1', name: 'Ari Santos' },
+    { id: 'student-2', name: 'Bea Cruz' },
+  ]);
 });

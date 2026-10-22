@@ -3,6 +3,13 @@ const units = new Set(['tablets', 'pieces', 'packs', 'sachets', 'inhalers', 'bot
 const itemTypes = new Set(['medication', 'supply']);
 const maxStock = 1_000_000;
 
+// Accept numeric form strings without coercing blank values, booleans or arrays.
+function integerInput(value) {
+  if (typeof value === 'number') return value;
+  if (typeof value !== 'string' || !/^-?\d+$/.test(value.trim())) return Number.NaN;
+  return Number(value.trim());
+}
+
 function validIsoDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -11,13 +18,14 @@ function validIsoDate(value) {
 
 export function validateInventoryItem(payload, { create = false } = {}) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return { valid: false, message: 'Enter valid inventory details.' };
-  const name = String(payload.name || '').trim();
-  const category = String(payload.category || '');
-  const itemType = payload.itemType == null ? '' : String(payload.itemType);
-  const unit = String(payload.unit || '');
-  const expiryDate = payload.expiryDate == null ? '' : String(payload.expiryDate);
-  const reorderLevel = Number(payload.reorderLevel);
-  const quantity = Number(payload.quantity);
+  const name = typeof payload.name === 'string' ? payload.name.trim() : '';
+  const category = typeof payload.category === 'string' ? payload.category : '';
+  const itemType = typeof payload.itemType === 'string' ? payload.itemType : '';
+  const unit = typeof payload.unit === 'string' ? payload.unit : '';
+  const expiryDate = payload.expiryDate == null ? '' : payload.expiryDate;
+  if (typeof expiryDate !== 'string') return { valid: false, message: 'Expiry date must be a real date in YYYY-MM-DD format.' };
+  const reorderLevel = integerInput(payload.reorderLevel);
+  const quantity = integerInput(payload.quantity);
   if (!name || name.length > 120) return { valid: false, message: 'Item name must be between 1 and 120 characters.' };
   if (!categories.has(category)) return { valid: false, message: 'Choose a supported inventory category.' };
   if (itemType && !itemTypes.has(itemType)) return { valid: false, message: 'Choose Medication or Supply as the item type.' };
@@ -42,8 +50,8 @@ export function validateInventoryItem(payload, { create = false } = {}) {
 
 export function validateStockAdjustment(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return { valid: false, message: 'Enter a valid stock adjustment.' };
-  const quantityDelta = Number(payload.quantityDelta);
-  const reason = String(payload.reason || '').trim();
+  const quantityDelta = integerInput(payload.quantityDelta);
+  const reason = typeof payload.reason === 'string' ? payload.reason.trim() : '';
   if (!Number.isInteger(quantityDelta) || quantityDelta === 0 || Math.abs(quantityDelta) > maxStock) {
     return { valid: false, message: 'Adjustment must be a non-zero whole number up to 1,000,000 units.' };
   }
@@ -52,8 +60,8 @@ export function validateStockAdjustment(payload) {
 }
 
 export function applyStockAdjustment(currentQuantity, quantityDelta) {
-  const current = Number(currentQuantity);
-  const delta = Number(quantityDelta);
+  const current = integerInput(currentQuantity);
+  const delta = integerInput(quantityDelta);
   const nextQuantity = current + delta;
   if (!Number.isInteger(current) || current < 0 || !Number.isInteger(delta) || delta === 0 || Math.abs(delta) > maxStock || nextQuantity < 0 || nextQuantity > maxStock) {
     return { valid: false, code: 'STOCK_ADJUSTMENT_OUT_OF_RANGE', message: nextQuantity < 0 ? 'Stock cannot be reduced below zero.' : 'Stock cannot exceed 1,000,000 units.' };
@@ -77,7 +85,7 @@ export function validateDispenseAvailability(item, quantity, now = new Date()) {
   if (!item) return { valid: false, status: 409, code: 'INSUFFICIENT_STOCK', message: 'The selected inventory item was not found or does not have enough stock.' };
   if (item?.data?.archived) return { valid: false, status: 409, code: 'ITEM_ARCHIVED', message: 'The selected inventory item is archived and cannot be dispensed.' };
   if (!['medication', 'supply'].includes(item?.data?.itemType)) return { valid: false, status: 409, code: 'ITEM_TYPE_REQUIRED', message: 'Review and classify this inventory item before dispensing it.' };
-  if (!Number.isInteger(Number(quantity)) || Number(quantity) < 1 || Number(item.quantity) < Number(quantity)) {
+  if (!Number.isInteger(integerInput(quantity)) || integerInput(quantity) < 1 || Number(item.quantity) < integerInput(quantity)) {
     return { valid: false, status: 409, code: 'INSUFFICIENT_STOCK', message: 'The selected inventory item does not have enough stock.' };
   }
   const expiryDate = String(item.data?.expiryDate || '');

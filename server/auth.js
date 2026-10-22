@@ -255,53 +255,111 @@ export async function clearFailedLogin(failureKey, identifier = failureKey) {
   await query('DELETE FROM login_attempts WHERE identifier=ANY($1::varchar[])', [keys]);
 }
 
-export async function createOtpChallenge(user, purpose, metadata = {}) {
+export async function createOtpChallenge(user, purpose, metadata = {}, { transactionFn = transaction, queryFn = query, sendEmail = sendOtpEmail, deferDelivery = false, logger = console } = {}) {
   const destination = normalizeIdentifier(user.email);
-  const recent = await query(
-    `SELECT created_at FROM otp_challenges WHERE destination=$1 AND purpose=$2
-     AND created_at>NOW()-INTERVAL '60 seconds' ORDER BY created_at DESC LIMIT 1`,
-    [destination, purpose],
-  );
-  if (recent.rowCount) {
-    const error = new Error('Please wait before requesting another verification code.');
-    error.code = 'OTP_COOLDOWN';
-    error.status = 429;
-    throw error;
-  }
-  const code = String(crypto.randomInt(100000, 1000000));
-  const id = crypto.randomUUID();
-  await query(
-    `INSERT INTO otp_challenges(id,user_id,destination,purpose,code_hash,max_attempts,expires_at,metadata)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
-    [id, user.id || null, destination, purpose, hashSecret(`${id}:${destination}:${code}`), OTP_MAX_ATTEMPTS, new Date(Date.now() + OTP_TTL_MS), JSON.stringify(metadata)],
-  );
-  try {
-    await sendOtpEmail(destination, code, purpose.replaceAll('_', ' '));
-  } catch (error) {
-    await query('DELETE FROM otp_challenges WHERE id=$1', [id]);
-    throw error;
-  }
-  return id;
+  const challenge = await transactionFn(async (client) => {
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`otp:${purpose}:${destination}`]);
+    const recent = await client.query(
+      `SELECT created_at FROM otp_challenges WHERE destination=$1 AND purpose=$2
+       AND created_at>NOW()-INTERVAL '60 seconds' ORDER BY created_at DESC LIMIT 1`,
+      [destination, purpose],
+    );
+    if (recent.rowCount) {
+      const error = new Error('Please wait before requesting another verification code.');
+      error.code = 'OTP_COOLDOWN';
+      error.status = 429;
+      throw error;
+    }
+    if (purpose === 'guardian_signup') {
+      await client.query(
+        `UPDATE otp_challenges SET consumed_at=NOW(),metadata='{}'::jsonb
+         WHERE destination=$1 AND purpose=$2 AND consumed_at IS NULL`,
+        [destination, purpose],
+      );
+    }
+    const code = String(crypto.randomInt(100000, 1000000));
+    const id = crypto.randomUUID();
+    await client.query(
+      `INSERT INTO otp_challenges(id,user_id,destination,purpose,code_hash,max_attempts,expires_at,metadata)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+      [id, user.id || null, destination, purpose, hashSecret(`${id}:${destination}:${code}`), OTP_MAX_ATTEMPTS, new Date(Date.now() + OTP_TTL_MS), JSON.stringify(metadata)],
+    );
+    return { id, code };
+  });
+  const deliver = async () => {
+    try {
+      await sendEmail(destination, challenge.code, purpose.replaceAll('_', ' '));
+    } catch (error) {
+      if (deferDelivery) {
+        logger.error('OTP delivery could not be completed.');
+        return;
+      }
+      try {
+        await queryFn('DELETE FROM otp_challenges WHERE id=$1', [challenge.id]);
+      } catch {
+        logger.error('OTP challenge cleanup failed after delivery failure.');
+      }
+      throw error;
+    }
+  };
+  if (deferDelivery) void deliver();
+  else await deliver();
+  return challenge.id;
 }
 
-export async function consumeOtp(challengeId, code, purpose) {
+// Recovery responses stay generic when delivery fails or an account is unavailable.
+export async function passwordResetChallenge(user, {
+  issueChallenge = createOtpChallenge,
+  newId = crypto.randomUUID,
+  logger = console,
+} = {}) {
+  const fallback = newId();
+  if (!user || user.status !== 'active' || user.role === 'student') return fallback;
+  try {
+    return await issueChallenge(user, 'password_reset');
+  } catch {
+    logger.error('Password reset delivery could not be completed.');
+    return fallback;
+  }
+}
+
+export async function consumeOtp(challengeId, code, purpose, { onConsume, transactionFn = transaction } = {}) {
   if (typeof challengeId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(challengeId)
     || typeof code !== 'string' || !/^\d{6}$/.test(code)) return null;
-  return transaction(async (client) => {
+  return transactionFn(async (client) => {
     const result = await client.query('SELECT * FROM otp_challenges WHERE id=$1 FOR UPDATE', [challengeId]);
     const challenge = result.rows[0];
-    if (!challenge || challenge.purpose !== purpose || challenge.consumed_at || new Date(challenge.expires_at).getTime() <= Date.now()) return null;
-    if (challenge.attempts >= challenge.max_attempts) return null;
+    if (!challenge || challenge.purpose !== purpose) return null;
+    const expired = new Date(challenge.expires_at).getTime() <= Date.now();
+    const exhausted = challenge.attempts >= challenge.max_attempts;
+    if (purpose === 'guardian_signup' && (challenge.consumed_at || expired || exhausted)) {
+      await client.query("UPDATE otp_challenges SET metadata='{}'::jsonb WHERE id=$1", [challenge.id]);
+    }
+    if (challenge.consumed_at || expired || exhausted) return null;
     const expected = Buffer.from(challenge.code_hash, 'hex');
     const actual = Buffer.from(hashSecret(`${challenge.id}:${challenge.destination}:${String(code || '').trim()}`), 'hex');
     const valid = expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
     if (!valid) {
-      await client.query('UPDATE otp_challenges SET attempts=attempts+1 WHERE id=$1', [challenge.id]);
+      if (purpose === 'guardian_signup' && challenge.attempts + 1 >= challenge.max_attempts) {
+        await client.query("UPDATE otp_challenges SET attempts=attempts+1,metadata='{}'::jsonb WHERE id=$1", [challenge.id]);
+      } else {
+        await client.query('UPDATE otp_challenges SET attempts=attempts+1 WHERE id=$1', [challenge.id]);
+      }
       return null;
     }
-    await client.query('UPDATE otp_challenges SET consumed_at=NOW() WHERE id=$1', [challenge.id]);
-    return challenge;
+    const resultValue = onConsume ? await onConsume(challenge, client) : challenge;
+    await client.query('UPDATE otp_challenges SET consumed_at=NOW() WHERE id=$1 AND consumed_at IS NULL', [challenge.id]);
+    return resultValue;
   });
+}
+
+export async function clearExpiredGuardianSignupOtpMetadata(queryFn = query) {
+  return queryFn(
+    `UPDATE otp_challenges SET metadata='{}'::jsonb
+     WHERE purpose='guardian_signup' AND metadata<>'{}'::jsonb
+       AND (expires_at<=NOW() OR attempts>=max_attempts OR consumed_at IS NOT NULL)
+     RETURNING id`,
+  );
 }
 
 export async function hashPassword(password) {

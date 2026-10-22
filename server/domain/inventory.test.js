@@ -59,3 +59,29 @@ test('expired medicine is rejected using the clinic calendar date', () => {
   });
   assert.deepEqual(validateDispenseAvailability({ quantity: 3, data: { itemType: 'supply', expiryDate: '2026-09-23' } }, 1, afterManilaMidnight), { valid: true });
 });
+
+
+test('inventory rejects type coercion without rejecting valid zero, numeric form strings or Unicode', () => {
+  const base = { name: 'Café 漢字', itemType: 'supply', category: 'Supplies', unit: 'pieces', expiryDate: '', quantity: 0, reorderLevel: 0 };
+  for (const field of ['quantity', 'reorderLevel']) {
+    for (const value of ['', ' ', null, true, false, [], [1], {}, '2cats', '1.5', '1e2']) {
+      assert.equal(validateInventoryItem({ ...base, [field]: value }, { create: true }).valid, false, `${field}: ${JSON.stringify(value)}`);
+    }
+  }
+  for (const [field, value] of [['name', {}], ['name', ['A']], ['category', ['Supplies']], ['unit', ['pieces']], ['expiryDate', []]]) {
+    assert.equal(validateInventoryItem({ ...base, [field]: value }, { create: true }).valid, false);
+  }
+  assert.equal(validateInventoryItem(base, { create: true }).valid, true);
+  assert.equal(validateInventoryItem({ ...base, quantity: '1000000', reorderLevel: '0' }, { create: true }).valid, true);
+});
+
+test('stock deltas and dispensing reject coercible nonnumeric types while signed corrections remain valid', () => {
+  for (const value of [true, false, [], [1], {}, '', ' ', null, '2cats']) {
+    assert.equal(validateStockAdjustment({ quantityDelta: value, reason: 'QA correction' }).valid, false);
+    assert.equal(applyStockAdjustment(10, value).valid, false);
+    assert.equal(validateDispenseAvailability({ quantity: 10, data: { itemType: 'supply' } }, value).valid, false);
+  }
+  assert.equal(validateStockAdjustment({ quantityDelta: 1, reason: {} }).valid, false);
+  assert.equal(validateStockAdjustment({ quantityDelta: '-1', reason: 'QA correction' }).valid, true);
+  assert.deepEqual(applyStockAdjustment(10, '-1'), { valid: true, quantity: 9 });
+});

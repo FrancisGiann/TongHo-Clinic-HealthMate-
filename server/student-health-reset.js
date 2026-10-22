@@ -58,7 +58,10 @@ export async function inspectStudentHealthReset(client) {
       (SELECT COUNT(*)::int FROM queue_entries WHERE patient_id IN (SELECT id FROM student_patients)) AS queue_entries,
       (SELECT COUNT(*)::int FROM screenings WHERE patient_id IN (SELECT id FROM student_patients)) AS screenings,
       (SELECT COUNT(*)::int FROM immunizations WHERE patient_id IN (SELECT id FROM student_patients)) AS immunizations,
-      (SELECT COUNT(*)::int FROM incidents WHERE patient_id IN (SELECT id FROM student_patients)) AS incidents,
+      (SELECT COUNT(*)::int FROM incidents WHERE patient_id IN (SELECT id FROM student_patients)) AS legacy_incidents,
+      (SELECT COUNT(*)::int FROM student_incidents i JOIN patients p ON p.id=i.patient_id WHERE p.patient_type='student') AS student_incidents,
+      (SELECT COUNT(*)::int FROM incident_photos ip JOIN student_incidents i ON i.id=ip.incident_id
+        JOIN patients p ON p.id=i.patient_id WHERE p.patient_type='student' AND ip.deleted_at IS NULL) AS incident_photos,
       (SELECT COUNT(*)::int FROM risk_assessments WHERE visit_id IN (SELECT id FROM visits WHERE patient_id IN (SELECT id FROM student_patients))) AS risk_assessments,
       (SELECT COUNT(*)::int FROM dispense_logs WHERE visit_id IN (SELECT id FROM visits WHERE patient_id IN (SELECT id FROM student_patients))) AS dispense_logs,
       (SELECT COUNT(*)::int FROM guardian_health_record_drafts WHERE patient_id IN (SELECT id FROM student_patients)) AS health_record_drafts,
@@ -83,6 +86,20 @@ export async function applyStudentHealthReset(client) {
   await client.query('LOCK TABLE patients IN SHARE ROW EXCLUSIVE MODE');
   const patientResult = await client.query("SELECT id FROM patients WHERE patient_type='student' FOR UPDATE");
   const patientIds = patientResult.rows.map((row) => String(row.id));
+
+  const incidents = await client.query(
+    `SELECT i.id FROM student_incidents i WHERE i.patient_id=ANY($1::text[]) ORDER BY i.id`,
+    [patientIds],
+  );
+  for (const incident of incidents.rows) {
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`incident-photo-consent:${incident.id}`]);
+  }
+  await client.query(
+    `SELECT i.id FROM student_incidents i
+     WHERE i.patient_id=ANY($1::text[])
+     ORDER BY i.id FOR UPDATE`,
+    [patientIds],
+  );
 
   const guardianResult = await client.query(
     'SELECT DISTINCT guardian_user_id AS id FROM guardian_patient_links WHERE patient_id=ANY($1::text[])',
@@ -113,6 +130,21 @@ export async function applyStudentHealthReset(client) {
     [patientIds],
   );
   await client.query('DELETE FROM dispense_logs WHERE visit_id IN (SELECT id FROM visits WHERE patient_id=ANY($1::text[]))', [patientIds]);
+  await client.query(
+    `UPDATE incident_photos ip SET deletion_requested_at=COALESCE(ip.deletion_requested_at,NOW())
+     FROM student_incidents i WHERE ip.incident_id=i.id AND i.patient_id=ANY($1::text[]) AND ip.deleted_at IS NULL`,
+    [patientIds],
+  );
+  await client.query(
+    `INSERT INTO incident_photo_deletion_tasks(id,photo_id,storage_key,reason,available_at)
+     SELECT gen_random_uuid(),ip.id,ip.storage_key,'student_reset',NOW()
+     FROM incident_photos ip JOIN student_incidents i ON i.id=ip.incident_id
+     WHERE i.patient_id=ANY($1::text[]) AND ip.deleted_at IS NULL
+     ON CONFLICT(storage_key) DO UPDATE SET
+       photo_id=EXCLUDED.photo_id,reason='student_reset',attempts=0,available_at=LEAST(incident_photo_deletion_tasks.available_at,NOW()),
+       leased_at=NULL,last_error_code=NULL,completed_at=NULL`,
+    [patientIds],
+  );
   await client.query('DELETE FROM patients WHERE id=ANY($1::text[])', [patientIds]);
   const summary = { deletedStudents: patientIds.length, suspendedGuardians: guardianIds.length };
   await client.query(

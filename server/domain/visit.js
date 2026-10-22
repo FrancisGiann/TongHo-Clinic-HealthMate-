@@ -29,6 +29,7 @@ function boundedText(value, maxLength, { required = false } = {}) {
 
 function optionalNumber(value, { min, max, integer = false } = {}) {
   if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'number' && typeof value !== 'string') return undefined;
   const number = Number(value);
   if (!Number.isFinite(number) || number < min || number > max || (integer && !Number.isInteger(number))) return undefined;
   return number;

@@ -24,6 +24,7 @@ import {
   loadSession,
   normalizeIdentifier,
   publicUser,
+  passwordResetChallenge,
   recordFailedLogin,
   revokeAllUserSessions,
   revokeUserSession,
@@ -39,13 +40,15 @@ import { buildClinicReport, reportForRole, reportSnapshotForStorage } from './do
 import { applyStockAdjustment, validateInventoryArchive, validateInventoryItem, validateStockAdjustment } from './domain/inventory.js';
 import { persistVisitAndDispensations, resolveInventoryDispensations } from './domain/dispensing.js';
 import { validateChangedClinicalRecords } from './domain/clinical-records.js';
+import { assertCurrentBrandingVersion, BRANDING_SLOT_NAMES, projectBrandingAssets } from './domain/branding.js';
+import { assertCurrentLandingContentVersion, projectAdminLandingContent, projectPublicLandingContent, validateLandingContent } from './domain/landingContent.js';
 import { sanitizeAuditLogs } from './domain/audit.js';
 import { summarizeEncounter } from './ai.js';
 import { clinicCalendarDate, validateVisitPayload, visitRiskInput } from './domain/visit.js';
-import { appointmentSettings, clinicDateTime, generateAppointmentSlots, isAppointmentTransitionAllowed, isValidAppointmentDate, normalizeAppointmentStatus, rankAppointmentSlots } from './domain/scheduling.js';
+import { appointmentRowsOverlappingPeriod, appointmentSettings, clinicDateTime, generateAppointmentSlots, isAppointmentTransitionAllowed, isValidAppointmentDate, normalizeAppointmentStatus, rankAppointmentSlots, sortedManilaDayLockKeys, unavailablePeriodsForSlot, validateUnavailablePeriod } from './domain/scheduling.js';
 import { clinicalWriteRoles, reportReadRoles } from './domain/authorization.js';
 import { broadcastBatchId, validateBroadcastPayload, validateConsentUpdate } from './domain/communications.js';
-import { clinicDataTransaction, linkUserToPatient, listUsers, loadClinicData, saveClinicData, validateVersionAfterAdvance } from './repository.js';
+import { clinicDataTransaction, linkUserToPatient, listUsers, loadClinicData, loadNurseDashboardData, saveClinicData, validateVersionAfterAdvance } from './repository.js';
 import { runClinicReminderSweep } from './reminders.js';
 import { canRollbackImport, normalizeImportRows, selectedImportRows } from './domain/imports.js';
 import { patientRosterIdentitySql, rosterIdTrimCharacters } from './domain/roster.js';
@@ -58,6 +61,14 @@ import { clinicArrivalNotice, clinicVisitCareSummary, notificationDeliveryCounts
 import { listInAppNotifications, markInAppNotificationRead } from './domain/notifications.js';
 import { createOrReplayVisitRequest, findVisitRequest, publicVisitRecord, validVisitRequestId, visitRequestFingerprint } from './domain/visitRequests.js';
 import { activateInvitedAccount, changeAccountStatus, renewPendingInvitation } from './domain/account-access.js';
+import { guardianSignupAcceptedResponse, resolveGuardianStudentMatch, validateGuardianSignup, validGuardianSignupMetadata } from './domain/guardianSignup.js';
+import { buildAuditPageQuery, formatAuditPage, validateAuditPageQuery } from './domain/auditPagination.js';
+import { normalizeDashboardPreferences, validateDashboardPreferences } from './domain/dashboardPreferences.js';
+import { patientSummaryForRange, validateSummaryRange } from './domain/patientSummary.js';
+import { guardianSignupDecisionEmail, publicGuardianSignupRequest, validateGuardianSignupDecisionReason, validateGuardianSignupPageQuery } from './domain/guardianSignupApproval.js';
+import { validateBrandingSlot, validateRasterImageBase64 } from './domain/imageValidation.js';
+import { INCIDENT_PHOTO_NOTICE_VERSION, incidentPhotoReadable, incidentPhotosEnabled, projectIncident, validateIncidentPayload, validateIncidentPhotoDecision } from './domain/incidents.js';
+import { privateStorageFromEnvironment } from './storage/supabasePrivateStorage.js';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const distDir = join(currentDir, '..', 'dist');
@@ -66,6 +77,12 @@ const staffRoles = reportReadRoles;
 
 function errorResponse(res, status, code, message, fields) {
   return res.status(status).json({ error: { code, message, ...(fields ? { fields } : {}) } });
+}
+
+function setImageStreamSecurityHeaders(_req, res, next) {
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  next();
 }
 
 function visibleReport(report, user) {
@@ -264,8 +281,17 @@ async function inspectImportRows(type, rows, client = { query }) {
   return batch;
 }
 
-export function createApp() {
+export function createApp({
+  storage: storageAdapter = privateStorageFromEnvironment(),
+  queryFn = query,
+  transactionFn = transaction,
+  clinicDataTransactionFn = clinicDataTransaction,
+} = {}) {
   const app = express();
+  const storage = storageAdapter;
+  const query = queryFn;
+  const transaction = transactionFn;
+  const clinicDataTransaction = clinicDataTransactionFn;
   app.disable('x-powered-by');
   app.set('trust proxy', trustProxyHops());
   app.use((req, res, next) => {
@@ -278,6 +304,9 @@ export function createApp() {
   });
   app.use(cors({ origin: (origin, callback) => callback(null, requestOriginAllowed(origin)), credentials: true }));
   app.use('/api/auth', express.json({ limit: '16kb' }));
+  app.use('/api/admin/branding', express.json({ limit: '2mb' }));
+  app.use('/api/admin/landing-content', express.json({ limit: '128kb' }));
+  app.use('/api/incidents', express.json({ limit: '5mb' }));
   app.use(express.json({ limit: '5mb' }));
   app.use(ensureSameOrigin);
 
@@ -294,6 +323,8 @@ export function createApp() {
   });
   const resetRequestLimiter = rateLimit({ limit: 60, windowMs: 60 * 60 * 1000 });
   const resetConfirmLimiter = rateLimit({ limit: 60, windowMs: 15 * 60 * 1000 });
+  const guardianSignupRequestLimiter = rateLimit({ limit: 20, windowMs: 15 * 60 * 1000 });
+  const guardianSignupVerifyLimiter = rateLimit({ limit: 60, windowMs: 15 * 60 * 1000 });
   const activationLimiter = rateLimit({ limit: 20, windowMs: 15 * 60 * 1000 });
   const otpVerifyLimiter = rateLimit({ limit: 120, windowMs: 15 * 60 * 1000 });
   const reauthLimiter = rateLimit({
@@ -327,6 +358,17 @@ export function createApp() {
     const lockedUntil = await checkLoginLock(failureKey, identifier);
     if (lockedUntil) return errorResponse(res, 429, 'ACCOUNT_LOCKED', 'Too many failed sign-in attempts. Try again later.');
     const valid = user ? await verifyPassword(password, user.password_hash) : false;
+    if (!user) {
+      const pending = await query(
+        `SELECT password_hash FROM guardian_signup_requests
+         WHERE status='pending_review' AND (LOWER(email)=$1 OR LOWER(username)=$1) LIMIT 1`,
+        [identifier],
+      );
+      if (pending.rowCount && await verifyPassword(password, pending.rows[0].password_hash)) {
+        await clearFailedLogin(failureKey, identifier);
+        return errorResponse(res, 403, 'GUARDIAN_REQUEST_PENDING', 'Your email is verified and your guardian account request is awaiting administrator review. You can sign in after approval.');
+      }
+    }
     if (!user || !valid) {
       const attemptsRemaining = await recordFailedLogin(failureKey);
       await audit(req, 'LOGIN_FAILED', { identifier, attemptsRemaining });
@@ -361,6 +403,326 @@ export function createApp() {
   });
 
   app.get('/api/auth/me', requireAuth, (req, res) => res.json({ data: { user: publicUser(req.user) } }));
+
+  app.get('/api/landing-content', async (_req, res) => {
+    try {
+      const result = await query('SELECT published_content FROM branding_settings WHERE id=1');
+      return res.json({ data: projectPublicLandingContent(result.rows[0]?.published_content, new Date()) });
+    } catch {
+      return errorResponse(res, 503, 'LANDING_CONTENT_UNAVAILABLE', 'Published landing-page content is temporarily unavailable.');
+    }
+  });
+
+  app.get('/api/admin/landing-content', requireRoles('system_administrator'), async (_req, res) => {
+    try {
+      const result = await query('SELECT content_version,draft_content,published_content,draft_updated_at,published_at FROM branding_settings WHERE id=1');
+      return res.json({ data: projectAdminLandingContent(result.rows[0]) });
+    } catch {
+      return errorResponse(res, 503, 'LANDING_CONTENT_UNAVAILABLE', 'Landing-page content could not be loaded.');
+    }
+  });
+
+  app.put('/api/admin/landing-content/draft', requireRoles('system_administrator'), async (req, res) => {
+    if (!Number.isSafeInteger(req.body?.version) || req.body.version < 1) {
+      return errorResponse(res, 400, 'INVALID_VERSION', 'A current landing-page content version is required.');
+    }
+    const validation = validateLandingContent(req.body?.content);
+    if (!validation.valid) {
+      return errorResponse(res, 400, 'LANDING_CONTENT_INVALID', 'Review the landing-page content fields and try again.', validation.errors);
+    }
+    try {
+      const row = await transaction(async (client) => {
+        const current = await client.query('SELECT content_version FROM branding_settings WHERE id=1 FOR UPDATE');
+        assertCurrentLandingContentVersion(current.rows[0]?.content_version || 1, req.body.version);
+        const saved = await client.query(
+          `UPDATE branding_settings
+           SET draft_content=$1::jsonb,content_version=content_version+1,draft_updated_by=$2,draft_updated_at=NOW()
+           WHERE id=1
+           RETURNING content_version,draft_content,published_content,draft_updated_at,published_at`,
+          [JSON.stringify(validation.value), req.user.id],
+        );
+        await audit(req, 'LANDING_CONTENT_DRAFT_SAVED', {
+          announcementCount: validation.value.announcements.length,
+          faqCount: validation.value.faqs.length,
+          visibleSections: validation.value.sectionOrder.filter((section) => validation.value.sectionVisibility[section]),
+        }, 'landing_page_content', 'draft', client);
+        return saved.rows[0];
+      });
+      return res.json({ data: projectAdminLandingContent(row) });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'LANDING_CONTENT_SAVE_FAILED', error.message);
+      throw error;
+    }
+  });
+
+  app.post('/api/admin/landing-content/publish', requireRoles('system_administrator'), async (req, res) => {
+    if (!Number.isSafeInteger(req.body?.version) || req.body.version < 1) {
+      return errorResponse(res, 400, 'INVALID_VERSION', 'A current landing-page content version is required.');
+    }
+    try {
+      const row = await transaction(async (client) => {
+        const current = await client.query(
+          'SELECT content_version,draft_content FROM branding_settings WHERE id=1 FOR UPDATE',
+        );
+        assertCurrentLandingContentVersion(current.rows[0]?.content_version || 1, req.body.version, 'publish');
+        const validation = validateLandingContent(current.rows[0]?.draft_content);
+        if (!validation.valid) {
+          const error = new Error('Save a complete, valid draft before publishing.');
+          error.status = 409;
+          error.code = 'LANDING_DRAFT_INVALID';
+          throw error;
+        }
+        const saved = await client.query(
+          `UPDATE branding_settings
+           SET published_content=$1::jsonb,content_version=content_version+1,published_by=$2,published_at=NOW()
+           WHERE id=1
+           RETURNING content_version,draft_content,published_content,draft_updated_at,published_at`,
+          [JSON.stringify(validation.value), req.user.id],
+        );
+        await audit(req, 'LANDING_CONTENT_PUBLISHED', {
+          announcementCount: validation.value.announcements.length,
+          faqCount: validation.value.faqs.length,
+          visibleSections: validation.value.sectionOrder.filter((section) => validation.value.sectionVisibility[section]),
+        }, 'landing_page_content', 'published', client);
+        return saved.rows[0];
+      });
+      return res.json({ data: projectAdminLandingContent(row) });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'LANDING_CONTENT_PUBLISH_FAILED', error.message);
+      throw error;
+    }
+  });
+
+  const readBrandingAssets = async () => {
+    if (!databaseConfigured) return projectBrandingAssets([], 1);
+    const [settings, assets] = await Promise.all([
+      query('SELECT version FROM branding_settings WHERE id=1'),
+      query('SELECT slot,asset_id FROM branding_assets WHERE slot=ANY($1::varchar[])', [BRANDING_SLOT_NAMES]),
+    ]);
+    return projectBrandingAssets(assets.rows, settings.rows[0]?.version || 1);
+  };
+
+  app.get('/api/branding', async (_req, res) => {
+    try {
+      return res.json({ data: { ...await readBrandingAssets(), storageConfigured: Boolean(storage?.isConfigured?.()) } });
+    } catch {
+      return res.json({ data: { ...projectBrandingAssets([], 1), storageConfigured: false } });
+    }
+  });
+
+  app.get('/api/branding/assets/:slot', setImageStreamSecurityHeaders, async (req, res) => {
+    if (!validateBrandingSlot(req.params.slot) || !databaseConfigured || !storage?.isConfigured?.()) return errorResponse(res, 404, 'BRANDING_ASSET_NOT_FOUND', 'Branding image not found.');
+    const selected = await query('SELECT storage_key,content_type FROM branding_assets WHERE slot=$1', [req.params.slot]);
+    if (!selected.rowCount) return errorResponse(res, 404, 'BRANDING_ASSET_NOT_FOUND', 'Branding image not found.');
+    try {
+      const bytes = await storage.download(process.env.SUPABASE_STORAGE_BUCKET, selected.rows[0].storage_key);
+      if (!bytes) return errorResponse(res, 404, 'BRANDING_ASSET_NOT_FOUND', 'Branding image not found.');
+      res.setHeader('Content-Type', selected.rows[0].content_type);
+      res.setHeader('Content-Length', String(bytes.length));
+      res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=60');
+      return res.status(200).send(bytes);
+    } catch {
+      return errorResponse(res, 503, 'BRANDING_STORAGE_UNAVAILABLE', 'Branding image is temporarily unavailable.');
+    }
+  });
+
+  app.get('/api/admin/branding', requireRoles('system_administrator'), async (_req, res) => {
+    return res.json({ data: { ...await readBrandingAssets(), storageConfigured: Boolean(storage?.isConfigured?.()) } });
+  });
+
+  app.put('/api/admin/branding/:slot', requireRoles('system_administrator'), async (req, res) => {
+    if (!validateBrandingSlot(req.params.slot)) return errorResponse(res, 404, 'BRANDING_SLOT_NOT_FOUND', 'Branding slot not found.');
+    if (!Number.isSafeInteger(req.body?.version) || req.body.version < 1) return errorResponse(res, 400, 'INVALID_VERSION', 'A current branding version is required.');
+    if (!storage?.isConfigured?.() || !databaseConfigured) return errorResponse(res, 503, 'BRANDING_STORAGE_UNAVAILABLE', 'Private image storage is not configured. Contact the system administrator.');
+    let image;
+    try {
+      image = validateRasterImageBase64(req.body?.dataBase64, { maxBytes: 1024 * 1024 });
+    } catch (error) {
+      return errorResponse(res, 400, error.code || 'INVALID_IMAGE', error.message);
+    }
+    if (req.body?.contentType !== image.contentType) return errorResponse(res, 400, 'INVALID_IMAGE_TYPE', 'The selected file type does not match the image data.');
+    const assetId = crypto.randomUUID();
+    const extension = image.contentType === 'image/jpeg' ? 'jpg' : image.contentType.split('/')[1];
+    const storageKey = `branding/${req.params.slot}/${assetId}.${extension}`;
+    try {
+      await storage.upload(process.env.SUPABASE_STORAGE_BUCKET, storageKey, image.bytes, image.contentType);
+    } catch {
+      return errorResponse(res, 503, 'BRANDING_STORAGE_UNAVAILABLE', 'The branding image could not be saved. Check private storage configuration and retry.');
+    }
+    let updated;
+    try {
+      updated = await transaction(async (client) => {
+        const version = await client.query('SELECT version FROM branding_settings WHERE id=1 FOR UPDATE');
+        assertCurrentBrandingVersion(version.rows[0]?.version || 1, req.body.version);
+        const previous = await client.query('SELECT storage_key FROM branding_assets WHERE slot=$1 FOR UPDATE', [req.params.slot]);
+        await client.query(
+          `INSERT INTO branding_assets(slot,asset_id,storage_key,content_type,size_bytes,width,height,updated_by,updated_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+           ON CONFLICT(slot) DO UPDATE SET asset_id=EXCLUDED.asset_id,storage_key=EXCLUDED.storage_key,content_type=EXCLUDED.content_type,size_bytes=EXCLUDED.size_bytes,width=EXCLUDED.width,height=EXCLUDED.height,updated_by=EXCLUDED.updated_by,updated_at=NOW()`,
+          [req.params.slot, assetId, storageKey, image.contentType, image.sizeBytes, image.width, image.height, req.user.id],
+        );
+        const savedVersion = await client.query('UPDATE branding_settings SET version=version+1,updated_by=$1,updated_at=NOW() WHERE id=1 RETURNING version', [req.user.id]);
+        await audit(req, 'BRANDING_UPDATED', { slot: req.params.slot, reset: false }, 'branding_asset', assetId, client);
+        return { version: savedVersion.rows[0].version, oldKey: previous.rows[0]?.storage_key || null };
+      });
+    } catch (error) {
+      try { await storage.remove(process.env.SUPABASE_STORAGE_BUCKET, storageKey); } catch { /* unreachable orphan is cleaned operationally */ }
+      if (error.status) return errorResponse(res, error.status, error.code || 'BRANDING_SAVE_FAILED', error.message);
+      if (error.code === '23505') return errorResponse(res, 409, 'BRANDING_VERSION_CONFLICT', 'Branding changed in another session. Reload before saving.');
+      throw error;
+    }
+    if (updated.oldKey) {
+      try { await storage.remove(process.env.SUPABASE_STORAGE_BUCKET, updated.oldKey); } catch { /* old object is no longer reachable from the allowlisted slot */ }
+    }
+    return res.json({ data: { version: updated.version, slot: req.params.slot, assetId, url: `/api/branding/assets/${req.params.slot}?v=${encodeURIComponent(assetId)}`, contentType: image.contentType, width: image.width, height: image.height, sizeBytes: image.sizeBytes } });
+  });
+
+  app.delete('/api/admin/branding/:slot', requireRoles('system_administrator'), async (req, res) => {
+    if (!validateBrandingSlot(req.params.slot)) return errorResponse(res, 404, 'BRANDING_SLOT_NOT_FOUND', 'Branding slot not found.');
+    if (!Number.isSafeInteger(req.body?.version) || req.body.version < 1) return errorResponse(res, 400, 'INVALID_VERSION', 'A current branding version is required.');
+    try {
+      const result = await transaction(async (client) => {
+        const setting = await client.query('SELECT version FROM branding_settings WHERE id=1 FOR UPDATE');
+        assertCurrentBrandingVersion(setting.rows[0]?.version || 1, req.body.version, 'reset');
+        const previous = await client.query('DELETE FROM branding_assets WHERE slot=$1 RETURNING storage_key', [req.params.slot]);
+        const saved = await client.query('UPDATE branding_settings SET version=version+1,updated_by=$1,updated_at=NOW() WHERE id=1 RETURNING version', [req.user.id]);
+        await audit(req, 'BRANDING_UPDATED', { slot: req.params.slot, reset: true }, 'branding_asset', req.params.slot, client);
+        return { version: saved.rows[0].version, oldKey: previous.rows[0]?.storage_key || null };
+      });
+      if (result.oldKey && storage?.isConfigured?.()) {
+        try { await storage.remove(process.env.SUPABASE_STORAGE_BUCKET, result.oldKey); } catch { /* reset removes the public reference even if storage cleanup is deferred */ }
+      }
+      return res.json({ data: { version: result.version, slot: req.params.slot, assetId: null, url: null } });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'BRANDING_RESET_FAILED', error.message);
+      throw error;
+    }
+  });
+
+  app.post('/api/auth/guardian-signup/request', authIpLimiter, guardianSignupRequestLimiter, async (req, res) => {
+    const validation = validateGuardianSignup(req.body || {}, { validEmail, validatePassword });
+    if (!validation.valid) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Review the guardian account details and try again.', validation.errors);
+    const signup = validation.value;
+    const passwordHash = await hashPassword(signup.password);
+    const metadata = {
+      name: signup.name,
+      username: signup.username,
+      passwordHash,
+      studentId: signup.studentId,
+      relationship: signup.relationship,
+    };
+    try {
+      const acceptWithoutDelivery = async () => {
+        const challengeId = await createOtpChallenge({ id: null, email: signup.email }, 'guardian_signup', {}, { sendEmail: async () => {}, deferDelivery: true });
+        await audit(req, 'GUARDIAN_SIGNUP_REQUESTED', { eligible: false });
+        return res.status(202).json({ data: guardianSignupAcceptedResponse(challengeId) });
+      };
+      const [existing, invitation, pending] = await Promise.all([
+        query('SELECT id FROM users WHERE LOWER(email)=$1 OR LOWER(username)=$2 LIMIT 1', [signup.email, signup.username]),
+        query("SELECT 1 FROM invitations WHERE LOWER(email)=$1 AND accepted_at IS NULL AND expires_at>NOW() LIMIT 1", [signup.email]),
+        query("SELECT 1 FROM guardian_signup_requests WHERE status='pending_review' AND (LOWER(email)=$1 OR LOWER(username)=$2) LIMIT 1", [signup.email, signup.username]),
+      ]);
+      if (existing.rowCount || invitation.rowCount || pending.rowCount) return await acceptWithoutDelivery();
+      const challengeId = await createOtpChallenge({ id: null, email: signup.email }, 'guardian_signup', metadata, { deferDelivery: true });
+      await audit(req, 'GUARDIAN_SIGNUP_REQUESTED', { eligible: true });
+      return res.status(202).json({ data: guardianSignupAcceptedResponse(challengeId) });
+    } catch (error) {
+      if (error.code === 'OTP_COOLDOWN') return errorResponse(res, 429, error.code, error.message);
+      throw error;
+    }
+  });
+
+  app.post('/api/auth/guardian-signup/verify', authIpLimiter, guardianSignupVerifyLimiter, async (req, res) => {
+    const challengeId = req.body?.challengeId;
+    const code = req.body?.code;
+    if (typeof challengeId !== 'string' || typeof code !== 'string') {
+      return errorResponse(res, 400, 'INVALID_OTP', 'The verification code is invalid or expired.');
+    }
+    let signupRequest;
+    try {
+      signupRequest = await consumeOtp(challengeId, code, 'guardian_signup', {
+        onConsume: async (challenge, client) => {
+          const metadata = challenge.metadata || {};
+          if (!validGuardianSignupMetadata(metadata) || !validEmail(challenge.destination)) {
+            const error = new Error('The verification request is invalid or expired.');
+            error.status = 400;
+            error.code = 'INVALID_OTP';
+            throw error;
+          }
+          const identityLocks = [
+            `guardian-signup:email:${normalizeIdentifier(challenge.destination)}`,
+            `guardian-signup:username:${normalizeIdentifier(metadata.username)}`,
+          ].sort();
+          for (const key of identityLocks) await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [key]);
+          const accountConflict = await client.query(
+            'SELECT id FROM users WHERE LOWER(email)=$1 OR LOWER(username)=$2 FOR UPDATE',
+            [normalizeIdentifier(challenge.destination), normalizeIdentifier(metadata.username)],
+          );
+          const invitationConflict = await client.query(
+            "SELECT 1 FROM invitations WHERE LOWER(email)=$1 AND accepted_at IS NULL AND expires_at>NOW() LIMIT 1",
+            [normalizeIdentifier(challenge.destination)],
+          );
+          const pendingConflict = await client.query(
+            "SELECT id FROM guardian_signup_requests WHERE status='pending_review' AND (LOWER(email)=$1 OR LOWER(username)=$2) FOR UPDATE",
+            [normalizeIdentifier(challenge.destination), normalizeIdentifier(metadata.username)],
+          );
+          if (accountConflict.rowCount || invitationConflict.rowCount || pendingConflict.rowCount) return null;
+          const matches = await client.query(
+            `SELECT id,patient_type,data->>'studentId' AS student_id FROM patients
+             WHERE patient_type='student' AND LOWER(${patientRosterIdentitySql(2)})=$1
+             ORDER BY id FOR UPDATE`,
+            [normalizeIdentifier(metadata.studentId), rosterIdTrimCharacters],
+          );
+          const studentMatch = resolveGuardianStudentMatch(matches.rows, metadata.studentId);
+          if (!studentMatch.valid) {
+            const error = new Error('The student ID could not be matched to exactly one student record. Check the ID with the school clinic and try again.');
+            error.status = 400;
+            error.code = 'STUDENT_ID_NOT_VERIFIED';
+            throw error;
+          }
+          const id = crypto.randomUUID();
+          await client.query(
+            `INSERT INTO guardian_signup_requests(id,name,email,username,password_hash,student_id,relationship)
+             VALUES($1,$2,$3,$4,$5,$6,$7)`,
+            [id, metadata.name, normalizeIdentifier(challenge.destination), normalizeIdentifier(metadata.username), metadata.passwordHash, metadata.studentId.trim(), metadata.relationship],
+          );
+          await client.query('UPDATE otp_challenges SET metadata=\'{}\'::jsonb WHERE id=$1', [challenge.id]);
+          await audit(req, 'GUARDIAN_SIGNUP_EMAIL_VERIFIED', {}, 'guardian_signup_request', id, client);
+          return { id };
+        },
+      });
+    } catch (error) {
+      if (error.code === '23505') return errorResponse(res, 409, 'SIGNUP_NOT_AVAILABLE', 'This signup request could not be submitted. Sign in or use the invitation already sent to your email.');
+      if (error.status) return errorResponse(res, error.status, error.code || 'SIGNUP_FAILED', error.message);
+      throw error;
+    }
+    if (!signupRequest) return errorResponse(res, 400, 'INVALID_OTP', 'The verification code is invalid or expired.');
+    return res.json({ data: { pendingReview: true, message: 'Your email is verified. Your guardian account request is awaiting administrator review. You can sign in after approval.' } });
+  });
+
+  app.get('/api/me/dashboard-preferences', requireRoles('school_nurse', 'system_administrator'), async (req, res) => {
+    const result = await query('SELECT dashboard,updated_at FROM user_preferences WHERE user_id=$1', [req.user.id]);
+    const dashboard = normalizeDashboardPreferences(req.user.role, result.rows[0]?.dashboard);
+    return res.json({ data: { dashboard, updatedAt: result.rows[0]?.updated_at || null } });
+  });
+
+  app.put('/api/me/dashboard-preferences', requireRoles('school_nurse', 'system_administrator'), async (req, res) => {
+    const validation = validateDashboardPreferences(req.user.role, req.body?.dashboard);
+    if (!validation.valid) return errorResponse(res, 400, 'INVALID_DASHBOARD_PREFERENCES', validation.message);
+    let saved;
+    await transaction(async (client) => {
+      const result = await client.query(
+        `INSERT INTO user_preferences(user_id,dashboard,updated_at)
+         VALUES($1,$2::jsonb,NOW())
+         ON CONFLICT(user_id) DO UPDATE SET dashboard=EXCLUDED.dashboard,updated_at=NOW()
+         RETURNING dashboard,updated_at`,
+        [req.user.id, JSON.stringify(validation.value)],
+      );
+      saved = result.rows[0];
+      await audit(req, 'DASHBOARD_PREFERENCES_UPDATED', { visibleCount: validation.value.widgets.filter((widget) => widget.visible).length }, 'user', req.user.id, client);
+    });
+    return res.json({ data: { dashboard: saved.dashboard, updatedAt: saved.updated_at } });
+  });
 
   app.get('/api/auth/sessions', requireAuth, async (req, res) => {
     const sessions = await listUserSessions(req.user.id, currentSessionTokenHash(req));
@@ -419,8 +781,7 @@ export function createApp() {
       return errorResponse(res, 400, 'VALIDATION_ERROR', 'Email/username is invalid.');
     }
     const user = await findUser(identifier);
-    let challengeId = crypto.randomUUID();
-    if (user?.status === 'active' && user.role !== 'student') challengeId = await createOtpChallenge(user, 'password_reset');
+    const challengeId = await passwordResetChallenge(user);
     await audit(req, 'PASSWORD_RESET_REQUESTED', { accountFound: Boolean(user) });
     return res.json({ data: { challengeId, message: 'If the account exists, a reset code was sent.' } });
   });
@@ -510,6 +871,184 @@ export function createApp() {
   });
 
   app.get('/api/admin/users', requireRoles('system_administrator'), async (_req, res) => res.json({ data: { users: await listUsers() } }));
+
+  const sendGuardianSignupDecisionEmail = async (requestId, actorUserId) => {
+    const claim = await query(
+      `UPDATE guardian_signup_requests
+       SET decision_email_attempted_at=NOW()
+       WHERE id=$1 AND decision_email_status='queued'
+         AND (decision_email_attempted_at IS NULL OR decision_email_attempted_at<NOW()-INTERVAL '5 minutes')
+       RETURNING email,name,status`,
+      [requestId],
+    );
+    if (!claim.rowCount) {
+      const current = await query('SELECT decision_email_status FROM guardian_signup_requests WHERE id=$1', [requestId]);
+      return current.rows[0]?.decision_email_status || 'not_sent';
+    }
+    const recipient = claim.rows[0];
+    const message = guardianSignupDecisionEmail(recipient.status, recipient.name);
+    try {
+      await sendEmail({ to: recipient.email, ...message });
+      await query("UPDATE guardian_signup_requests SET decision_email_status='sent',decision_email_error_code=NULL,updated_at=NOW() WHERE id=$1", [requestId]);
+      await query("INSERT INTO audit_logs(actor_user_id,event,subject_type,subject_id,details) VALUES($1,'GUARDIAN_SIGNUP_DECISION_EMAIL', 'guardian_signup_request',$2,$3::jsonb)", [actorUserId, requestId, JSON.stringify({ status: 'sent' })]);
+      return 'sent';
+    } catch (error) {
+      const errorCode = /^[A-Z0-9_-]{1,60}$/.test(String(error?.code || '')) ? String(error.code) : 'delivery_error';
+      await query("UPDATE guardian_signup_requests SET decision_email_status='failed',decision_email_error_code=$2,updated_at=NOW() WHERE id=$1", [requestId, errorCode]);
+      await query("INSERT INTO audit_logs(actor_user_id,event,subject_type,subject_id,details) VALUES($1,'GUARDIAN_SIGNUP_DECISION_EMAIL', 'guardian_signup_request',$2,$3::jsonb)", [actorUserId, requestId, JSON.stringify({ status: 'failed' })]);
+      return 'failed';
+    }
+  };
+
+  app.get('/api/admin/guardian-signup-requests', requireRoles('system_administrator'), async (req, res) => {
+    const validation = validateGuardianSignupPageQuery(req.query);
+    if (!validation.valid) return errorResponse(res, 400, 'INVALID_REQUEST_FILTER', validation.message);
+    const { status, order, limit, page, search } = validation.value;
+    const where = [];
+    const values = [];
+    if (status !== 'all') { values.push(status); where.push(`status=$${values.length}`); }
+    if (search) {
+      values.push(`%${search}%`);
+      where.push(`(name ILIKE $${values.length} OR email ILIKE $${values.length} OR username ILIKE $${values.length} OR student_id ILIKE $${values.length})`);
+    }
+    const filterSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const count = await query(`SELECT COUNT(*)::int AS total FROM guardian_signup_requests ${filterSql}`, values);
+    const total = count.rows[0]?.total || 0;
+    const direction = order === 'oldest' ? 'ASC' : 'DESC';
+    const resultValues = [...values, limit, (page - 1) * limit];
+    const requests = await query(
+      `SELECT id,name,email,username,student_id,relationship,status,decision_reason,decision_email_status,created_at,decided_at
+       FROM guardian_signup_requests ${filterSql}
+       ORDER BY created_at ${direction},id ${direction} LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      resultValues,
+    );
+    return res.json({ data: {
+      requests: requests.rows.map(publicGuardianSignupRequest),
+      page, pageSize: limit, total, pageCount: Math.max(1, Math.ceil(total / limit)),
+    } });
+  });
+
+  app.patch('/api/admin/guardian-signup-requests/:id/approve', requireRoles('system_administrator'), async (req, res) => {
+    if (!validUuid(req.params.id)) return errorResponse(res, 400, 'INVALID_REQUEST_ID', 'A valid signup request id is required.');
+    if (req.body?.verifiedRelationship !== true) return errorResponse(res, 400, 'RELATIONSHIP_VERIFICATION_REQUIRED', 'Confirm that you verified the relationship against school records.');
+    let request;
+    try {
+      request = await transaction(async (client) => {
+        const selected = await client.query('SELECT * FROM guardian_signup_requests WHERE id=$1 FOR UPDATE', [req.params.id]);
+        if (!selected.rowCount) {
+          const error = new Error('Guardian signup request not found.');
+          error.status = 404;
+          error.code = 'NOT_FOUND';
+          throw error;
+        }
+        const row = selected.rows[0];
+        if (row.status === 'approved') return { id: row.id, status: row.status, email: row.email, name: row.name };
+        if (row.status !== 'pending_review' || !row.password_hash) {
+          const error = new Error('This signup request is no longer awaiting review.');
+          error.status = 409;
+          error.code = 'REQUEST_ALREADY_DECIDED';
+          throw error;
+        }
+        const locks = [
+          `guardian-signup:email:${normalizeIdentifier(row.email)}`,
+          `guardian-signup:username:${normalizeIdentifier(row.username)}`,
+          `guardian-signup:student:${normalizeIdentifier(row.student_id)}`,
+        ].sort();
+        for (const key of locks) await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [key]);
+        const accounts = await client.query('SELECT id FROM users WHERE LOWER(email)=$1 OR LOWER(username)=$2 FOR UPDATE', [normalizeIdentifier(row.email), normalizeIdentifier(row.username)]);
+        const invitations = await client.query("SELECT id FROM invitations WHERE LOWER(email)=$1 AND accepted_at IS NULL AND expires_at>NOW() FOR UPDATE", [normalizeIdentifier(row.email)]);
+        if (accounts.rowCount || invitations.rowCount) {
+          const error = new Error('An account or administrator invitation now uses this email or username. Resolve that account before approving this request.');
+          error.status = 409;
+          error.code = 'ACCOUNT_CONFLICT';
+          throw error;
+        }
+        const students = await client.query(
+          `SELECT id,patient_type,data->>'studentId' AS student_id FROM patients
+           WHERE patient_type='student' AND LOWER(${patientRosterIdentitySql(2)})=$1 ORDER BY id FOR UPDATE`,
+          [normalizeIdentifier(row.student_id), rosterIdTrimCharacters],
+        );
+        const match = resolveGuardianStudentMatch(students.rows, row.student_id);
+        if (!match.valid) {
+          const error = new Error('The submitted student ID no longer matches exactly one student record. Reject this request with a reason so the applicant can correct it.');
+          error.status = 409;
+          error.code = 'STUDENT_MATCH_REQUIRED';
+          throw error;
+        }
+        const userId = crypto.randomUUID();
+        await client.query(
+          `INSERT INTO users(id,username,email,password_hash,name,role,status,mfa_enabled)
+           VALUES($1,$2,$3,$4,$5,'guardian','active',TRUE)`,
+          [userId, normalizeIdentifier(row.username), normalizeIdentifier(row.email), row.password_hash, row.name],
+        );
+        await client.query('INSERT INTO guardian_patient_links(guardian_user_id,patient_id,relationship) VALUES($1,$2,$3)', [userId, match.patient.id, row.relationship]);
+        await client.query(
+          `UPDATE guardian_signup_requests
+           SET status='approved',password_hash=NULL,relationship_verified=TRUE,decision_by=$2,decided_at=NOW(),decision_reason='',decision_email_status='queued',decision_email_attempted_at=NULL,decision_email_error_code=NULL,updated_at=NOW()
+           WHERE id=$1`,
+          [row.id, req.user.id],
+        );
+        await audit(req, 'GUARDIAN_SIGNUP_APPROVED', {}, 'guardian_signup_request', row.id, client);
+        return { id: row.id, status: 'approved', email: row.email, name: row.name, createdUserId: userId };
+      });
+    } catch (error) {
+      if (error.code === '23505') return errorResponse(res, 409, 'ACCOUNT_CONFLICT', 'An account now uses this email or username. Resolve that account before approving this request.');
+      if (error.status) return errorResponse(res, error.status, error.code || 'REQUEST_APPROVAL_FAILED', error.message);
+      throw error;
+    }
+    const decisionEmailStatus = await sendGuardianSignupDecisionEmail(request.id, req.user.id);
+    return res.json({ data: { request: { id: request.id, status: request.status, decisionEmailStatus } } });
+  });
+
+  app.patch('/api/admin/guardian-signup-requests/:id/reject', requireRoles('system_administrator'), async (req, res) => {
+    if (!validUuid(req.params.id)) return errorResponse(res, 400, 'INVALID_REQUEST_ID', 'A valid signup request id is required.');
+    const reason = validateGuardianSignupDecisionReason(req.body?.reason);
+    if (!reason.valid) return errorResponse(res, 400, 'INVALID_REASON', 'Enter a rejection reason from 1 to 500 characters.');
+    let request;
+    try {
+      request = await transaction(async (client) => {
+        const selected = await client.query('SELECT * FROM guardian_signup_requests WHERE id=$1 FOR UPDATE', [req.params.id]);
+        if (!selected.rowCount) {
+          const error = new Error('Guardian signup request not found.');
+          error.status = 404;
+          error.code = 'NOT_FOUND';
+          throw error;
+        }
+        const row = selected.rows[0];
+        if (row.status === 'rejected') return { id: row.id, status: row.status };
+        if (row.status !== 'pending_review') {
+          const error = new Error('This signup request is no longer awaiting review.');
+          error.status = 409;
+          error.code = 'REQUEST_ALREADY_DECIDED';
+          throw error;
+        }
+        await client.query(
+          `UPDATE guardian_signup_requests
+           SET status='rejected',password_hash=NULL,relationship_verified=FALSE,decision_by=$2,decided_at=NOW(),decision_reason=$3,decision_email_status='queued',decision_email_attempted_at=NULL,decision_email_error_code=NULL,updated_at=NOW()
+           WHERE id=$1`,
+          [row.id, req.user.id, reason.value],
+        );
+        await audit(req, 'GUARDIAN_SIGNUP_REJECTED', {}, 'guardian_signup_request', row.id, client);
+        return { id: row.id, status: 'rejected' };
+      });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'REQUEST_REJECTION_FAILED', error.message);
+      throw error;
+    }
+    const decisionEmailStatus = await sendGuardianSignupDecisionEmail(request.id, req.user.id);
+    return res.json({ data: { request: { id: request.id, status: request.status, decisionEmailStatus } } });
+  });
+
+  app.post('/api/admin/guardian-signup-requests/:id/retry-notification', requireRoles('system_administrator'), async (req, res) => {
+    if (!validUuid(req.params.id)) return errorResponse(res, 400, 'INVALID_REQUEST_ID', 'A valid signup request id is required.');
+    const request = await query("SELECT id,status,decision_email_status FROM guardian_signup_requests WHERE id=$1", [req.params.id]);
+    if (!request.rowCount) return errorResponse(res, 404, 'NOT_FOUND', 'Guardian signup request not found.');
+    if (!['approved', 'rejected'].includes(request.rows[0].status)) return errorResponse(res, 409, 'REQUEST_PENDING', 'Decide this request before sending a notification.');
+    if (request.rows[0].decision_email_status === 'sent') return errorResponse(res, 409, 'ALREADY_SENT', 'The decision notification was already sent.');
+    await query("UPDATE guardian_signup_requests SET decision_email_status='queued',decision_email_attempted_at=NULL,decision_email_error_code=NULL,updated_at=NOW() WHERE id=$1", [req.params.id]);
+    const decisionEmailStatus = await sendGuardianSignupDecisionEmail(req.params.id, req.user.id);
+    return res.json({ data: { id: req.params.id, decisionEmailStatus } });
+  });
 
   app.patch('/api/admin/users/:id/patient-link', requireRoles('system_administrator'), async (req, res) => {
     if (!validUuid(req.params.id)) return errorResponse(res, 400, 'INVALID_USER_ID', 'A valid user id is required.');
@@ -617,12 +1156,20 @@ export function createApp() {
   });
 
   app.get('/api/admin/audit-logs', requireRoles('system_administrator'), async (req, res) => {
-    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 100)));
-    const result = await query('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT $1', [limit]);
-    return res.json({ data: { logs: sanitizeAuditLogs(result.rows) } });
+    const validation = validateAuditPageQuery(req.query);
+    if (!validation.valid) return errorResponse(res, 400, 'INVALID_AUDIT_QUERY', validation.message);
+    const pageQuery = buildAuditPageQuery(validation.value);
+    const result = await query(pageQuery.sql, pageQuery.params);
+    const page = formatAuditPage(result.rows, { ...validation.value, reverse: pageQuery.reverse });
+    const logs = sanitizeAuditLogs(page.logs.map(({ cursor_created_at, ...entry }) => entry));
+    return res.json({ data: { ...page, logs } });
   });
 
   app.get('/api/data', requireAuth, async (req, res) => res.json({ data: await loadClinicData(req.user) }));
+
+  app.get('/api/nurse/dashboard', requireRoles('school_nurse'), async (req, res) => {
+    return res.json({ data: await loadNurseDashboardData() });
+  });
 
   app.patch('/api/admin/settings/clinic', requireRoles('system_administrator'), async (req, res) => {
     const fields = {
@@ -1680,6 +2227,7 @@ export function createApp() {
                   OR EXISTS(SELECT 1 FROM screenings WHERE patient_id=p.id)
                   OR EXISTS(SELECT 1 FROM immunizations WHERE patient_id=p.id)
                   OR EXISTS(SELECT 1 FROM incidents WHERE patient_id=p.id)
+                  OR EXISTS(SELECT 1 FROM student_incidents WHERE patient_id=p.id)
                   OR EXISTS(SELECT 1 FROM appointments WHERE patient_id=p.id)
                   OR EXISTS(SELECT 1 FROM queue_entries WHERE patient_id=p.id) AS has_clinic_activity
                FROM patients p WHERE p.id=$1 FOR UPDATE`,
@@ -1725,21 +2273,53 @@ export function createApp() {
   app.get('/api/reports', requireRoles(...reportReadRoles), async (req, res) => {
     const end = String(req.query.end || new Date().toISOString().slice(0, 10));
     const start = String(req.query.start || end);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || Number.isNaN(Date.parse(`${start}T00:00:00Z`)) || Number.isNaN(Date.parse(`${end}T00:00:00Z`)) || start > end || (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) > 366 * 86400000) return errorResponse(res, 400, 'INVALID_PERIOD', 'Provide a valid report date range of one year or less.');
+    if (!isValidAppointmentDate(start) || !isValidAppointmentDate(end) || start > end || (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) > 366 * 86400000) return errorResponse(res, 400, 'INVALID_PERIOD', 'Provide a valid report date range of one year or less.');
     return res.json({ data: visibleReport(buildClinicReport(await loadClinicData(req.user, { includeClinical: true }), start, end), req.user) });
+  });
+
+  app.get('/api/reports/patients/:patientId/summary', requireRoles('school_nurse'), async (req, res) => {
+    const { start, end } = req.query;
+    const range = validateSummaryRange(String(start || ''), String(end || ''));
+    if (!range.valid) return errorResponse(res, 400, 'INVALID_PERIOD', 'Provide a valid report date range of one year or less.');
+    const patientResult = await query('SELECT id,patient_type,data FROM patients WHERE id=$1', [String(req.params.patientId || '')]);
+    const patient = patientResult.rows[0];
+    if (!patient) return errorResponse(res, 404, 'PATIENT_NOT_FOUND', 'The selected patient record is unavailable.');
+    const visitsResult = await query(
+      `SELECT v.id,
+         jsonb_build_object(
+           'date',COALESCE(NULLIF(v.data->>'date',''),NULLIF(LEFT(v.data->>'createdAt',10),'')),
+           'time',v.data->'time','type',v.data->'type','chiefComplaint',v.data->'chiefComplaint',
+           'treatment',v.data->'treatment','disposition',v.data->'disposition',
+           'followUp',v.data->'followUp','followUpDate',v.data->'followUpDate',
+           'nurseName',COALESCE(NULLIF(v.data->>'nurseName',''),u.name),
+           'summaryApprovedBy',CASE WHEN NULLIF(v.data->>'summaryApprovedBy','') IS NOT NULL THEN 'approved' ELSE NULL END,
+           'consultationSummary',CASE WHEN NULLIF(v.data->>'summaryApprovedBy','') IS NOT NULL THEN v.data->'consultationSummary' ELSE NULL END
+         ) AS data
+       FROM visits v LEFT JOIN users u ON u.id=v.created_by
+       WHERE v.patient_id=$1
+         AND COALESCE(NULLIF(v.data->>'date',''),NULLIF(LEFT(v.data->>'createdAt',10),'')) >= $2
+         AND COALESCE(NULLIF(v.data->>'date',''),NULLIF(LEFT(v.data->>'createdAt',10),'')) <= $3
+       ORDER BY COALESCE(NULLIF(v.data->>'date',''),NULLIF(LEFT(v.data->>'createdAt',10),'')) DESC,
+         COALESCE(NULLIF(v.data->>'time',''),'') DESC,v.id DESC`,
+      [patient.id, range.start, range.end],
+    );
+    const summary = patientSummaryForRange({ patient, visits: visitsResult.rows, start: range.start, end: range.end });
+    return res.json({ data: summary });
   });
 
   app.get('/api/appointments/slots', requireAuth, async (req, res) => {
     const date = String(req.query.date || '');
     if (!isValidAppointmentDate(date)) return errorResponse(res, 400, 'INVALID_DATE', 'Provide a real date in YYYY-MM-DD format.');
-    const [settingsResult, existing, visits] = await Promise.all([
+    const [settingsResult, existing, blocked, visits] = await Promise.all([
       query('SELECT data FROM clinic_settings WHERE id=1'),
       query("SELECT starts_at FROM appointments WHERE (starts_at AT TIME ZONE 'Asia/Manila')::date=$1::date AND status NOT IN ('Cancelled','Rejected')", [date]),
+      query('SELECT starts_at,ends_at,reason FROM appointment_unavailable_periods WHERE clinic_date=$1::date', [date]),
       query("SELECT created_at FROM visits WHERE created_at >= NOW()-INTERVAL '90 days' AND created_at < NOW() AND data->>'historicalImport' IS DISTINCT FROM 'true'"),
     ]);
     const schedule = appointmentSettings(settingsResult.rows[0]?.data || {});
     const now = new Date();
-    const freeSlots = generateAppointmentSlots(date, existing.rows.map((row) => row.starts_at), { ...schedule, now });
+    const freeSlots = generateAppointmentSlots(date, existing.rows.map((row) => row.starts_at), { ...schedule, now })
+      .filter((slot) => !unavailablePeriodsForSlot(slot.startsAt, schedule.durationMinutes, blocked.rows));
     const suggestions = rankAppointmentSlots(date, freeSlots, visits.rows.map((row) => row.created_at), schedule);
     const slots = suggestions.slots.map(({ local, startsAt, suggestionRank }) => ({ local, startsAt, suggestionRank }));
     const traffic = {
@@ -1749,9 +2329,76 @@ export function createApp() {
     return res.json({ data: { date, slots, traffic, schedule } });
   });
 
+  app.get('/api/nurse/appointment-unavailable-periods', requireRoles(...clinicalWriteRoles), async (req, res) => {
+    const start = String(req.query.start || '');
+    const end = String(req.query.end || '');
+    if ((start && !isValidAppointmentDate(start)) || (end && !isValidAppointmentDate(end)) || (start && end && start > end)) {
+      return errorResponse(res, 400, 'INVALID_PERIOD', 'Provide a valid Manila date range.');
+    }
+    const result = await query(
+      `SELECT id,to_char(clinic_date,'YYYY-MM-DD') AS date,starts_at,ends_at,reason,created_at
+       FROM appointment_unavailable_periods
+       WHERE ($1::date IS NULL OR clinic_date >= $1::date) AND ($2::date IS NULL OR clinic_date <= $2::date)
+       ORDER BY clinic_date,starts_at,id LIMIT 500`,
+      [start || null, end || null],
+    );
+    return res.json({ data: { periods: result.rows } });
+  });
+
+  app.post('/api/nurse/appointment-unavailable-periods', requireRoles(...clinicalWriteRoles), async (req, res) => {
+    const validation = validateUnavailablePeriod(req.body);
+    if (!validation.valid) return errorResponse(res, 400, validation.code, validation.message);
+    const { date, startsAt, endsAt, reason } = validation.value;
+    const id = crypto.randomUUID();
+    try {
+      const conflicts = await transaction(async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`appointment-day:${date}`]);
+        const [appointments, settingsResult] = await Promise.all([
+          client.query(
+            `SELECT a.id,a.patient_id,a.starts_at,a.status,p.data->>'name' AS patient_name,
+                    p.data->>'studentId' AS student_id,p.data->>'facultyId' AS faculty_id
+             FROM appointments a JOIN patients p ON p.id=a.patient_id
+             WHERE (a.starts_at AT TIME ZONE 'Asia/Manila')::date=$1::date
+               AND a.status NOT IN ('Cancelled','Rejected')`, [date],
+          ),
+          client.query('SELECT data FROM clinic_settings WHERE id=1'),
+        ]);
+        const duration = appointmentSettings(settingsResult.rows[0]?.data || {}).durationMinutes;
+        const overlaps = appointmentRowsOverlappingPeriod(appointments.rows, startsAt, endsAt, duration);
+        if (overlaps.length) return overlaps.map((row) => ({ id: row.id, patientId: row.patient_id, patientName: row.patient_name || '', studentId: row.student_id || row.faculty_id || '', startsAt: row.starts_at, status: normalizeAppointmentStatus(row.status) }));
+        await client.query(
+          'INSERT INTO appointment_unavailable_periods(id,clinic_date,starts_at,ends_at,reason,created_by) VALUES($1,$2::date,$3,$4,$5,$6)',
+          [id, date, startsAt, endsAt, reason, req.user.id],
+        );
+        await audit(req, 'APPOINTMENT_UNAVAILABLE_PERIOD_CREATED', { date, fullDay: validation.value.fullDay }, 'appointment_unavailable_period', id, client);
+        return [];
+      });
+      if (conflicts.length) return res.status(409).json({ error: { code: 'APPOINTMENT_CONFLICT', message: 'Resolve these appointments before blocking the selected time.', conflicts } });
+    } catch (error) {
+      if (error.code === '23505') return errorResponse(res, 409, 'PERIOD_CONFLICT', 'An unavailable period already exists for this request.');
+      throw error;
+    }
+    return res.status(201).json({ data: { id, date, startsAt, endsAt, reason } });
+  });
+
+  app.delete('/api/nurse/appointment-unavailable-periods/:id', requireRoles(...clinicalWriteRoles), async (req, res) => {
+    if (!validUuid(req.params.id)) return errorResponse(res, 400, 'INVALID_PERIOD', 'The unavailable period identifier is invalid.');
+    const deleted = await transaction(async (client) => {
+      const selected = await client.query('SELECT id,clinic_date FROM appointment_unavailable_periods WHERE id=$1 FOR UPDATE', [req.params.id]);
+      if (!selected.rowCount) return null;
+      const date = selected.rows[0].clinic_date.toISOString?.().slice(0, 10) || String(selected.rows[0].clinic_date).slice(0, 10);
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`appointment-day:${date}`]);
+      const result = await client.query('DELETE FROM appointment_unavailable_periods WHERE id=$1 RETURNING id', [req.params.id]);
+      await audit(req, 'APPOINTMENT_UNAVAILABLE_PERIOD_REMOVED', { date }, 'appointment_unavailable_period', req.params.id, client);
+      return result.rows[0] || null;
+    });
+    if (!deleted) return errorResponse(res, 404, 'NOT_FOUND', 'Unavailable period not found.');
+    return res.json({ data: { success: true } });
+  });
+
   app.post('/api/reports/snapshots', requireRoles(...reportReadRoles), async (req, res) => {
     const { start, end, type = 'custom' } = req.body || {};
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(start || '')) || !/^\d{4}-\d{2}-\d{2}$/.test(String(end || '')) || Number.isNaN(Date.parse(`${start}T00:00:00Z`)) || Number.isNaN(Date.parse(`${end}T00:00:00Z`)) || start > end || (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) > 366 * 86400000) {
+    if (!isValidAppointmentDate(start) || !isValidAppointmentDate(end) || start > end || (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) > 366 * 86400000) {
       return errorResponse(res, 400, 'INVALID_PERIOD', 'Provide a valid report date range.');
     }
     if (!['daily', 'weekly', 'monthly', 'custom'].includes(type)) return errorResponse(res, 400, 'INVALID_REPORT_TYPE', 'Invalid report type.');
@@ -1766,7 +2413,7 @@ export function createApp() {
   });
 
   app.get('/api/reports/snapshots', requireRoles(...reportReadRoles), async (req, res) => {
-    const result = await query('SELECT id,report_type,period_start,period_end,source,data,created_at FROM report_snapshots ORDER BY created_at DESC LIMIT 100');
+    const result = await query("SELECT id,report_type,to_char(period_start, 'YYYY-MM-DD') AS period_start,to_char(period_end, 'YYYY-MM-DD') AS period_end,source,data,created_at FROM report_snapshots ORDER BY created_at DESC LIMIT 100");
     return res.json({ data: { snapshots: result.rows.map((snapshot) => ({ ...snapshot, data: visibleReport(reportSnapshotForStorage(snapshot.data || {}), req.user) })) } });
   });
 
@@ -1795,9 +2442,13 @@ export function createApp() {
     const id = crypto.randomUUID();
     try {
       await clinicDataTransaction(async (client) => {
-        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [startsAt.toISOString()]);
-        const conflict = await client.query("SELECT 1 FROM appointments WHERE starts_at=$1 AND status NOT IN ('Cancelled','Rejected') LIMIT 1", [startsAt]);
-        if (conflict.rowCount) {
+        for (const key of sortedManilaDayLockKeys(localDate)) await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
+        const [appointments, periods] = await Promise.all([
+          client.query("SELECT starts_at,status FROM appointments WHERE (starts_at AT TIME ZONE 'Asia/Manila')::date=$1::date AND status NOT IN ('Cancelled','Rejected')", [localDate]),
+          client.query('SELECT starts_at,ends_at FROM appointment_unavailable_periods WHERE clinic_date=$1::date', [localDate]),
+        ]);
+        const overlaps = appointmentRowsOverlappingPeriod(appointments.rows, startsAt, new Date(startsAt.getTime() + schedule.durationMinutes * 60_000), schedule.durationMinutes);
+        if (overlaps.length || unavailablePeriodsForSlot(startsAt, schedule.durationMinutes, periods.rows)) {
           const error = new Error('That appointment time is no longer available.');
           error.status = 409;
           throw error;
@@ -1869,10 +2520,11 @@ export function createApp() {
           error.code = 'PAST_APPOINTMENT';
           throw error;
         }
+        const settingsResult = await client.query('SELECT data FROM clinic_settings WHERE id=1');
+        const schedule = appointmentSettings(settingsResult.rows[0]?.data || {});
+        const localDate = startsAt ? clinicCalendarDate(startsAt) : '';
+        const oldLocalDate = currentStartsAt ? clinicCalendarDate(clinicDateTime(currentStartsAt)) : '';
         if (hasReschedule) {
-          const settingsResult = await client.query('SELECT data FROM clinic_settings WHERE id=1');
-          const schedule = appointmentSettings(settingsResult.rows[0]?.data || {});
-          const localDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(startsAt);
           if (!generateAppointmentSlots(localDate, [], schedule).some((slot) => slot.startsAt === startsAt.toISOString())) {
             const error = new Error('Choose an available weekday slot during clinic hours.');
             error.status = 400;
@@ -1880,23 +2532,39 @@ export function createApp() {
             throw error;
           }
         }
+        for (const key of sortedManilaDayLockKeys(oldLocalDate, localDate)) await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
+        const decisionReason = String(req.body?.decisionReason || '').trim();
+        if (['Cancelled', 'Rejected'].includes(status) && status !== currentStatus && (!decisionReason || decisionReason.length > 500)) {
+          const error = new Error('Enter a decision reason from 1 to 500 characters.');
+          error.status = 400;
+          error.code = 'DECISION_REASON_REQUIRED';
+          throw error;
+        }
         const record = { ...row.data, startsAt: startsAt?.toISOString() || null, status };
-        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [startsAt?.toISOString() || `appointment:${req.params.id}`]);
+        if (['Cancelled', 'Rejected'].includes(status) && decisionReason) record.decisionReason = decisionReason;
         if (!['Cancelled', 'Rejected'].includes(status)) {
-          const conflict = await client.query(
-            "SELECT 1 FROM appointments WHERE starts_at=$1 AND id<>$2 AND status NOT IN ('Cancelled','Rejected') LIMIT 1",
-            [startsAt, req.params.id],
-          );
-          if (conflict.rowCount) {
+          const [appointments, periods] = await Promise.all([
+            client.query("SELECT starts_at,status FROM appointments WHERE (starts_at AT TIME ZONE 'Asia/Manila')::date=$1::date AND id<>$2 AND status NOT IN ('Cancelled','Rejected')", [localDate, req.params.id]),
+            client.query('SELECT starts_at,ends_at FROM appointment_unavailable_periods WHERE clinic_date=$1::date', [localDate]),
+          ]);
+          const overlaps = appointmentRowsOverlappingPeriod(appointments.rows, startsAt, new Date(startsAt.getTime() + schedule.durationMinutes * 60_000), schedule.durationMinutes);
+          if (overlaps.length || unavailablePeriodsForSlot(startsAt, schedule.durationMinutes, periods.rows)) {
             const error = new Error('That appointment time is no longer available.');
             error.status = 409;
             error.code = 'APPOINTMENT_CONFLICT';
             throw error;
           }
         }
-        await client.query('UPDATE appointments SET starts_at=$1,status=$2,data=$3::jsonb,updated_at=NOW() WHERE id=$4', [startsAt, status, JSON.stringify(record), req.params.id]);
+        await client.query(
+          `UPDATE appointments SET starts_at=$1,status=$2,data=$3::jsonb,updated_at=NOW(),
+             decision_reason=CASE WHEN $4 THEN $5 ELSE decision_reason END,
+             decided_by=CASE WHEN $4 THEN $6 ELSE decided_by END,
+             decided_at=CASE WHEN $4 THEN NOW() ELSE decided_at END
+           WHERE id=$7`,
+          [startsAt, status, JSON.stringify(record), ['Cancelled', 'Rejected'].includes(status) && status !== currentStatus, decisionReason, req.user.id, req.params.id],
+        );
         await audit(req, 'APPOINTMENT_UPDATED', { status, startsAt: startsAt?.toISOString() || null }, 'appointment', req.params.id, client);
-        return { appointment: record, patientId: row.patient_id, startsAt, status };
+        return { appointment: record, patientId: row.patient_id, startsAt, status, decisionReason: record.decisionReason || '' };
       });
     } catch (error) {
       if (error.status) return errorResponse(res, error.status, error.code || 'APPOINTMENT_UPDATE_FAILED', error.message);
@@ -1905,10 +2573,358 @@ export function createApp() {
     await notifyLinkedUsers(updated.patientId, {
       type: 'appointment',
       subject: 'Clinic appointment updated',
-      body: `Your clinic appointment is now ${updated.status.toLowerCase()}${updated.startsAt ? ` for ${updated.startsAt.toLocaleString('en-PH', { timeZone: 'Asia/Manila' })}` : ''}.`,
+      body: `Your clinic appointment is now ${updated.status.toLowerCase()}${updated.startsAt ? ` for ${updated.startsAt.toLocaleString('en-PH', { timeZone: 'Asia/Manila' })}` : ''}.${updated.decisionReason ? ` Reason: ${updated.decisionReason}` : ''}`,
       dedupeKey: `appointment-update:${req.params.id}:${updated.status}:${updated.startsAt?.toISOString() || 'no-time'}`,
     });
     return res.json({ data: { appointment: updated.appointment } });
+  });
+
+  app.get('/api/incidents', requireRoles('guardian', ...clinicalWriteRoles), async (req, res) => {
+    const start = String(req.query.start || '');
+    const end = String(req.query.end || '');
+    if ((start && !isValidAppointmentDate(start)) || (end && !isValidAppointmentDate(end)) || (start && end && start > end)) return errorResponse(res, 400, 'INVALID_PERIOD', 'Provide a valid incident date range.');
+    const result = await query(
+      `SELECT i.*,to_char(i.incident_date,'YYYY-MM-DD') AS display_date,
+         to_char(i.incident_time,'HH24:MI') AS display_time,p.data->>'name' AS patient_name,
+         COALESCE(p.data->>'studentId',p.data->>'facultyId','') AS school_id,
+         c.guardian_user_id,c.status AS consent_status,c.notice_version,c.updated_at AS consent_updated_at,
+         CASE WHEN c.guardian_user_id=$2 THEN true ELSE false END AS is_consent_owner
+       FROM student_incidents i JOIN patients p ON p.id=i.patient_id
+       LEFT JOIN incident_photo_consents c ON c.incident_id=i.id
+       WHERE p.patient_type='student'
+         AND ($1='school_nurse' OR EXISTS(SELECT 1 FROM guardian_patient_links l WHERE l.patient_id=i.patient_id AND l.guardian_user_id=$2))
+         AND ($3::date IS NULL OR i.incident_date >= $3::date) AND ($4::date IS NULL OR i.incident_date <= $4::date)
+       ORDER BY i.incident_date DESC,i.incident_time DESC,i.id DESC LIMIT 200`,
+      [req.user.role, req.user.id, start || null, end || null],
+    );
+    const photosEnabled = incidentPhotosEnabled();
+    const incidents = [];
+    for (const row of result.rows) {
+      const consent = row.consent_status ? { status: row.consent_status, guardian_user_id: row.guardian_user_id, notice_version: row.notice_version, updated_at: row.consent_updated_at, granted_event_id: null } : null;
+      let photos = [];
+      if (photosEnabled && consent?.status === 'granted' && (req.user.role === 'school_nurse' || row.is_consent_owner)) {
+        const photoRows = await query(
+          `SELECT p.id,p.content_type,p.size_bytes,p.width,p.height,p.created_at,p.expires_at,p.consent_event_id,
+             p.deletion_requested_at,p.deleted_at,c.granted_event_id,c.status AS consent_status
+           FROM incident_photos p JOIN incident_photo_consents c ON c.incident_id=p.incident_id
+           WHERE p.incident_id=$1 AND c.status='granted' AND p.consent_event_id=c.granted_event_id
+             AND p.deletion_requested_at IS NULL AND p.deleted_at IS NULL AND p.expires_at>NOW()
+           ORDER BY p.created_at,p.id`, [row.id],
+        );
+        photos = photoRows.rows.filter((photo) => incidentPhotoReadable({ enabled: photosEnabled, consent: { status: photo.consent_status, granted_event_id: photo.granted_event_id }, photo })).map((photo) => ({ id: photo.id, contentType: photo.content_type, sizeBytes: Number(photo.size_bytes), createdAt: photo.created_at, expiresAt: photo.expires_at }));
+      }
+      const incident = projectIncident({ ...row, incident_date: row.display_date, incident_time: row.display_time }, { consent: row.is_consent_owner || req.user.role === 'school_nurse' ? consent : null, photos });
+      incidents.push({ ...incident, patientName: row.patient_name || 'Student', schoolId: row.school_id });
+    }
+    return res.json({ data: { incidents, photosEnabled, storageConfigured: Boolean(storageAdapter?.isConfigured?.()) } });
+  });
+
+  app.get('/api/incidents/:id', requireRoles('guardian', ...clinicalWriteRoles), async (req, res) => {
+    if (!validUuid(req.params.id)) return errorResponse(res, 404, 'NOT_FOUND', 'Incident not found.');
+    const result = await query(
+      `SELECT i.*,to_char(i.incident_date,'YYYY-MM-DD') AS display_date,to_char(i.incident_time,'HH24:MI') AS display_time,
+         p.data->>'name' AS patient_name,COALESCE(p.data->>'studentId',p.data->>'facultyId','') AS school_id,
+         c.guardian_user_id,c.status AS consent_status,c.notice_version,c.updated_at AS consent_updated_at,
+         CASE WHEN c.guardian_user_id=$3 THEN true ELSE false END AS is_consent_owner
+       FROM student_incidents i JOIN patients p ON p.id=i.patient_id LEFT JOIN incident_photo_consents c ON c.incident_id=i.id
+       WHERE i.id=$1 AND p.patient_type='student'
+         AND ($2='school_nurse' OR EXISTS(SELECT 1 FROM guardian_patient_links l WHERE l.patient_id=i.patient_id AND l.guardian_user_id=$3))`,
+      [req.params.id, req.user.role, req.user.id],
+    );
+    const row = result.rows[0];
+    if (!row) return errorResponse(res, 404, 'NOT_FOUND', 'Incident not found.');
+    const photosEnabled = incidentPhotosEnabled();
+    let photos = [];
+    if (photosEnabled && row.consent_status === 'granted' && (req.user.role === 'school_nurse' || row.is_consent_owner)) {
+      const rows = await query(
+        `SELECT p.id,p.content_type,p.size_bytes,p.width,p.height,p.created_at,p.expires_at,p.consent_event_id,p.deletion_requested_at,p.deleted_at,c.granted_event_id,c.status AS consent_status
+         FROM incident_photos p JOIN incident_photo_consents c ON c.incident_id=p.incident_id
+         WHERE p.incident_id=$1 AND c.status='granted' AND p.consent_event_id=c.granted_event_id
+           AND p.deletion_requested_at IS NULL AND p.deleted_at IS NULL AND p.expires_at>NOW()
+         ORDER BY p.created_at,p.id`, [row.id],
+      );
+      photos = rows.rows.filter((photo) => incidentPhotoReadable({ enabled: photosEnabled, consent: { status: photo.consent_status, granted_event_id: photo.granted_event_id }, photo })).map((photo) => ({ id: photo.id, contentType: photo.content_type, sizeBytes: Number(photo.size_bytes), createdAt: photo.created_at, expiresAt: photo.expires_at }));
+    }
+    const consent = row.consent_status && (row.is_consent_owner || req.user.role === 'school_nurse')
+      ? { status: row.consent_status, guardian_user_id: row.guardian_user_id, notice_version: row.notice_version, updated_at: row.consent_updated_at }
+      : null;
+    return res.json({ data: { incident: { ...projectIncident({ ...row, incident_date: row.display_date, incident_time: row.display_time }, { consent, photos }), patientName: row.patient_name || 'Student', schoolId: row.school_id }, photosEnabled, storageConfigured: Boolean(storageAdapter?.isConfigured?.()) } });
+  });
+
+  app.post('/api/incidents', requireRoles(...clinicalWriteRoles), async (req, res) => {
+    const allowed = new Set(['patientId', 'date', 'time', 'location', 'description', 'actionTaken', 'visitId']);
+    if (Object.keys(req.body || {}).some((key) => !allowed.has(key))) return errorResponse(res, 400, 'INVALID_FIELDS', 'The incident contains unsupported fields.');
+    const validation = validateIncidentPayload(req.body);
+    if (!validation.valid) return errorResponse(res, 400, validation.code, validation.message);
+    const input = validation.value;
+    const id = crypto.randomUUID();
+    await transaction(async (client) => {
+      const patient = await client.query("SELECT id FROM patients WHERE id=$1 AND patient_type='student'", [input.patientId]);
+      if (!patient.rowCount) {
+        const error = new Error('Student record not found.'); error.status = 404; error.code = 'PATIENT_NOT_FOUND'; throw error;
+      }
+      if (input.visitId) {
+        const visit = await client.query('SELECT 1 FROM visits WHERE id=$1 AND patient_id=$2', [input.visitId, input.patientId]);
+        if (!visit.rowCount) { const error = new Error('Choose a clinic visit for the same student.'); error.status = 400; error.code = 'INVALID_VISIT'; throw error; }
+      }
+      await client.query(
+        `INSERT INTO student_incidents(id,patient_id,incident_date,incident_time,location,description,action_taken,visit_id,created_by,updated_by)
+         VALUES($1,$2,$3::date,$4::time,$5,$6,$7,$8,$9,$9)`,
+        [id, input.patientId, input.incidentDate, input.incidentTime, input.location, input.description, input.actionTaken, input.visitId, req.user.id],
+      );
+      await audit(req, 'STUDENT_INCIDENT_CREATED', {}, 'student_incident', id, client);
+    }).catch((error) => { throw error; });
+    const guardians = await query("SELECT DISTINCT guardian_user_id FROM guardian_patient_links WHERE patient_id=$1", [input.patientId]);
+    for (const guardian of guardians.rows) await createNotification({ userId: guardian.guardian_user_id, type: 'incident', subject: 'A student incident report is available', body: 'A school nurse added an incident report for a linked student. Sign in to view it.', dedupeKey: `student-incident:${id}:${guardian.guardian_user_id}` });
+    return res.status(201).json({ data: { id } });
+  });
+
+  app.patch('/api/incidents/:id', requireRoles(...clinicalWriteRoles), async (req, res) => {
+    if (!validUuid(req.params.id)) return errorResponse(res, 404, 'NOT_FOUND', 'Incident not found.');
+    const allowed = new Set(['patientId', 'date', 'time', 'location', 'description', 'actionTaken', 'visitId']);
+    if (Object.keys(req.body || {}).some((key) => !allowed.has(key))) return errorResponse(res, 400, 'INVALID_FIELDS', 'The incident contains unsupported fields.');
+    const validation = validateIncidentPayload(req.body);
+    if (!validation.valid) return errorResponse(res, 400, validation.code, validation.message);
+    const input = validation.value;
+    const result = await transaction(async (client) => {
+      const current = await client.query('SELECT patient_id FROM student_incidents WHERE id=$1 FOR UPDATE', [req.params.id]);
+      if (!current.rowCount) return null;
+      if (String(current.rows[0].patient_id) !== input.patientId) { const error = new Error('An incident cannot be moved to another student.'); error.status = 400; error.code = 'PATIENT_MISMATCH'; throw error; }
+      if (input.visitId) {
+        const visit = await client.query('SELECT 1 FROM visits WHERE id=$1 AND patient_id=$2', [input.visitId, input.patientId]);
+        if (!visit.rowCount) { const error = new Error('Choose a clinic visit for the same student.'); error.status = 400; error.code = 'INVALID_VISIT'; throw error; }
+      }
+      await client.query(
+        `UPDATE student_incidents SET incident_date=$1::date,incident_time=$2::time,location=$3,description=$4,action_taken=$5,visit_id=$6,updated_by=$7,updated_at=NOW() WHERE id=$8`,
+        [input.incidentDate, input.incidentTime, input.location, input.description, input.actionTaken, input.visitId, req.user.id, req.params.id],
+      );
+      await audit(req, 'STUDENT_INCIDENT_UPDATED', {}, 'student_incident', req.params.id, client);
+      return { patientId: input.patientId };
+    });
+    if (!result) return errorResponse(res, 404, 'NOT_FOUND', 'Incident not found.');
+    return res.json({ data: { success: true } });
+  });
+
+  app.get('/api/incidents/:id/eligible-guardians', requireRoles(...clinicalWriteRoles), async (req, res) => {
+    if (!incidentPhotosEnabled()) return errorResponse(res, 404, 'NOT_FOUND', 'Photo consent is unavailable.');
+    if (!validUuid(req.params.id)) return errorResponse(res, 404, 'NOT_FOUND', 'Incident not found.');
+    const result = await query(
+      `SELECT u.id,u.name,COALESCE(NULLIF(u.username,''),u.email) AS account_label
+       FROM student_incidents i JOIN patients p ON p.id=i.patient_id
+       JOIN guardian_patient_links l ON l.patient_id=i.patient_id
+       JOIN users u ON u.id=l.guardian_user_id
+       WHERE i.id=$1 AND p.patient_type='student' AND u.role='guardian' AND u.status='active'
+       ORDER BY LOWER(u.name),u.id`, [req.params.id],
+    );
+    return res.json({ data: { guardians: result.rows } });
+  });
+
+  app.post('/api/incidents/:id/photo-consent/request', requireRoles(...clinicalWriteRoles), async (req, res) => {
+    if (!incidentPhotosEnabled()) return errorResponse(res, 404, 'NOT_FOUND', 'Photo consent is unavailable.');
+    if (Object.keys(req.body || {}).some((key) => key !== 'guardianUserId')) return errorResponse(res, 400, 'INVALID_REQUEST', 'The photo request is invalid.');
+    if (!validUuid(req.params.id) || !validUuid(req.body?.guardianUserId)) return errorResponse(res, 400, 'INVALID_REQUEST', 'Choose a linked guardian account.');
+    const incidentId = req.params.id;
+    const guardianUserId = req.body.guardianUserId;
+    const result = await transaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`incident-photo-consent:${incidentId}`]);
+      const incident = await client.query("SELECT i.patient_id FROM student_incidents i JOIN patients p ON p.id=i.patient_id WHERE i.id=$1 AND p.patient_type='student'", [incidentId]);
+      if (!incident.rowCount) return { error: 'NOT_FOUND' };
+      const guardian = await client.query(
+        "SELECT u.id,u.name FROM users u JOIN guardian_patient_links l ON l.guardian_user_id=u.id WHERE u.id=$1 AND u.role='guardian' AND u.status='active' AND l.patient_id=$2",
+        [guardianUserId, incident.rows[0].patient_id],
+      );
+      if (!guardian.rowCount) return { error: 'GUARDIAN_NOT_LINKED' };
+      const prior = await client.query('SELECT * FROM incident_photo_consents WHERE incident_id=$1 FOR UPDATE', [incidentId]);
+      if (prior.rowCount && String(prior.rows[0].guardian_user_id) !== guardianUserId) return { error: 'CONSENT_OWNER_EXISTS' };
+      if (prior.rowCount && ['pending', 'granted'].includes(prior.rows[0].status)) return { error: 'CONSENT_ALREADY_ACTIVE' };
+      const eventId = crypto.randomUUID();
+      await client.query(
+        `INSERT INTO incident_photo_consent_events(id,incident_id,guardian_user_id,event_type,notice_version,actor_user_id)
+         VALUES($1,$2,$3,'requested',$4,$5)`, [eventId, incidentId, guardianUserId, INCIDENT_PHOTO_NOTICE_VERSION, req.user.id],
+      );
+      if (prior.rowCount) {
+        await client.query(
+          `UPDATE incident_photo_consents SET status='pending',notice_version=$2,granted_event_id=NULL,last_event_id=$3,updated_by=$4,updated_at=NOW()
+           WHERE incident_id=$1`, [incidentId, INCIDENT_PHOTO_NOTICE_VERSION, eventId, req.user.id],
+        );
+      } else {
+        await client.query(
+          `INSERT INTO incident_photo_consents(incident_id,guardian_user_id,status,notice_version,granted_event_id,last_event_id,updated_by)
+           VALUES($1,$2,'pending',$3,NULL,$4,$5)`, [incidentId, guardianUserId, INCIDENT_PHOTO_NOTICE_VERSION, eventId, req.user.id],
+        );
+      }
+      await client.query(
+        `UPDATE incident_photos SET deletion_requested_at=COALESCE(deletion_requested_at,NOW()) WHERE incident_id=$1 AND deleted_at IS NULL`, [incidentId],
+      );
+      await client.query(
+        `INSERT INTO incident_photo_deletion_tasks(id,photo_id,storage_key,reason,available_at)
+         SELECT gen_random_uuid(),p.id,p.storage_key,'revoked',NOW() FROM incident_photos p WHERE p.incident_id=$1 AND p.deleted_at IS NULL
+         ON CONFLICT(storage_key) DO UPDATE SET available_at=LEAST(incident_photo_deletion_tasks.available_at,EXCLUDED.available_at),reason='revoked'`, [incidentId],
+      );
+      await audit(req, 'INCIDENT_PHOTO_CONSENT_REQUESTED', { noticeVersion: INCIDENT_PHOTO_NOTICE_VERSION }, 'student_incident', incidentId, client);
+      return { guardian: guardian.rows[0] };
+    });
+    if (result.error === 'NOT_FOUND') return errorResponse(res, 404, 'NOT_FOUND', 'Incident not found.');
+    if (result.error) return errorResponse(res, 409, result.error, result.error === 'GUARDIAN_NOT_LINKED' ? 'Choose an active guardian linked to this student.' : 'A photo request for this incident already belongs to another active review.');
+    await createNotification({ userId: guardianUserId, type: 'incident_photo_consent', subject: 'Photo consent requested', body: 'A school nurse has requested your decision about photos for a linked student incident. Review the request after signing in.', dedupeKey: `incident-photo-consent:${incidentId}:requested:${Date.now()}` });
+    return res.status(201).json({ data: { status: 'pending', guardianName: result.guardian.name } });
+  });
+
+  app.patch('/api/incidents/:id/photo-consent', requireRoles('guardian'), async (req, res) => {
+    if (!incidentPhotosEnabled()) return errorResponse(res, 404, 'NOT_FOUND', 'Photo consent is unavailable.');
+    if (!validUuid(req.params.id) || Object.keys(req.body || {}).some((key) => !['decision', 'noticeVersion'].includes(key))) return errorResponse(res, 400, 'INVALID_REQUEST', 'The photo-consent response is invalid.');
+    const result = await transaction(async (client) => {
+      const incident = await client.query(
+        `SELECT i.patient_id FROM student_incidents i JOIN patients p ON p.id=i.patient_id
+         JOIN guardian_patient_links l ON l.patient_id=i.patient_id AND l.guardian_user_id=$2
+         WHERE i.id=$1 AND p.patient_type='student'`, [req.params.id, req.user.id],
+      );
+      if (!incident.rowCount) return { error: 'NOT_FOUND' };
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`incident-photo-consent:${req.params.id}`]);
+      const current = await client.query('SELECT * FROM incident_photo_consents WHERE incident_id=$1 FOR UPDATE', [req.params.id]);
+      if (!current.rowCount || String(current.rows[0].guardian_user_id) !== String(req.user.id)) return { error: 'NOT_FOUND' };
+      const validation = validateIncidentPhotoDecision(req.body, current.rows[0]);
+      if (!validation.valid) return { error: validation.code, message: validation.message };
+      const { decision, noticeVersion } = validation.value;
+      const eventId = crypto.randomUUID();
+      await client.query(
+        `INSERT INTO incident_photo_consent_events(id,incident_id,guardian_user_id,event_type,notice_version,actor_user_id)
+         VALUES($1,$2,$3,$4,$5,$3)`, [eventId, req.params.id, req.user.id, decision, noticeVersion],
+      );
+      await client.query(
+        `UPDATE incident_photo_consents SET status=$2,notice_version=$3,granted_event_id=$4,last_event_id=$5,updated_by=$6,updated_at=NOW()
+         WHERE incident_id=$1`, [req.params.id, decision, noticeVersion, decision === 'granted' ? eventId : null, eventId, req.user.id],
+      );
+      if (decision === 'revoked' || decision === 'declined') {
+        await client.query('UPDATE incident_photos SET deletion_requested_at=COALESCE(deletion_requested_at,NOW()) WHERE incident_id=$1 AND deleted_at IS NULL', [req.params.id]);
+        await client.query(
+          `INSERT INTO incident_photo_deletion_tasks(id,photo_id,storage_key,reason,available_at)
+           SELECT gen_random_uuid(),p.id,p.storage_key,'revoked',NOW() FROM incident_photos p WHERE p.incident_id=$1 AND p.deleted_at IS NULL
+           ON CONFLICT(storage_key) DO UPDATE SET available_at=LEAST(incident_photo_deletion_tasks.available_at,EXCLUDED.available_at),reason='revoked'`, [req.params.id],
+        );
+      }
+      await audit(req, 'INCIDENT_PHOTO_CONSENT_DECIDED', { decision, noticeVersion }, 'student_incident', req.params.id, client);
+      return { status: decision };
+    });
+    if (result.error === 'NOT_FOUND') return errorResponse(res, 404, 'NOT_FOUND', 'Photo request not found.');
+    if (result.error) return errorResponse(res, 400, result.error, result.message);
+    return res.json({ data: { status: result.status } });
+  });
+
+  app.post('/api/incidents/:id/photos', requireRoles(...clinicalWriteRoles), async (req, res) => {
+    if (!incidentPhotosEnabled()) return errorResponse(res, 404, 'NOT_FOUND', 'Incident photos are disabled.');
+    if (!validUuid(req.params.id) || Object.keys(req.body || {}).some((key) => !['contentType', 'dataBase64'].includes(key))) return errorResponse(res, 400, 'INVALID_REQUEST', 'The photo upload is invalid.');
+    if (!storageAdapter?.isConfigured?.() || !storageAdapter?.bucket) return errorResponse(res, 503, 'PHOTO_STORAGE_UNAVAILABLE', 'Private incident photo storage is not configured.');
+    let image;
+    try { image = validateRasterImageBase64(req.body?.dataBase64, { maxBytes: 2 * 1024 * 1024 }); }
+    catch { return errorResponse(res, 400, 'INVALID_IMAGE', 'Upload a valid PNG, JPEG, or WebP image no larger than 2 MiB.'); }
+    if (String(req.body?.contentType || '') !== image.contentType) return errorResponse(res, 400, 'CONTENT_TYPE_MISMATCH', 'The image type does not match its file contents.');
+    const photoId = crypto.randomUUID();
+    const extension = image.contentType === 'image/jpeg' ? 'jpg' : image.contentType.slice('image/'.length);
+    const storageKey = `incidents/${req.params.id}/${photoId}.${extension}`;
+    const taskId = crypto.randomUUID();
+    const preflight = await query(
+      `SELECT c.granted_event_id FROM student_incidents i JOIN patients p ON p.id=i.patient_id
+       JOIN incident_photo_consents c ON c.incident_id=i.id
+       WHERE i.id=$1 AND p.patient_type='student' AND c.status='granted'`, [req.params.id],
+    );
+    if (!preflight.rowCount) return errorResponse(res, 409, 'PHOTO_CONSENT_REQUIRED', 'Current guardian photo consent is required before upload.');
+    const grantedEventId = preflight.rows[0].granted_event_id;
+    await transaction(async (client) => {
+      await client.query(
+        `INSERT INTO incident_photo_deletion_tasks(id,photo_id,storage_key,reason,available_at,leased_at)
+         VALUES($1,NULL,$2,'orphan_upload',NOW()+INTERVAL '1 day',NOW())`, [taskId, storageKey],
+      );
+    });
+    try {
+      await storageAdapter.upload(storageAdapter.bucket, storageKey, image.bytes, image.contentType);
+    } catch (storageError) {
+      try { await query('UPDATE incident_photo_deletion_tasks SET available_at=NOW(),leased_at=NULL,last_error_code=$2 WHERE id=$1', [taskId, String(storageError.code || 'STORAGE_WRITE_FAILED').slice(0, 60)]); } catch { /* durable quarantine record remains delayed for cleanup retry */ }
+      return errorResponse(res, 503, 'PHOTO_STORAGE_UNAVAILABLE', 'The photo could not be stored. Try again later.');
+    }
+    try {
+      await transaction(async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`incident-photo-consent:${req.params.id}`]);
+        const consent = await client.query('SELECT status,granted_event_id FROM incident_photo_consents WHERE incident_id=$1 FOR UPDATE', [req.params.id]);
+        if (!incidentPhotosEnabled() || !consent.rowCount || consent.rows[0].status !== 'granted' || String(consent.rows[0].granted_event_id) !== String(grantedEventId)) {
+          const error = new Error('Photo consent changed during upload.'); error.status = 409; error.code = 'CONSENT_CHANGED'; throw error;
+        }
+        const count = await client.query('SELECT COUNT(*)::int AS total FROM incident_photos WHERE incident_id=$1 AND deleted_at IS NULL AND deletion_requested_at IS NULL AND expires_at>NOW()', [req.params.id]);
+        if (count.rows[0].total >= 3) { const error = new Error('An incident can have up to three photos.'); error.status = 409; error.code = 'PHOTO_LIMIT_REACHED'; throw error; }
+        await client.query(
+          `INSERT INTO incident_photos(id,incident_id,consent_event_id,storage_key,content_type,size_bytes,width,height,created_by)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [photoId, req.params.id, grantedEventId, storageKey, image.contentType, image.sizeBytes, image.width, image.height, req.user.id],
+        );
+        await client.query('DELETE FROM incident_photo_deletion_tasks WHERE id=$1', [taskId]);
+        await audit(req, 'INCIDENT_PHOTO_UPLOADED', { contentType: image.contentType, sizeBytes: image.sizeBytes }, 'student_incident', req.params.id, client);
+      });
+    } catch (error) {
+      try { await query('UPDATE incident_photo_deletion_tasks SET available_at=NOW(),leased_at=NULL,last_error_code=$2 WHERE id=$1', [taskId, String(error.code || 'UPLOAD_FINALIZE_FAILED').slice(0, 60)]); } catch { /* keep the durable orphan task */ }
+      return errorResponse(res, error.status || 503, error.code || 'PHOTO_UPLOAD_FAILED', error.status ? error.message : 'The photo could not be attached. Cleanup will retry safely.');
+    }
+    return res.status(201).json({ data: { id: photoId, contentType: image.contentType, sizeBytes: image.sizeBytes, width: image.width, height: image.height } });
+  });
+
+  app.get('/api/incidents/:id/photos/:photoId', setImageStreamSecurityHeaders, requireRoles('guardian', ...clinicalWriteRoles), async (req, res) => {
+    if (!incidentPhotosEnabled()) return errorResponse(res, 404, 'NOT_FOUND', 'Incident photo not found.');
+    if (!validUuid(req.params.id) || !validUuid(req.params.photoId)) return errorResponse(res, 404, 'NOT_FOUND', 'Incident photo not found.');
+    const access = await query(
+      `SELECT p.id,p.incident_id,p.storage_key,p.content_type,p.consent_event_id,p.expires_at,p.deletion_requested_at,p.deleted_at,
+         c.status AS consent_status,c.granted_event_id,i.patient_id
+       FROM incident_photos p JOIN student_incidents i ON i.id=p.incident_id JOIN patients pt ON pt.id=i.patient_id
+       JOIN incident_photo_consents c ON c.incident_id=i.id
+       WHERE p.id=$1 AND p.incident_id=$2 AND pt.patient_type='student'
+         AND ($3='school_nurse' OR EXISTS(SELECT 1 FROM guardian_patient_links l WHERE l.patient_id=i.patient_id AND l.guardian_user_id=$4 AND c.guardian_user_id=$4))`,
+      [req.params.photoId, req.params.id, req.user.role, req.user.id],
+    );
+    const photo = access.rows[0];
+    if (!photo || !incidentPhotoReadable({ enabled: true, consent: { status: photo.consent_status, granted_event_id: photo.granted_event_id }, photo })) return errorResponse(res, 404, 'NOT_FOUND', 'Incident photo not found.');
+    if (!storageAdapter?.isConfigured?.() || !storageAdapter?.bucket) return errorResponse(res, 503, 'PHOTO_STORAGE_UNAVAILABLE', 'Private incident photo storage is not configured.');
+    let bytes;
+    try { bytes = await storageAdapter.download(storageAdapter.bucket, photo.storage_key); }
+    catch { return errorResponse(res, 503, 'PHOTO_STORAGE_UNAVAILABLE', 'The incident photo could not be loaded.'); }
+    if (!bytes) return errorResponse(res, 404, 'NOT_FOUND', 'Incident photo not found.');
+    // Hold the consent/photo rows while beginning the response so a concurrent revocation
+    // serializes either before this read (denied) or after the authorized response begins.
+    const delivered = await transaction(async (client) => {
+      const stillAllowed = await client.query(
+      `SELECT p.id FROM incident_photos p JOIN incident_photo_consents c ON c.incident_id=p.incident_id
+       JOIN student_incidents i ON i.id=p.incident_id JOIN patients pt ON pt.id=i.patient_id
+       WHERE p.id=$1 AND p.incident_id=$2 AND pt.patient_type='student' AND c.status='granted' AND p.consent_event_id=c.granted_event_id
+         AND p.deletion_requested_at IS NULL AND p.deleted_at IS NULL AND p.expires_at>NOW()
+         AND ($3='school_nurse' OR (c.guardian_user_id=$4 AND EXISTS(SELECT 1 FROM guardian_patient_links l WHERE l.patient_id=i.patient_id AND l.guardian_user_id=$4)))
+       FOR UPDATE OF p,c`,
+      [req.params.photoId, req.params.id, req.user.role, req.user.id],
+      );
+      if (!stillAllowed.rowCount || !incidentPhotosEnabled()) return false;
+      await audit(req, 'INCIDENT_PHOTO_READ', {}, 'student_incident', req.params.id, client);
+      res.setHeader('Content-Type', photo.content_type);
+      res.setHeader('Content-Length', String(bytes.length));
+      res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+      res.setHeader('Content-Disposition', 'inline');
+      res.send(bytes);
+      return true;
+    });
+    if (!delivered) return errorResponse(res, 404, 'NOT_FOUND', 'Incident photo not found.');
+    return res;
+  });
+
+  app.delete('/api/incidents/:id/photos/:photoId', requireRoles(...clinicalWriteRoles), async (req, res) => {
+    if (!validUuid(req.params.id) || !validUuid(req.params.photoId)) return errorResponse(res, 404, 'NOT_FOUND', 'Incident photo not found.');
+    const result = await transaction(async (client) => {
+      const photo = await client.query('SELECT id,storage_key FROM incident_photos WHERE id=$1 AND incident_id=$2 FOR UPDATE', [req.params.photoId, req.params.id]);
+      if (!photo.rowCount) return null;
+      await client.query('UPDATE incident_photos SET deletion_requested_at=COALESCE(deletion_requested_at,NOW()) WHERE id=$1', [req.params.photoId]);
+      await client.query(
+        `INSERT INTO incident_photo_deletion_tasks(id,photo_id,storage_key,reason,available_at)
+         VALUES($1,$2,$3,'nurse_removed',NOW()) ON CONFLICT(storage_key) DO UPDATE
+         SET available_at=LEAST(incident_photo_deletion_tasks.available_at,EXCLUDED.available_at),reason='nurse_removed'`, [crypto.randomUUID(), req.params.photoId, photo.rows[0].storage_key],
+      );
+      await audit(req, 'INCIDENT_PHOTO_DELETION_QUEUED', { reason: 'nurse_removed' }, 'student_incident', req.params.id, client);
+      return { id: req.params.photoId };
+    });
+    if (!result) return errorResponse(res, 404, 'NOT_FOUND', 'Incident photo not found.');
+    return res.status(202).json({ data: { deletionQueued: true } });
   });
 
   app.post('/api/admin/notifications/reminders', requireRoles('system_administrator'), async (req, res) => {

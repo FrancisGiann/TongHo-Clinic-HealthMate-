@@ -84,7 +84,7 @@ export function generateAppointmentSlots(date, existingStarts = [], options = {}
   if (clinicToday && date < clinicToday) return [];
   const weekday = clinicWeekday(date);
   if (weekday === 0 || weekday === 6) return [];
-  const busy = new Set(existingStarts.map((value) => clinicDateTime(value).getTime()).filter(Number.isFinite));
+  const busy = existingStarts.map((value) => clinicDateTime(value)).filter((value) => Number.isFinite(value.getTime()));
   const slots = [];
   for (let offset = openMinutes; offset + durationMinutes <= closeMinutes; offset += durationMinutes) {
     const hour = String(Math.floor(offset / 60)).padStart(2, '0');
@@ -92,7 +92,10 @@ export function generateAppointmentSlots(date, existingStarts = [], options = {}
     const local = `${date}T${hour}:${minute}`;
     const startsAt = clinicDateTime(local);
     if (clinicToday === date && startsAt.getTime() <= now.getTime()) continue;
-    if (!busy.has(startsAt.getTime())) slots.push({ local, startsAt: startsAt.toISOString() });
+    const endsAt = new Date(startsAt.getTime() + durationMinutes * 60_000);
+    if (!busy.some((occupied) => intervalsOverlap(startsAt, endsAt, occupied, new Date(occupied.getTime() + durationMinutes * 60_000)))) {
+      slots.push({ local, startsAt: startsAt.toISOString() });
+    }
   }
   return slots;
 }
@@ -152,6 +155,66 @@ export function appointmentSettings(settings = {}) {
     close: settings.clinicCloseTime || DEFAULT_HOURS.close,
     durationMinutes: Number(settings.appointmentDurationMinutes || DEFAULT_HOURS.durationMinutes),
   };
+}
+
+function nextCalendarDate(value) {
+  const date = new Date(`${value}T12:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+export function validateUnavailablePeriod(payload = {}) {
+  const date = String(payload.date || '');
+  const fullDay = payload.fullDay === true;
+  const reason = typeof payload.reason === 'string' ? payload.reason.trim() : '';
+  if (!isValidAppointmentDate(date)) return { valid: false, code: 'INVALID_DATE', message: 'Choose a real clinic date.' };
+  if (!reason || reason.length > 500) return { valid: false, code: 'INVALID_REASON', message: 'Enter a reason from 1 to 500 characters.' };
+  let startsAt;
+  let endsAt;
+  if (fullDay) {
+    startsAt = new Date(`${date}T00:00:00+08:00`);
+    endsAt = new Date(`${nextCalendarDate(date)}T00:00:00+08:00`);
+  } else {
+    const startTime = String(payload.startTime || '');
+    const endTime = String(payload.endTime || '');
+    if (minutes(startTime) === null || minutes(endTime) === null || minutes(endTime) <= minutes(startTime)) {
+      return { valid: false, code: 'INVALID_TIME_RANGE', message: 'Choose a valid same-day start and end time.' };
+    }
+    startsAt = new Date(`${date}T${startTime}:00+08:00`);
+    endsAt = new Date(`${date}T${endTime}:00+08:00`);
+  }
+  return { valid: true, value: { date, fullDay, startsAt, endsAt, reason } };
+}
+
+export function intervalsOverlap(firstStart, firstEnd, secondStart, secondEnd) {
+  const a = new Date(firstStart).getTime();
+  const b = new Date(firstEnd).getTime();
+  const c = new Date(secondStart).getTime();
+  const d = new Date(secondEnd).getTime();
+  return [a, b, c, d].every(Number.isFinite) && a < d && c < b;
+}
+
+export function unavailablePeriodsForSlot(startsAt, durationMinutes, periods = []) {
+  const start = clinicDateTime(startsAt);
+  if (!Number.isFinite(start.getTime()) || !Number.isInteger(Number(durationMinutes))) return false;
+  const end = new Date(start.getTime() + Number(durationMinutes) * 60_000);
+  return periods.some((period) => intervalsOverlap(start, end, period.starts_at || period.startsAt, period.ends_at || period.endsAt));
+}
+
+export function appointmentRowsOverlappingPeriod(rows = [], startsAt, endsAt, durationMinutes = 30) {
+  return rows.filter((row) => {
+    const status = normalizeAppointmentStatus(row.status);
+    if (!['Requested', 'Scheduled'].includes(status)) return false;
+    const start = row.starts_at || row.startsAt || row.date;
+    const parsed = clinicDateTime(start);
+    if (!Number.isFinite(parsed.getTime())) return false;
+    const end = new Date(parsed.getTime() + Number(durationMinutes) * 60_000);
+    return intervalsOverlap(parsed, end, startsAt, endsAt);
+  });
+}
+
+export function sortedManilaDayLockKeys(...dates) {
+  return [...new Set(dates.filter(isValidAppointmentDate).map((date) => `appointment-day:${date}`))].sort();
 }
 
 export function normalizeAppointmentStatus(status) {
