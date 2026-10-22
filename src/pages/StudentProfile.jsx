@@ -215,6 +215,7 @@ export default function StudentProfile({ data, commitData, reload }) {
           </p>
         </div>
         <div className="profile-actions">
+          <Link className="secondary-btn" to={`/reports?tab=patient&patientId=${encodeURIComponent(student.id)}`}>Patient summary</Link>
           {student.patientType === 'student' && <><Link className="secondary-btn" to={`/students/${encodeURIComponent(student.id)}/passes/clinic`}>Clinic Pass</Link><Link className="secondary-btn" to={`/students/${encodeURIComponent(student.id)}/passes/gate`}>Student Gate Pass</Link></>}
           <button className="secondary-btn" onClick={openEditor}><Pencil size={16} /> Edit profile</button>
           {(student.contactNumber || student.guardianPhone) && <button className="secondary-btn" onClick={() => window.location.href = `tel:${isFaculty ? student.contactNumber : student.guardianPhone}`}>
@@ -424,6 +425,7 @@ export default function StudentProfile({ data, commitData, reload }) {
               <label>
                 Grade level
                 <select name="gradeLevel" value={form.gradeLevel} onChange={update}>
+                  <option>Kindergarten</option>
                   {Array.from({ length: 12 }, (_, index) => (
                     <option key={index}>Grade {index + 1}</option>
                   ))}

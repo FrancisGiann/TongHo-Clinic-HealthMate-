@@ -1,12 +1,115 @@
-import { ArrowRight, HeartHandshake } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { ArrowRight, HeartHandshake, ShieldCheck, Stethoscope, Users } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
+import { useBranding } from '../hooks/useBranding.js';
+import { createDefaultLandingContent, projectPublicLandingContent } from '../../shared/landingContent.js';
+import { api } from '../utils/api';
+
+const COMMUNITY_ILLUSTRATION = '/illustrations/guardian-care.webp';
+
+function fallbackImageOnce(event, fallback, fallbackAlt, fallbackCaption) {
+  const image = event.currentTarget;
+  if (image.dataset.fallbackAttempted) {
+    image.hidden = true;
+    return;
+  }
+  image.dataset.fallbackAttempted = 'true';
+  if (image.getAttribute('src') === fallback) {
+    image.hidden = true;
+    return;
+  }
+  image.src = fallback;
+  if (fallbackAlt) {
+    image.alt = fallbackAlt;
+    const caption = image.closest('figure')?.querySelector('figcaption');
+    if (caption && fallbackCaption) caption.textContent = fallbackCaption;
+  }
+}
 
 export default function Home({ authError = '' }) {
+  const branding = useBranding();
+  const communityPhoto = branding.landingCommunityPhoto;
+  const location = useLocation();
+  const draftPreview = new URLSearchParams(location.search).get('preview') === 'draft';
+  const [landingContent, setLandingContent] = useState(() => projectPublicLandingContent(createDefaultLandingContent()));
+  const [previewError, setPreviewError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    let inFlight = false;
+    const load = async () => {
+      if (inFlight || document.visibilityState === 'hidden') return;
+      inFlight = true;
+      try {
+        const data = draftPreview
+          ? await api.get('/api/admin/landing-content').then((result) => projectPublicLandingContent(result.draftContent, new Date()))
+          : await api.get('/api/landing-content');
+        if (active) {
+          setLandingContent(data);
+          setPreviewError('');
+        }
+      } catch {
+        if (active && draftPreview) {
+          setLandingContent(projectPublicLandingContent(createDefaultLandingContent()));
+          setPreviewError('The saved draft preview is unavailable. Sign in as a system administrator and reopen it from Content management. No draft content is shown.');
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void load();
+    };
+    void load();
+    const interval = window.setInterval(() => void load(), 60_000);
+    window.addEventListener('focus', load);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', load);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [draftPreview]);
+
+  const renderLandingSection = (section) => {
+    if (section.id === 'clinic') {
+      const clinic = section.clinic;
+      return <section className="hm-home-clinic" key={section.id} aria-labelledby="hm-home-clinic-title">
+        <h2 id="hm-home-clinic-title">Clinic information</h2>
+        <div className="hm-home-clinic-layout">
+          <dl className="hm-home-clinic-details">
+            {clinic.location && <div><dt>Location</dt><dd>{clinic.location}</dd></div>}
+            {clinic.hours && <div><dt>Hours</dt><dd>{clinic.hours}</dd></div>}
+            {clinic.contact && <div><dt>Contact</dt><dd>{clinic.contact}</dd></div>}
+          </dl>
+          {clinic.services.length > 0 && <div className="hm-home-clinic-services"><h3>Services</h3><ul>{clinic.services.map((service, index) => <li key={`${index}-${service}`}>{service}</li>)}</ul></div>}
+        </div>
+      </section>;
+    }
+    if (section.id === 'announcements') {
+      return <section className="hm-home-announcements" key={section.id} aria-labelledby="hm-home-announcements-title">
+        <h2 id="hm-home-announcements-title">Announcements</h2>
+        <ul>{section.announcements.map((announcement, index) => <li key={`${index}-${announcement.title}`}><article><h3>{announcement.title}</h3><p>{announcement.body}</p></article></li>)}</ul>
+      </section>;
+    }
+    if (section.id === 'faqs') {
+      return <section className="hm-home-faqs" key={section.id} aria-labelledby="hm-home-faqs-title">
+        <h2 id="hm-home-faqs-title">Frequently asked questions</h2>
+        <div>{section.faqs.map((faq, index) => <details key={`${index}-${faq.question}`}><summary>{faq.question}</summary><p>{faq.answer}</p></details>)}</div>
+      </section>;
+    }
+    return null;
+  };
+
   return (
     <main className="hm-home">
+      {draftPreview && <div className="hm-home-preview-banner" role="status">
+        <span>{previewError ? 'Draft preview unavailable' : 'Previewing the saved draft. Only a signed-in system administrator can view this version.'}</span>
+      </div>}
       <header className="hm-home-header">
         <Link className="hm-home-brand" to="/" aria-label="HealthMate+ home">
-          <img src="/Logo.jpg" alt="" />
+          <img src={branding.applicationLogo} alt="" onError={(event) => { event.currentTarget.src = '/healthmate-mark.svg'; }} />
           <span>HealthMate+</span>
         </Link>
         <nav className="hm-home-nav" aria-label="Main navigation">
@@ -17,28 +120,54 @@ export default function Home({ authError = '' }) {
       </header>
 
       {authError && <div className="hm-home-error" role="alert">{authError}</div>}
+      {previewError && <div className="hm-home-error" role="alert">{previewError}</div>}
 
       <section className="hm-home-hero" aria-labelledby="hm-home-title">
         <div className="hm-home-hero-copy">
-          <h1 id="hm-home-title">School clinic care, connected.</h1>
-          <p>A secure clinic workspace for Philippine Tong Ho Institute staff, with linked health records and appointment access for guardians.</p>
+          <h1 id="hm-home-title">{landingContent.hero.headline}</h1>
+          <p>{landingContent.hero.introduction}</p>
           <div className="hm-home-actions">
-            <Link className="hm-home-primary" to="/login">Sign in to HealthMate+ <ArrowRight size={18} /></Link>
-            <a className="hm-home-secondary" href="#portal-access">How access works</a>
+            <Link className="hm-home-primary" to="/login">{landingContent.hero.primaryActionLabel} <ArrowRight size={18} /></Link>
+            <a className="hm-home-secondary" href="#portal-access">{landingContent.hero.secondaryActionLabel}</a>
           </div>
         </div>
-        <div className="hm-home-scene" aria-hidden="true">
-          <img src="/illustrations/school-clinic.webp" alt="" width="1200" height="800" fetchPriority="high" />
+        <div className="hm-home-showcase">
+          <div className="hm-home-seal-panel">
+            <div className="hm-home-seal-frame">
+              <img src={branding.schoolSeal} alt="Philippine Tong Ho Institute seal" onError={(event) => fallbackImageOnce(event, '/Logo.jpg')} />
+            </div>
+            <div className="hm-home-seal-copy">
+              <strong>Philippine Tong Ho Institute</strong>
+              <span>City of Lucena</span>
+              <p>HealthMate+</p>
+              <small>School clinic care, connected.</small>
+            </div>
+          </div>
         </div>
       </section>
 
       <section className="hm-home-community" id="community" aria-labelledby="hm-home-community-title">
-        <div className="hm-home-section-heading">
-          <HeartHandshake size={24} aria-hidden="true" />
-          <h2 id="hm-home-community-title">One school community, connected with care.</h2>
+        <div className="hm-home-community-copy">
+          <div className="hm-home-section-heading">
+            <HeartHandshake size={24} aria-hidden="true" />
+            <h2 id="hm-home-community-title">One school community, connected with care.</h2>
+          </div>
+          <p>Clinic staff can manage health records and visits in one workspace. Guardians can follow information shared for linked students and request clinic appointments.</p>
         </div>
-        <p>Clinic staff can manage health records and visits in one workspace. Guardians can follow information shared for linked students and request clinic appointments.</p>
+        <figure className="hm-home-community-art">
+          <img
+            src={communityPhoto || COMMUNITY_ILLUSTRATION}
+            alt={communityPhoto ? 'School community image for Philippine Tong Ho Institute' : 'Illustration of a guardian and student reviewing a health record together'}
+            width="600"
+            height="400"
+            loading="lazy"
+            onError={(event) => fallbackImageOnce(event, COMMUNITY_ILLUSTRATION, 'Illustration of a guardian and student reviewing a health record together', 'Family and student illustration')}
+          />
+          <figcaption>{communityPhoto ? 'School community photo' : 'Family and student illustration'}</figcaption>
+        </figure>
       </section>
+
+      {landingContent.sections.map(renderLandingSection)}
 
       <section className="hm-home-portals" id="portal-access" aria-labelledby="hm-home-portals-title">
         <div className="hm-home-portals-heading">
@@ -46,13 +175,20 @@ export default function Home({ authError = '' }) {
           <p>Clinic staff and guardians use accounts with access shaped around their responsibilities.</p>
         </div>
         <div className="hm-home-portal-list">
-          <article className="hm-home-portal hm-home-portal-staff">
-            <h3>For school clinic staff</h3>
-            <p>Nurses manage student profiles, consultations, appointment requests, supplies, and reports. System administrators manage account access and system activity.</p>
+          <article className="hm-home-portal hm-home-role-nurse">
+            <Stethoscope className="hm-home-role-icon" size={24} aria-hidden="true" />
+            <h3>School nurse</h3>
+            <p>Nurses manage student profiles, consultations, appointment requests, supplies, and reports.</p>
           </article>
-          <article className="hm-home-portal hm-home-portal-guardians">
-            <h3>For parents and guardians</h3>
-            <p>View records for linked students, submit health information for nurse review, and request clinic appointments for those students.</p>
+          <article className="hm-home-portal hm-home-role-admin">
+            <ShieldCheck className="hm-home-role-icon" size={24} aria-hidden="true" />
+            <h3>System administrator</h3>
+            <p>System administrators manage account access and system activity.</p>
+          </article>
+          <article className="hm-home-portal hm-home-role-guardians">
+            <Users className="hm-home-role-icon" size={24} aria-hidden="true" />
+            <h3>Parents and guardians</h3>
+            <p>Create a guardian account request, then follow records for linked students and request clinic appointments after an administrator verifies your relationship.</p>
           </article>
         </div>
         <p className="hm-home-student-note">Students are school-managed patient records. They do not have accounts or sign in.</p>
@@ -60,10 +196,10 @@ export default function Home({ authError = '' }) {
 
       <section className="hm-home-access" aria-labelledby="hm-home-access-title">
         <div>
-          <h2 id="hm-home-access-title">Your account starts with an invitation.</h2>
-          <p>Ask your school clinic administrator for an account invitation. Follow its link to activate your account, then sign in to HealthMate+.</p>
+          <h2 id="hm-home-access-title">Request a guardian account.</h2>
+          <p>Verify your email and submit one student ID. A school administrator reviews the relationship against school records before activating your account. Staff accounts continue to use administrator invitations.</p>
         </div>
-        <Link className="hm-home-access-link" to="/login">Go to sign in <ArrowRight size={17} /></Link>
+        <Link className="hm-home-access-link" to="/login">Sign in or create an account <ArrowRight size={17} /></Link>
       </section>
 
       <footer className="hm-home-footer">

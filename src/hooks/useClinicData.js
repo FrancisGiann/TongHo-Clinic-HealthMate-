@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { saveData } from '../db/database';
 import { api } from '../utils/api';
+import { dashboardDataForIdentity } from '../utils/dashboardBootstrap.js';
 import { enqueueClinicCommit } from '../utils/clinicCommitQueue.js';
 
 const emptyClinicData = () => ({
@@ -19,7 +20,7 @@ const stalePendingEditMessage = 'This edit was discarded because clinic data was
 const reloadBeforeSavingMessage = 'A save completed after the refresh. Newer local edits are still shown but unsaved. Note or copy them before reloading clinic data; their saves are paused to protect server data.';
 const lateSaveRefreshMessage = 'A save completed after the refresh. The latest clinic data is loaded; review it and reapply any unsent edits.';
 
-export function useClinicData(user) {
+export function useClinicData(user, { dashboardFirst = false } = {}) {
   const identity = user ? `${String(user.id || user.username || '')}:${user.role}` : null;
   const identityRef = useRef({ identity: null, generation: 0, sessionKey: null });
   if (identityRef.current.identity !== identity) {
@@ -33,10 +34,12 @@ export function useClinicData(user) {
   const sessionKey = identityRef.current.sessionKey;
   const [data, setDataState] = useState(emptyClinicData);
   const [dataOwnerKey, setDataOwnerKey] = useState(null);
+  const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const dataRef = useRef(data);
+  const dataOwnerRef = useRef(null);
   const versionRef = useRef(data.schemaVersion || 1);
   const sequenceRef = useRef(0);
   const refreshEpochRef = useRef(0);
@@ -50,9 +53,11 @@ export function useClinicData(user) {
     if (!ownerKey || identityRef.current.sessionKey !== ownerKey) return dataRef.current;
     const normalized = saveData(value);
     dataRef.current = normalized;
+    dataOwnerRef.current = ownerKey;
     versionRef.current = normalized.schemaVersion || versionRef.current;
     setDataState(normalized);
     setDataOwnerKey(ownerKey);
+    setDashboardData(null);
     return normalized;
   }, []);
 
@@ -142,6 +147,8 @@ export function useClinicData(user) {
     pendingWritesRef.current = 0;
     versionRef.current = 1;
     setDataOwnerKey(null);
+    dataOwnerRef.current = null;
+    setDashboardData(null);
     const emptyData = emptyClinicData();
     setDataState(emptyData);
     dataRef.current = emptyData;
@@ -154,13 +161,22 @@ export function useClinicData(user) {
     }
 
     let cancelled = false;
+    if (dashboardFirst && user.role === 'school_nurse') {
+      api.get('/api/nurse/dashboard')
+        .then((summary) => {
+          if (!cancelled && identityRef.current.sessionKey === sessionKey && dataOwnerRef.current !== sessionKey) {
+            setDashboardData({ ownerKey: sessionKey, data: summary });
+          }
+        })
+        .catch(() => {});
+    }
     const loadForIdentity = async () => {
       await saveQueue.current;
       if (!cancelled && identityRef.current.sessionKey === sessionKey) await reload();
     };
     loadForIdentity();
     return () => { cancelled = true; };
-  }, [reload, sessionKey, user]);
+  }, [dashboardFirst, reload, sessionKey, user]);
 
   const setData = useCallback((nextData) => {
     if (!sessionKey || identityRef.current.sessionKey !== sessionKey) return dataRef.current;
@@ -306,5 +322,6 @@ export function useClinicData(user) {
   }, [applyData, sessionKey]);
 
   const ready = Boolean(sessionKey && dataOwnerKey === sessionKey && !loading);
-  return [data, setData, { loading, saving, error, reload, refreshInBackground, applyServerData, commitData, ready }];
+  const ownedDashboardData = dashboardDataForIdentity(dashboardData, sessionKey);
+  return [data, setData, { loading, saving, error, reload, refreshInBackground, applyServerData, commitData, ready, dashboardData: ownedDashboardData }];
 }

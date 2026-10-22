@@ -1,3 +1,4 @@
+import useConfirmation from "../hooks/useConfirmation";
 import { useRef, useState } from 'react';
 import { Download, RotateCcw, Upload } from 'lucide-react';
 import { api } from '../utils/api';
@@ -10,6 +11,7 @@ const templates = {
 };
 
 export default function ImportPanel({ type, title, description, onComplete }) {
+  const { confirmAction, confirmationDialog } = useConfirmation();
   const inputRef = useRef(null);
   const [previewRows, setPreviewRows] = useState([]);
   const [selectedIndices, setSelectedIndices] = useState([]);
@@ -76,7 +78,13 @@ export default function ImportPanel({ type, title, description, onComplete }) {
   };
 
   const rollback = async () => {
-    if (!batchId || busy || rolledBack || !window.confirm('Roll back this import batch? Any record with later edits or linked clinic activity will prevent rollback.')) return;
+    if (!batchId || busy || rolledBack) return;
+    if (!await confirmAction({
+      title: 'Roll back this import?',
+      message: 'Imported records from this batch will be removed. Records with later edits or linked clinic activity prevent rollback.',
+      confirmLabel: 'Roll back batch',
+      cancelLabel: 'Keep records',
+    })) return;
     setBusy(true);
     setError('');
     try {
@@ -126,6 +134,7 @@ export default function ImportPanel({ type, title, description, onComplete }) {
       {batchId && !rolledBack && <button type="button" className="secondary-btn" onClick={rollback} disabled={busy}><RotateCcw size={16} /> Roll back this batch</button>}
       {error && <div className="error-banner" role="alert">{error}</div>}
       {type === 'students' && <p className="disabled-note">Import actual records only after PTHI authorization and privacy review. Previewing a file never writes its contents.</p>}
+      {confirmationDialog}
     </section>
   );
 }

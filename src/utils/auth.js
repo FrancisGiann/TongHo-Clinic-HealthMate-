@@ -81,6 +81,22 @@ export async function activateAccount(token, username, password) {
   }
 }
 
+export async function requestGuardianSignup(payload) {
+  try {
+    return { success: true, ...(await api.post('/api/auth/guardian-signup/request', payload)) };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function verifyGuardianSignup(challengeId, code) {
+  try {
+    return { success: true, ...(await api.post('/api/auth/guardian-signup/verify', { challengeId, code })) };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
 export function validatePasswordStrength(password) {
   if (!password || password.length < 12) return { valid: false, error: 'Password must be at least 12 characters long.' };
   if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
@@ -101,6 +117,7 @@ export async function getUsersForAdmin({ throwOnError = false } = {}) {
       invitationAccepted: Boolean(user.invitation_accepted),
       contactNumber: user.contact_number || '',
       lastLogin: user.last_login_at || null,
+      createdAt: user.created_at || null,
     }));
   } catch (error) {
     if (throwOnError) throw error;
@@ -136,14 +153,16 @@ export async function resendInvitation(id) {
   }
 }
 
-export async function getAuditLogs({ throwOnError = false } = {}) {
+export async function getAuditLogs({ throwOnError = false, ...filters } = {}) {
   try {
-    const result = await api.get('/api/admin/audit-logs?limit=200');
-    return (result.logs || []).map((entry) => ({
+    const query = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => { if (value !== '' && value !== null && value !== undefined) query.set(key, String(value)); });
+    const result = await api.get(`/api/admin/audit-logs${query.size ? `?${query}` : ''}`);
+    return { ...(result || {}), logs: (result.logs || []).map((entry) => ({
       ...entry,
       timestamp: entry.created_at,
       details: entry.details || {},
-    }));
+    })) };
   } catch (error) {
     if (throwOnError) throw error;
     return [];

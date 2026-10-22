@@ -1,9 +1,9 @@
+import useConfirmation from "../hooks/useConfirmation";
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Archive,
   ArrowDownToLine,
-  ArrowUpDown,
   Edit2,
   PackageCheck,
   PackagePlus,
@@ -13,15 +13,19 @@ import {
 } from "lucide-react";
 import { api } from "../utils/api";
 import ModalDialog from "../components/ModalDialog";
+import { compareValues, readListState, sortAndPaginate, updateListParams } from "../utils/listState.js";
+import ListPagination from "../components/ListPagination.jsx";
 
 const categories = ["Analgesics", "First Aid", "Supplies", "Respiratory", "Antibiotics", "Vitamins", "Emergency"];
 const units = ["tablets", "pieces", "packs", "sachets", "inhalers", "bottles", "boxes", "ml"];
 
 export default function Inventory({ data, applyServerData, reload, saving = false }) {
+  const { confirmAction, confirmationDialog } = useConfirmation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [query, setQuery] = useState("");
-  const [sortAscending, setSortAscending] = useState(true);
-  const [showArchived, setShowArchived] = useState(false);
+  const list = readListState(searchParams, { sort: 'name', order: 'asc', pageSize: 25 });
+  const filterOptions = ['medications', 'supplies', 'unclassified', 'archived'];
+  const filter = filterOptions.includes(searchParams.get('filter')) ? searchParams.get('filter') : 'all';
+  const showArchived = filter === 'archived';
   const [restockItem, setRestockItem] = useState(null);
   const [restockQuantity, setRestockQuantity] = useState("10");
   const [restockReason, setRestockReason] = useState("Routine restock");
@@ -45,9 +49,21 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
   const low = activeInventory.filter(
     (item) => item.quantity <= item.reorderLevel,
   );
-  const items = inventory.filter((item) => showArchived || !item.archived).filter((item) =>
-    `${item.name} ${item.category}`.toLowerCase().includes(query.toLowerCase()),
-  ).sort((first, second) => sortAscending ? first.name.localeCompare(second.name) : second.name.localeCompare(first.name));
+  const matchingItems = inventory.filter((item) => (showArchived ? Boolean(item.archived) : !item.archived)
+    && (filter !== 'medications' || item.itemType === 'medication')
+    && (filter !== 'supplies' || item.itemType === 'supply')
+    && (filter !== 'unclassified' || !['medication', 'supply'].includes(item.itemType))
+    && `${item.name} ${item.category}`.toLowerCase().includes(list.q.toLowerCase()));
+  const pageResult = sortAndPaginate(matchingItems, (first, second, order) => {
+    if (list.sort === 'quantity') return compareValues(Number.isFinite(Number(first.quantity)) ? Number(first.quantity) : null, Number.isFinite(Number(second.quantity)) ? Number(second.quantity) : null, order);
+    if (list.sort === 'expiry') return compareValues(first.expiryDate || null, second.expiryDate || null, order);
+    return compareValues(first.name, second.name, order);
+  }, list);
+  const items = pageResult.items;
+  const setListValue = (key, value, resetPage = true) => updateListParams(searchParams, setSearchParams, { [key]: value }, { resetPage });
+  useEffect(() => {
+    if (list.page !== pageResult.page) setListValue('page', pageResult.page === 1 ? null : pageResult.page, false);
+  }, [list.page, pageResult.page]);
   
   // Calculate unique categories
   const uniqueCategories = new Set(activeInventory.map(item => item.category)).size || 0;
@@ -183,7 +199,11 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
   };
 
   const setArchived = async (item, archived) => {
-    if (archived && !confirm(`Archive "${item.name}"? It will no longer be available for dispensing.`)) {
+    if (archived && !await confirmAction({
+      title: 'Archive inventory item?',
+      message: `“${item.name}” will no longer be available for dispensing. You can restore it from Show archived.`,
+      confirmLabel: 'Archive item',
+    })) {
       return;
     }
     await runInventoryRequest(() => api.patch(`/api/inventory/${encodeURIComponent(item.id)}/archive`, {
@@ -202,7 +222,6 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
     const hasInventoryAction = requestedAdd || requestedArchived || requestedEdit || requestedRestock;
     if (!hasInventoryAction) return;
 
-    if (requestedArchived) setShowArchived(true);
     if (requestedAdd) openAddForm();
     else if (requestedEdit) {
       if (requestedEditItem) openEditForm(requestedEditItem);
@@ -211,8 +230,16 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
       if (requestedRestockItem) openRestock(requestedRestockItem);
       else setActionError('That inventory item is no longer available to restock. Refresh the inventory list and try again.');
     }
-    setSearchParams(new URLSearchParams(), { replace: true });
+    const nextParams = new URLSearchParams(searchParams);
+    for (const key of ['add', 'archived', 'edit', 'restock']) nextParams.delete(key);
+    if (requestedArchived) nextParams.set('filter', 'archived');
+    setSearchParams(nextParams, { replace: true });
   }, [searchParams, setSearchParams, inventory]);
+  const editUrl = (id) => {
+    const params = new URLSearchParams(searchParams);
+    params.set('edit', String(id));
+    return `/inventory?${params.toString()}`;
+  };
   return (
     <div className="form-page">
       <div className="page-intro">
@@ -266,18 +293,20 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
             <div className="search-box compact">
               <Search size={16} aria-hidden="true" />
               <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                value={list.q}
+                onChange={(e) => setListValue('q', e.target.value)}
                 placeholder="Search inventory..."
                 aria-label="Search inventory items"
               />
             </div>
-            <label className="filter-btn inventory-archived-filter"><input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />Show archived</label>
-            <button type="button" className="filter-btn" aria-pressed={sortAscending} onClick={() => setSortAscending((value) => !value)}>
-              <ArrowUpDown size={15} /> Sort
-            </button>
+            <label className="directory-filter">Sort by<select value={list.sort} onChange={(event) => setListValue('sort', event.target.value)}><option value="name">Name</option><option value="quantity">Quantity</option><option value="expiry">Expiry date</option></select></label>
+            <label className="directory-filter">Order<select value={list.order} onChange={(event) => setListValue('order', event.target.value)}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
           </div>
         </div>
+        <div className="inventory-filter-tabs" role="group" aria-label="Inventory categories">
+          {[['all', 'All active'], ['medications', 'Medications'], ['supplies', 'Supplies'], ['unclassified', 'Unclassified'], ['archived', 'Archived']].map(([value, label]) => <button type="button" key={value} className={`filter-btn${filter === value ? ' active' : ''}`} aria-pressed={filter === value} onClick={() => setListValue('filter', value === 'all' ? null : value)}>{label}</button>)}
+        </div>
+        <p className="field-hint" aria-live="polite">Showing {pageResult.total} inventory {pageResult.total === 1 ? 'item' : 'items'}.</p>
         <table aria-label="Inventory items and stock actions">
           <thead>
             <tr>
@@ -294,7 +323,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
             {items.length === 0 ? (
               <tr>
                 <td colSpan="7" className="empty-state">
-                  {query ? "No inventory items match your search." : showArchived ? "No archived items match this view." : "No active inventory items yet. Add an item to begin tracking stock."}
+                  {list.q ? "No inventory items match your search." : showArchived ? "No archived items match this view." : filter !== 'all' ? "No active items match this category." : "No active inventory items yet. Add an item to begin tracking stock."}
                 </td>
               </tr>
             ) : items.map((item) => (
@@ -304,7 +333,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
                   <small>
                     Reorder at {item.reorderLevel} {item.unit}
                   </small>
-                  {!item.archived && !['medication', 'supply'].includes(item.itemType) && <small className="inventory-type-review"><Link to={`/inventory?edit=${encodeURIComponent(item.id)}`}>Review item type</Link></small>}
+                  {!item.archived && !['medication', 'supply'].includes(item.itemType) && <small className="inventory-type-review"><Link to={editUrl(item.id)}>Review item type</Link></small>}
                 </td>
                 <td>{item.itemType
                   ? <span className="status-chip neutral">{item.itemType === 'medication' ? 'Medication' : 'Supply'}</span>
@@ -348,6 +377,8 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
             ))}
           </tbody>
         </table>
+        <ListPagination page={pageResult.page} pageCount={pageResult.pageCount} pageSize={pageResult.pageSize} total={pageResult.total}
+          onPageChange={(page) => setListValue('page', page === 1 ? null : page, false)} onPageSizeChange={(pageSize) => updateListParams(searchParams, setSearchParams, { pageSize, page: null }, { resetPage: true })} />
       </section>
       <ModalDialog open={Boolean(restockItem)} title="Restock item" eyebrow="Stock adjustment" onClose={() => setRestockItem(null)} busy={pendingAction}>
         {restockItem && <form onSubmit={restock}>
@@ -428,7 +459,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
               </label>
 
               <label>
-                Expiry date *
+                Expiry date (optional)
                 <input 
                   type="date"
                   value={formData.expiryDate}
@@ -465,6 +496,7 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
             </div>
           </form>
       </ModalDialog>
+      {confirmationDialog}
     </div>
   );
 }

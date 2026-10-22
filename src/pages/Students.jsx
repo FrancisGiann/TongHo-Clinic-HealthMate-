@@ -1,31 +1,56 @@
-import { useState } from "react";
+import { useEffect } from "react";
 import {
-  ArrowUpDown,
   Download,
   Plus,
   Search,
   ShieldAlert,
 } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { downloadCsv } from "../utils/csv";
+import { compareValues, manilaDateTimeKey, readListState, sortAndPaginate, updateListParams } from "../utils/listState.js";
+import ListPagination from "../components/ListPagination.jsx";
 
 export default function Students({ data, setData }) {
   const navigate = useNavigate();
-  const [query, setQuery] = useState("");
-  const [sortAscending, setSortAscending] = useState(true);
-  const [patientType, setPatientType] = useState('all');
-  const patients = (data.students || []).filter((record) => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const list = readListState(searchParams, { sort: 'name', order: 'asc', pageSize: 25 });
+  const patientType = ['student', 'faculty'].includes(searchParams.get('filter')) ? searchParams.get('filter') : 'all';
+  const grade = searchParams.get('grade') || '';
+  const section = searchParams.get('section') || '';
+  const gradeFiltersEnabled = patientType !== 'faculty';
+  const gradeRank = (value) => {
+    const text = String(value || '').trim();
+    if (/^(k|kindergarten)$/i.test(text)) return 0;
+    const match = /(?:grade\s*)?(\d{1,2})/i.exec(text);
+    return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
+  };
+  const latestVisits = new Map();
+  (data.visits || []).forEach((visit) => {
+    const patientId = String(visit.studentId || visit.patientId || '');
+    const timestamp = manilaDateTimeKey(visit.date || visit.createdAt || '', visit.time || '');
+    const current = latestVisits.get(patientId);
+    if (timestamp !== null && (!current || timestamp > current.timestamp)) latestVisits.set(patientId, { timestamp, visit });
+  });
+  const matchingPatients = (data.students || []).filter((record) => {
     const type = record.patientType === 'faculty' ? 'faculty' : 'student';
     return (patientType === 'all' || patientType === type)
-      && `${record.name} ${record.studentId || record.facultyId} ${record.gradeLevel || ''} ${record.section || ''} ${record.department || ''} ${record.position || ''}`.toLowerCase().includes(query.toLowerCase());
-  }).sort((first, second) => sortAscending ? first.name.localeCompare(second.name) : second.name.localeCompare(first.name));
-  const totalPatientRecords = (data.students || []).length;
-  const latestVisits = new Map();
-  data.visits.forEach((visit) => {
-    const studentId = String(visit.studentId || visit.patientId || '');
-    const current = latestVisits.get(studentId);
-    if (!current || String(visit.date || visit.createdAt || '') > String(current.date || current.createdAt || '')) latestVisits.set(studentId, visit);
+      && (!gradeFiltersEnabled || !grade || record.gradeLevel === grade)
+      && (!gradeFiltersEnabled || !section || record.section === section)
+      && `${record.name} ${record.studentId || record.facultyId} ${record.gradeLevel || ''} ${record.section || ''} ${record.department || ''} ${record.position || ''}`.toLowerCase().includes(list.q.toLowerCase());
   });
+  const pageResult = sortAndPaginate(matchingPatients, (first, second, order) => {
+    if (list.sort === 'grade') return compareValues(gradeRank(first.gradeLevel), gradeRank(second.gradeLevel), order) || compareValues(first.gradeLevel, second.gradeLevel, order);
+    if (list.sort === 'latestVisit') return compareValues(latestVisits.get(String(first.id))?.timestamp, latestVisits.get(String(second.id))?.timestamp, order);
+    return compareValues(first.name, second.name, order);
+  }, list);
+  const patients = pageResult.items;
+  const setListValue = (key, value, resetPage = true) => updateListParams(searchParams, setSearchParams, { [key]: value }, { resetPage });
+  useEffect(() => {
+    if (list.page !== pageResult.page) setListValue('page', pageResult.page === 1 ? null : pageResult.page, false);
+  }, [list.page, pageResult.page]);
+  const totalPatientRecords = (data.students || []).length;
+  const grades = [...new Set((data.students || []).filter((record) => record.patientType !== 'faculty').map((record) => record.gradeLevel).filter(Boolean))].sort((a, b) => compareValues(gradeRank(a), gradeRank(b)) || compareValues(a, b));
+  const sections = [...new Set((data.students || []).filter((record) => record.patientType !== 'faculty' && (!grade || record.gradeLevel === grade)).map((record) => record.section).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   const exportStudents = () => {
     const studentRows = data.students.map((student) => ({
       "Record Type": student.patientType === 'faculty' ? 'Faculty' : 'Student',
@@ -79,18 +104,19 @@ export default function Students({ data, setData }) {
         <div className="search-box">
           <Search size={18} aria-hidden="true" />
           <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            value={list.q}
+            onChange={(e) => setListValue('q', e.target.value)}
             placeholder="Search by name, ID, grade, section or department..."
             aria-label="Search patient records"
           />
         </div>
-        <button type="button" className="filter-btn patient-sort" onClick={() => setSortAscending((value) => !value)} aria-label={`Sort names ${sortAscending ? 'descending' : 'ascending'}`}>
-          <ArrowUpDown size={16} aria-hidden="true" /> Name {sortAscending ? 'A–Z' : 'Z–A'}
-        </button>
-        <label className="directory-filter">Record type<select value={patientType} onChange={(event) => setPatientType(event.target.value)}><option value="all">All patients</option><option value="student">Students</option><option value="faculty">Faculty</option></select></label>
+        <label className="directory-filter">Sort by<select value={list.sort} onChange={(event) => setListValue('sort', event.target.value)}><option value="name">Name</option><option value="grade">Grade</option><option value="latestVisit">Latest visit</option></select></label>
+        <label className="directory-filter">Order<select value={list.order} onChange={(event) => setListValue('order', event.target.value)}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
+        <label className="directory-filter">Record type<select value={patientType} onChange={(event) => updateListParams(searchParams, setSearchParams, { filter: event.target.value === 'all' ? null : event.target.value, ...(event.target.value === 'faculty' ? { grade: null, section: null } : {}) }, { resetPage: true })}><option value="all">All patients</option><option value="student">Students</option><option value="faculty">Faculty</option></select></label>
+        <label className="directory-filter">Grade<select value={gradeFiltersEnabled ? grade : ''} disabled={!gradeFiltersEnabled} onChange={(event) => updateListParams(searchParams, setSearchParams, { grade: event.target.value, section: null }, { resetPage: true })}><option value="">All grades</option>{grades.map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label className="directory-filter">Section<select value={gradeFiltersEnabled ? section : ''} disabled={!gradeFiltersEnabled} onChange={(event) => setListValue('section', event.target.value)}><option value="">All sections</option>{sections.map((value) => <option key={value}>{value}</option>)}</select></label>
       </div>
-      <p className="field-hint" aria-live="polite">Showing {patients.length} of {totalPatientRecords} patient records.</p>
+      <p className="field-hint" aria-live="polite">Showing {pageResult.total} of {totalPatientRecords} patient records.</p>
       <div className="student-grid">
         {patients.map((student, index) => (
           <Link
@@ -124,19 +150,21 @@ export default function Students({ data, setData }) {
             </div>
             <div className="card-footer">
               <span>
-                Last visit <b>{latestVisits.has(String(student.id)) ? `${latestVisits.get(String(student.id)).date || 'Date unavailable'}${latestVisits.get(String(student.id)).time ? `, ${latestVisits.get(String(student.id)).time}` : ''}` : 'No visits recorded'}</b>
+                Last visit <b>{latestVisits.has(String(student.id)) ? `${latestVisits.get(String(student.id)).visit.date || 'Date unavailable'}${latestVisits.get(String(student.id)).visit.time ? `, ${latestVisits.get(String(student.id)).visit.time}` : ''}` : 'No visits recorded'}</b>
               </span>
               <span className="card-arrow">↗</span>
             </div>
           </Link>
         ))}
       </div>
+      <ListPagination page={pageResult.page} pageCount={pageResult.pageCount} pageSize={pageResult.pageSize} total={pageResult.total}
+        onPageChange={(page) => setListValue('page', page === 1 ? null : page, false)} onPageSizeChange={(pageSize) => updateListParams(searchParams, setSearchParams, { pageSize, page: null }, { resetPage: true })} />
       {!patients.length && (
         <div className="no-results" role="status">
           {totalPatientRecords === 0 ? (
             <><strong>No patient records yet.</strong><p>Register a student or faculty member to begin the clinic directory.</p><button type="button" className="primary-btn" onClick={() => navigate('/students/new')}><Plus size={16} /> Register student</button></>
           ) : (
-            <><strong>No patient records match this view.</strong><p>Try another search term or record type.</p><button type="button" className="secondary-btn" onClick={() => { setQuery(''); setPatientType('all'); }}>Clear search and filters</button></>
+            <><strong>No patient records match this view.</strong><p>Try another search term or record type.</p><button type="button" className="secondary-btn" onClick={() => updateListParams(searchParams, setSearchParams, { q: null, filter: null, grade: null, section: null }, { resetPage: true })}>Clear search and filters</button></>
           )}
         </div>
       )}

@@ -11,6 +11,7 @@ import {
   FileBarChart,
   HeartPulse,
   Home,
+  Images,
   LogOut,
   Menu,
   Moon,
@@ -25,6 +26,7 @@ import {
 } from "lucide-react";
 import { api } from "../utils/api";
 import { formatManilaDateTime } from "../utils/dateTime";
+import { DEFAULT_APPLICATION_LOGO, useBranding } from "../hooks/useBranding.js";
 
 const nurseNavGroups = [
   { label: "Overview", items: [
@@ -35,6 +37,7 @@ const nurseNavGroups = [
     { to: "/health-record-review", label: "Health record review", icon: ClipboardList },
     { to: "/new-visit", label: "New Visit", icon: Stethoscope },
     { to: "/appointments", label: "Appointments", icon: CalendarDays },
+    { to: "/incidents", label: "Incident reports", icon: ClipboardList },
   ] },
   { label: "Clinic operations", items: [
     { to: "/inventory", label: "Inventory", icon: Package },
@@ -50,6 +53,7 @@ const adminNavGroups = [
   ] },
   { label: "Administration", items: [
     { to: "/users", label: "Users", icon: Users },
+    { to: "/cms", label: "Content management", icon: Images },
     { to: "/data-imports", label: "Data & Imports", icon: Database },
     { to: "/communications", label: "Communications", icon: Bell },
     { to: "/risk-rules", label: "Risk Rules", icon: ShieldCheck },
@@ -65,6 +69,7 @@ const portalNavGroups = [
     { to: "/", label: "My Health Portal", icon: Home },
     { to: "/appointments", label: "Appointments", icon: CalendarDays },
     { to: "/visits", label: "Visit History", icon: ClipboardList },
+    { to: "/incidents", label: "Incident reports", icon: ClipboardList },
     { to: "/health-records", label: "Student Health Record", icon: HeartPulse },
   ] },
 ];
@@ -83,7 +88,9 @@ function getStoredSidebarCollapsed() {
 export default function MainLayout({ settings, dark, setDark, user, onLogout, logoutError, data }) {
   const [collapsed, setCollapsed] = useState(getStoredSidebarCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [logoSource, setLogoSource] = useState("/Logo.jpg");
+  const branding = useBranding();
+  const [logoFailed, setLogoFailed] = useState(false);
+  const logoSource = logoFailed ? DEFAULT_APPLICATION_LOGO : branding.applicationLogo;
   const [clock, setClock] = useState(() => new Date());
   const [showNotifications, setShowNotifications] = useState(false);
   const [serverNotifications, setServerNotifications] = useState([]);
@@ -100,6 +107,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
   const location = useLocation();
   const previousPathRef = useRef(location.pathname);
   const navigate = useNavigate();
+  useEffect(() => setLogoFailed(false), [branding.applicationLogo]);
   const isAdmin = user?.role === 'system_administrator';
   const navGroups = isAdmin ? adminNavGroups : user?.role === 'school_nurse' ? nurseNavGroups : portalNavGroups;
   const nav = navGroups.flatMap((group) => group.items);
@@ -244,8 +252,8 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
           <div className="brand-mark">
             <img
               src={logoSource}
-              alt="Tong Ho Institute seal"
-              onError={() => setLogoSource("/tong-ho-logo.svg")}
+              alt="HealthMate+ logo"
+              onError={() => setLogoFailed(true)}
             />
           </div>
           <div className="brand-copy">

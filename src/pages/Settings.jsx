@@ -1,3 +1,4 @@
+import useConfirmation from "../hooks/useConfirmation";
 import { useRef, useState, useEffect } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { Check, Database, Download, Lock, RotateCcw, ShieldCheck, Upload, X, UserCog, Bell, FileBarChart, KeyRound } from "lucide-react";
@@ -6,6 +7,9 @@ import { api } from "../utils/api";
 import ImportPanel from "../components/ImportPanel";
 import RiskRuleBuilder, { RiskRuleDetails } from "../components/RiskRuleBuilder";
 import StudentPicker from "../components/StudentPicker";
+import ListPagination from "../components/ListPagination";
+import GuardianSignupRequests from "../components/GuardianSignupRequests.jsx";
+import { compareValues, readListState, sortAndPaginate, updateListParams } from "../utils/listState";
 import {
   getAuditLogs,
   getUsersForAdmin,
@@ -35,6 +39,9 @@ const auditEventMeta = {
   ACCOUNT_APPROVED: { label: "Staff account approved", tone: "positive", group: "People" },
   ACCOUNT_REJECTED: { label: "Staff account rejected", tone: "critical", group: "People" },
   NURSE_ACCOUNT_CREATED: { label: "Staff account created", tone: "security", group: "People" },
+  GUARDIAN_SIGNUP_REQUESTED: { label: "Guardian signup verification requested", tone: "security", group: "People" },
+  GUARDIAN_SELF_SIGNUP_COMPLETED: { label: "Guardian account created", tone: "positive", group: "People" },
+  DASHBOARD_PREFERENCES_UPDATED: { label: "Dashboard preferences updated", tone: "neutral", group: "System" },
   NOTIFICATION_BROADCAST_STARTED: { label: "Clinic notice started", tone: "neutral", group: "Notifications" },
   NOTIFICATION_BROADCAST_COMPLETED: { label: "Clinic notice completed", tone: "positive", group: "Notifications" },
 };
@@ -54,7 +61,7 @@ const getAuditMeta = (event) => auditEventMeta[event] || {
 const getAuditSubject = (entry, accounts = []) => {
   const details = entry.details || {};
   const actor = accounts.find((account) => String(account.id) === String(entry.actor_user_id));
-  return actor?.name || actor?.email || details.username || details.email || details.approvedBy || (entry.actor_user_id ? 'Account unavailable' : 'System');
+  return entry.actor_name || entry.actor_email || actor?.name || actor?.email || details.username || details.email || details.approvedBy || (entry.actor_user_id ? 'Account unavailable' : 'System');
 };
 
 const formatAuditDetails = (details = {}) => Object.entries(details).map(([key, value]) => {
@@ -79,6 +86,8 @@ const newBroadcastRequestId = () => {
 };
 
 export default function Settings({ data, user, reload, section }) {
+  const { confirmAction, confirmationDialog } = useConfirmation();
+  const confirmedActionLock = useRef(false);
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [isAuthorized, setIsAuthorized] = useState(true);
@@ -87,6 +96,8 @@ export default function Settings({ data, user, reload, section }) {
   const [authError, setAuthError] = useState("");
   const [attempts, setAttempts] = useState(0);
   const [auditLogs, setAuditLogs] = useState([]);
+  const [auditPage, setAuditPage] = useState({ previousCursor: null, nextCursor: null, hasPrevious: false, hasNext: false });
+  const [auditRetry, setAuditRetry] = useState(0);
   const [auditLoading, setAuditLoading] = useState(section === 'security');
   const [auditError, setAuditError] = useState('');
   const [sessions, setSessions] = useState([]);
@@ -157,13 +168,23 @@ export default function Settings({ data, user, reload, section }) {
     }
   };
   const userFilter = searchParams.get('filter') || 'all';
-  const visibleUsers = users.filter((account) => {
-    if (userFilter === 'active') return account.status === 'active';
-    if (userFilter === 'invited') return account.status === 'invited';
-    if (userFilter === 'nurses') return account.role === 'school_nurse';
-    if (userFilter === 'restricted') return account.status !== 'active';
-    return true;
+  const userListState = readListState(searchParams, { sort: 'name', order: 'asc', pageSize: 25 });
+  const roleFilter = searchParams.get('role') || 'all';
+  const statusFilter = searchParams.get('status') || 'all';
+  const filteredUsers = users.filter((account) => {
+    if (userFilter === 'active' && account.status !== 'active') return false;
+    if (userFilter === 'invited' && account.status !== 'invited') return false;
+    if (userFilter === 'nurses' && account.role !== 'school_nurse') return false;
+    if (userFilter === 'restricted' && account.status === 'active') return false;
+    if (roleFilter !== 'all' && account.role !== roleFilter) return false;
+    if (statusFilter !== 'all' && account.status !== statusFilter) return false;
+    const query = userListState.q.trim().toLocaleLowerCase();
+    return !query || [account.name, account.email, account.username].some((value) => String(value || '').toLocaleLowerCase().includes(query));
   });
+  const userSortGetters = { name: (account) => account.name, role: (account) => account.role, status: (account) => account.status, created: (account) => account.createdAt, lastLogin: (account) => account.lastLogin };
+  const getUserSortValue = userSortGetters[userListState.sort] || userSortGetters.name;
+  const userPage = sortAndPaginate(filteredUsers, (first, second, order) => compareValues(getUserSortValue(first), getUserSortValue(second), order), userListState);
+  const visibleUsers = userPage.items;
 
   const refreshSessions = async () => {
     try {
@@ -175,18 +196,40 @@ export default function Settings({ data, user, reload, section }) {
     }
   };
 
-  const refreshAuditLogs = async () => {
+  const auditQuery = {
+    event: searchParams.get('event') || '', actorId: searchParams.get('actorId') || '',
+    start: searchParams.get('auditStart') || '', end: searchParams.get('auditEnd') || '',
+    order: searchParams.get('auditOrder') === 'oldest' ? 'oldest' : 'newest',
+    limit: [10, 25, 50].includes(Number(searchParams.get('auditLimit'))) ? Number(searchParams.get('auditLimit')) : 25,
+    cursor: searchParams.get('cursor') || '',
+  };
+  const updateAuditFilter = (updates) => {
+    const next = new URLSearchParams(searchParams);
+    for (const [key, value] of Object.entries(updates)) {
+      if (value === null || value === undefined || value === '') next.delete(key);
+      else next.set(key, String(value));
+    }
+    if (!Object.hasOwn(updates, 'cursor')) next.delete('cursor');
+    setSearchParams(next);
+  };
+
+  useEffect(() => {
+    if (!isAdmin || activeSection !== 'security') return undefined;
+    let active = true;
     setAuditLoading(true);
     setAuditError('');
-    try {
-      const logs = await getAuditLogs({ throwOnError: true });
-      setAuditLogs(logs);
-    } catch (error) {
-      setAuditError(error.message || 'Audit history could not be loaded. Try refreshing.');
-    } finally {
-      setAuditLoading(false);
+    getAuditLogs({ ...auditQuery, throwOnError: true })
+      .then((result) => { if (active) { setAuditLogs(result.logs); setAuditPage(result); } })
+      .catch((error) => { if (active) setAuditError(error.message || 'Audit history could not be loaded. Try refreshing.'); })
+      .finally(() => { if (active) setAuditLoading(false); });
+    return () => { active = false; };
+  }, [isAdmin, activeSection, auditQuery.event, auditQuery.actorId, auditQuery.start, auditQuery.end, auditQuery.order, auditQuery.limit, auditQuery.cursor, auditRetry]);
+
+  useEffect(() => {
+    if (activeSection === 'users' && userPage.page !== userListState.page) {
+      updateListParams(searchParams, setSearchParams, { page: userPage.page }, { replace: true });
     }
-  };
+  }, [activeSection, userPage.page, userListState.page, searchParams, setSearchParams]);
 
   useEffect(() => {
     feedbackScopeRef.current = feedbackScope;
@@ -208,7 +251,6 @@ export default function Settings({ data, user, reload, section }) {
     loadRiskRules();
     if (!isAdmin) return;
     if (activeSection === 'security') {
-      refreshAuditLogs();
       getUsersForAdmin().then(setUsers);
     }
     if (activeSection === 'users') {
@@ -269,7 +311,16 @@ export default function Settings({ data, user, reload, section }) {
   };
 
   const revokeSession = async (session) => {
-    if (!window.confirm(session.current ? 'Sign out this browser now?' : 'Sign out this session?')) return;
+    if (confirmedActionLock.current) return;
+    confirmedActionLock.current = true;
+    if (!await confirmAction({
+      title: session.current ? 'Sign out this browser?' : 'Sign out this session?',
+      message: session.current ? 'You will need to sign in again to continue in this browser.' : 'That session will need to sign in again. Your current browser will stay signed in.',
+      confirmLabel: 'Sign out',
+    })) {
+      confirmedActionLock.current = false;
+      return;
+    }
     setSessionMessage('');
     const scope = feedbackScopeRef.current;
     try {
@@ -282,6 +333,8 @@ export default function Settings({ data, user, reload, section }) {
       await refreshSessions();
     } catch (error) {
       setScopedFeedback(scope, setSessionMessage, error.message);
+    } finally {
+      confirmedActionLock.current = false;
     }
   };
 
@@ -372,6 +425,7 @@ export default function Settings({ data, user, reload, section }) {
     const nextParams = new URLSearchParams(searchParams);
     if (value === 'all') nextParams.delete('filter');
     else nextParams.set('filter', value);
+    nextParams.delete('page');
     setSearchParams(nextParams);
   };
 
@@ -527,12 +581,26 @@ export default function Settings({ data, user, reload, section }) {
     if (result.success) await refreshUsers();
   };
   const handleCancelInvitation = async (account) => {
-    if (!window.confirm(`Cancel ${account.name}'s invitation? Its activation link will stop working.`)) return;
-    const scope = feedbackScopeRef.current;
-    clearUserActionFeedback();
-    const result = await updateUserStatus(account.id, 'deactivated');
-    showScopedUserActionFeedback(scope, result.success ? 'success' : 'error', result.success ? `Invitation canceled for ${account.name}.` : result.error);
-    if (result.success) await refreshUsers();
+    if (confirmedActionLock.current) return;
+    confirmedActionLock.current = true;
+    if (!await confirmAction({
+      title: 'Cancel invitation?',
+      message: `The activation link for ${account.name} will stop working.`,
+      confirmLabel: 'Cancel invitation',
+      cancelLabel: 'Keep invitation',
+    })) {
+      confirmedActionLock.current = false;
+      return;
+    }
+    try {
+      const scope = feedbackScopeRef.current;
+      clearUserActionFeedback();
+      const result = await updateUserStatus(account.id, 'deactivated');
+      showScopedUserActionFeedback(scope, result.success ? 'success' : 'error', result.success ? `Invitation canceled for ${account.name}.` : result.error);
+      if (result.success) await refreshUsers();
+    } finally {
+      confirmedActionLock.current = false;
+    }
   };
   const saveGuardianLink = async (event) => {
     event.preventDefault();
@@ -624,6 +692,7 @@ export default function Settings({ data, user, reload, section }) {
 
   return (
     <div className="form-page">
+      {confirmationDialog}
       <div className="page-intro">
         <div>
           {activeSection !== 'data' && <p className="section-kicker">{isAdmin ? 'Administration' : activeSection === 'account' ? 'Workspace preferences' : 'Clinic operations'}</p>}
@@ -636,7 +705,6 @@ export default function Settings({ data, user, reload, section }) {
         <section className="panel settings-tab-panel">
           <div className="settings-panel-heading"><div><p className="section-kicker">{isAdmin ? 'Administrator identity' : 'Staff identity'}</p><h3>{isAdmin ? 'Account settings' : 'My account'}</h3></div><span className="settings-badge">{isAdmin ? 'Full access' : 'Clinic staff'}</span></div>
           <div className="profile-settings-grid">
-            <div className="profile-photo-placeholder"><span>{(user?.name || 'User').split(' ').map((part) => part[0]).join('').slice(0, 2)}</span><small>Profile photos aren't available in account settings.</small></div>
             <div className="two-fields">
               <label>Full name<input defaultValue={user?.name || ''} disabled /></label>
               <label>Email<input type="email" defaultValue={user?.email || ''} disabled /></label>
@@ -666,11 +734,12 @@ export default function Settings({ data, user, reload, section }) {
         </section>
       )}
 
+
       {activeSection === 'users' && isAdmin && (
         <section className="panel settings-tab-panel">
           <div className="settings-panel-heading"><div><p className="section-kicker">Access control</p><h3>User management</h3></div><button className="primary-btn" onClick={() => setShowUserForm(!showUserForm)}><UserCog size={15} /> Add new user</button></div>
           <div className="settings-users-toolbar">
-            <p className="tab-description">Invite staff and guardians by email. Invited accounts become active after they accept their secure email link. Administrators record nurse PRC verification here.</p>
+            <p className="tab-description">Invite staff or manage administrator-issued guardian invitations. Self-registered guardians remain pending until you verify their relationship against school records. Administrators record nurse PRC verification here.</p>
             <label>Show accounts
               <select value={['all', 'active', 'invited', 'nurses', 'restricted'].includes(userFilter) ? userFilter : 'all'} onChange={(event) => updateUserFilter(event.target.value)}>
                 <option value="all">All accounts</option>
@@ -680,6 +749,11 @@ export default function Settings({ data, user, reload, section }) {
                 <option value="restricted">Restricted or pending</option>
               </select>
             </label>
+            <label className="settings-users-filter-field settings-users-search-field"><span>Search accounts</span><span className="search-box settings-users-search-box"><input type="search" aria-label="Search name, email, or username" value={userListState.q} placeholder="Name, email, or username" onChange={(event) => updateListParams(searchParams, setSearchParams, { q: event.target.value }, { resetPage: true })} /></span></label>
+            <label>Role<select value={roleFilter} onChange={(event) => updateListParams(searchParams, setSearchParams, { role: event.target.value === 'all' ? null : event.target.value }, { resetPage: true })}><option value="all">All roles</option><option value="system_administrator">Administrator</option><option value="school_nurse">Nurse</option><option value="guardian">Guardian</option><option value="student">Student account</option></select></label>
+            <label>Status<select value={statusFilter} onChange={(event) => updateListParams(searchParams, setSearchParams, { status: event.target.value === 'all' ? null : event.target.value }, { resetPage: true })}><option value="all">All statuses</option><option value="active">Active</option><option value="invited">Invited</option><option value="deactivated">Deactivated</option></select></label>
+            <label>Sort by<select value={userSortGetters[userListState.sort] ? userListState.sort : 'name'} onChange={(event) => updateListParams(searchParams, setSearchParams, { sort: event.target.value }, { resetPage: true })}><option value="name">Name</option><option value="role">Role</option><option value="status">Status</option><option value="created">Created</option><option value="lastLogin">Last login</option></select></label>
+            <label>Order<select value={userListState.order} onChange={(event) => updateListParams(searchParams, setSearchParams, { order: event.target.value }, { resetPage: true })}><option value="asc">A to Z / oldest</option><option value="desc">Z to A / newest</option></select></label>
           </div>
           {showUserForm && <form className="inline-user-form" onSubmit={handleCreateUser}>
             <label>Name<input value={newUser.name} onChange={(event) => setNewUser({ ...newUser, name: event.target.value })} required disabled={inviteSaving} /></label>
@@ -727,6 +801,8 @@ export default function Settings({ data, user, reload, section }) {
             <div className="form-actions"><button type="submit" className="primary-btn" disabled={licenseSaving || (Boolean(nurseLicenseNumber.trim()) && !licenseVerificationConfirmed) || (!nurseLicenseNumber.trim() && !nurseLicenseTarget.prcLicenseNumber)}>{licenseSaving ? 'Saving…' : nurseLicenseNumber.trim() ? 'Record verified license' : 'Clear license record'}</button><button type="button" className="secondary-btn" onClick={() => setNurseLicenseTarget(null)} disabled={licenseSaving}>Cancel</button></div>
           </form>}
           <div className="admin-table-wrap"><table className="admin-table settings-users-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>PRC license</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{visibleUsers.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student (login removed)', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.role === 'school_nurse' ? <span className={`status-chip ${account.prcLicenseVerified ? 'success' : 'warn'}`}>{account.prcLicenseVerified ? 'Recorded by admin' : 'Not recorded'}</span> : '—'}</td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.role === 'student' ? 'Student sign-in is disabled' : <>{account.status === 'invited' ? <><button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button><button type="button" className="table-action" onClick={() => handleCancelInvitation(account)}>Cancel invitation</button></> : account.status === 'deactivated' && !account.invitationAccepted && account.username === `invited-${account.id.slice(0, 8)}` ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Send new invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}{account.role === 'guardian' && <button type="button" className="table-action" onClick={() => { setGuardianLinkTarget(account); setGuardianLinkForm({ patientId: '', relationship: 'Parent' }); }}>Link student</button>}{account.role === 'school_nurse' && <button type="button" className="table-action" onClick={() => openNurseLicenseEditor(account)}>{account.prcLicenseVerified ? 'Update or clear license' : 'Record verified license'}</button>}</>}</td></tr>)}</tbody></table>{visibleUsers.length === 0 && <p className="empty-state">{users.length ? 'No accounts match this filter.' : 'No system accounts are available yet.'}</p>}</div>
+          <ListPagination page={userPage.page} pageCount={userPage.pageCount} pageSize={userPage.pageSize} total={userPage.total} onPageChange={(page) => updateListParams(searchParams, setSearchParams, { page })} onPageSizeChange={(pageSize) => updateListParams(searchParams, setSearchParams, { pageSize }, { resetPage: true })} />
+          <GuardianSignupRequests />
         </section>
       )}
 
@@ -881,13 +957,21 @@ export default function Settings({ data, user, reload, section }) {
               <h3>Audit history</h3>
               <p className="field-hint">Recent account access and administrative activity recorded by the server.</p>
             </div>
-            <button type="button" className="secondary-btn" onClick={refreshAuditLogs} disabled={auditLoading}>
+            <button type="button" className="secondary-btn" onClick={() => setAuditRetry((count) => count + 1)} disabled={auditLoading}>
               <RotateCcw size={15} aria-hidden="true" /> {auditLoading ? 'Refreshing…' : 'Refresh history'}
             </button>
           </div>
           <p className="disabled-note audit-history-note"><ShieldCheck size={14} aria-hidden="true" /> Event details are filtered before display. Manage active sessions under My Account; server security settings are controlled by deployment configuration.</p>
+          <div className="audit-filter-toolbar">
+            <label>Event<select value={auditQuery.event} onChange={(event) => updateAuditFilter({ event: event.target.value })}><option value="">All events</option>{Object.keys(auditEventMeta).sort().map((event) => <option value={event} key={event}>{auditEventMeta[event].label}</option>)}</select></label>
+            <label>Actor<select value={auditQuery.actorId} onChange={(event) => updateAuditFilter({ actorId: event.target.value })}><option value="">All actors</option><option value="system">System</option>{users.map((account) => <option key={account.id} value={account.id}>{account.name} · {account.email}</option>)}</select></label>
+            <label>From<input type="date" value={auditQuery.start} max={auditQuery.end || undefined} onChange={(event) => updateAuditFilter({ auditStart: event.target.value })} /></label>
+            <label>To<input type="date" value={auditQuery.end} min={auditQuery.start || undefined} onChange={(event) => updateAuditFilter({ auditEnd: event.target.value })} /></label>
+            <label>Order<select value={auditQuery.order} onChange={(event) => updateAuditFilter({ auditOrder: event.target.value })}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
+            <label>Page size<select value={auditQuery.limit} onChange={(event) => updateAuditFilter({ auditLimit: event.target.value })}><option value="10">10</option><option value="25">25</option><option value="50">50</option></select></label>
+          </div>
           {auditLoading && <p className="field-hint" role="status">Loading audit history…</p>}
-          {auditError && <div className="error-banner" role="alert">{auditError}</div>}
+          {auditError && <div className="error-banner" role="alert">{auditError} <button type="button" className="secondary-btn" onClick={() => setAuditRetry((count) => count + 1)}>Retry</button></div>}
           {!auditLoading && !auditError && auditLogs.length === 0 && <p className="empty-state audit-history-empty">No audit activity is available yet.</p>}
           {auditLogs.length > 0 && <>
             <div className="admin-table-wrap">
@@ -906,7 +990,7 @@ export default function Settings({ data, user, reload, section }) {
                 })}</tbody>
               </table>
             </div>
-            <p className="audit-history-count">Showing the latest {auditLogs.length} events from the server audit log.</p>
+            <div className="list-pagination audit-pagination"><p>Showing {auditLogs.length} events in this page.</p><div className="list-pagination-actions"><button type="button" className="secondary-btn" disabled={!auditPage.hasPrevious || auditLoading} onClick={() => updateAuditFilter({ cursor: auditPage.previousCursor })}>Previous</button><button type="button" className="secondary-btn" disabled={!auditPage.hasNext || auditLoading} onClick={() => updateAuditFilter({ cursor: auditPage.nextCursor })}>Next</button></div></div>
           </>}
         </section>
       )}

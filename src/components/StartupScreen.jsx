@@ -47,7 +47,7 @@ export default function StartupScreen({
       <section className="hm-startup-frame" aria-labelledby="hm-startup-title">
         <header className="hm-startup-header">
           <div className="hm-startup-brand">
-            <img src="/Logo.jpg" alt="" width="44" height="44" />
+            <img src="/healthmate-mark.svg" alt="" width="44" height="44" />
             <div>
               <strong>HealthMate+</strong>
               <span>Philippine Tong Ho Institute</span>

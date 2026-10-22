@@ -42,3 +42,51 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.report-tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--line); }
+.report-tabs button { min-height: 44px; padding: 8px 14px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font: 600 var(--type-body) "IBM Plex Sans", sans-serif; }
+.report-tabs button.active { border-bottom-color: var(--teal); color: var(--teal-dark); }
+.patient-summary-identity { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px; }
+.patient-summary-identity h3 { margin: 0; }
+.patient-summary-identity p { margin: 6px 0 0; overflow-wrap: anywhere; }
+.patient-summary-identity > div:last-child { display: grid; gap: 3px; min-width: 140px; padding: 12px 16px; border-radius: 10px; background: var(--surface-muted, #f1f5f9); }
+.patient-summary-identity > div:last-child strong { font-size: 25px; }
+.patient-summary-health { padding: 20px; }
+.summary-health-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.summary-health-field { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 9px; }
+.summary-health-field p { margin: 7px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.report-print-root { width: 100%; min-height: 1px; padding: 0; }
+@media screen {
+  .report-print-root { position: fixed; inset: 0; z-index: 10000; display: flex; flex-direction: column; width: auto; min-height: 0; margin: 0; padding: 16px clamp(12px, 3vw, 32px) 28px; overflow: auto; background: var(--page, #eef2f6); outline: 0; }
+  .report-print-root:focus { outline: 0; }
+  .report-print-root .print-preview-actions { position: sticky; top: 0; z-index: 1; flex: none; padding: 10px 0; background: var(--page, #eef2f6); }
+  .report-print-document { flex: 0 0 auto; align-self: center; box-sizing: border-box; width: min(100%, 210mm); min-height: 270mm; height: auto; margin: 0 auto; padding: 14mm; overflow: visible; background: #fff; box-shadow: 0 8px 30px rgb(15 23 42 / 16%); }
+}
+.report-print-document { color: #111; font: 10pt/1.35 Arial, sans-serif; overflow-wrap: anywhere; }
+.report-print-document header { margin-bottom: 7mm; text-align: center; }
+.report-print-document header p { margin: 1mm 0; }
+.report-print-document h1 { margin: 2mm 0; font: bold 17pt/1.2 Arial, sans-serif; }
+.report-print-document h2 { margin: 7mm 0 2mm; font: bold 13pt/1.2 Arial, sans-serif; }
+.report-print-section { margin: 5mm 0; break-inside: auto; }
+.report-print-section h3 { margin: 0 0 2mm; font: bold 11pt/1.2 Arial, sans-serif; break-after: avoid; }
+.report-print-document table { width: 100%; min-width: 0; border-collapse: collapse; table-layout: fixed; }
+.report-print-document th, .report-print-document td { padding: 2mm; border: 1px solid #8b8b8b; color: #111; text-align: left; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
+.report-print-document thead { display: table-header-group; }
+.report-print-document tr { break-inside: avoid; }
+.patient-summary-visit { margin: 0 0 4mm; padding: 3mm; border: 1px solid #8b8b8b; break-inside: avoid-page; page-break-inside: avoid; }
+.patient-summary-visit h3 { margin: 0 0 2mm; font: bold 11pt/1.2 Arial, sans-serif; break-after: avoid-page; page-break-after: avoid; }
+.patient-summary-visit p { margin: 1.5mm 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.print-preview-actions { display: flex; gap: 8px; justify-content: flex-end; margin-bottom: 16px; }
+@media print {
+  .print-preview-actions { display: none !important; }
+  .report-print-root { position: static; inset: auto; display: block; width: 100%; min-height: 0; margin: 0; padding: 0; overflow: visible; background: #fff; }
+  .report-print-document { width: 100%; min-height: 0; margin: 0; padding: 0; box-shadow: none; }
+}
+@media (max-width: 760px) {
+  .patient-summary-identity { align-items: stretch; flex-direction: column; }
+  .summary-health-grid { grid-template-columns: minmax(0, 1fr); }
+  .report-print-root { padding: 8px 8px 20px; }
+  .report-print-root .print-preview-actions { justify-content: stretch; }
+  .report-print-root .print-preview-actions button { flex: 1; justify-content: center; }
+  .report-print-document { padding: 7mm; }
+}

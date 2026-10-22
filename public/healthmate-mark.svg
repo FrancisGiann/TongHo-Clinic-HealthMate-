@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title id="title">HealthMate+ mark</title>
+  <circle cx="48" cy="48" r="46" fill="#eaf2ff" stroke="#204982" stroke-width="4"/>
+  <path d="M48 76 25.2 54.5C11.6 41.7 21.1 23 36.2 25.2 42 26 46 30.1 48 34.5c2-4.4 6-8.5 11.8-9.3C75 23 84.4 41.7 70.8 54.5L48 76Z" fill="#fff" stroke="#204982" stroke-width="3.5" stroke-linejoin="round"/>
+  <path d="M43 37h10v8h8v10h-8v8H43v-8h-8V45h8z" fill="#d9232e"/>
+</svg>

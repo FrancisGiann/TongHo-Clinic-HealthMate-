@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef } from "react";
 import { X } from "lucide-react";
 
-export default function ModalDialog({ open, title, eyebrow, onClose, busy = false, children, className = "" }) {
+export default function ModalDialog({ open, title, eyebrow, onClose, busy = false, children, className = "", descriptionId, initialFocusSelector }) {
   const dialogRef = useRef(null);
   const titleId = useId();
 
@@ -11,16 +11,32 @@ export default function ModalDialog({ open, title, eyebrow, onClose, busy = fals
 
     if (open && !dialog.open) {
       dialog.showModal();
-      const initialFocus = dialog.querySelector("[autofocus]")
+      const initialFocus = (initialFocusSelector && dialog.querySelector(initialFocusSelector))
+        || dialog.querySelector("[autofocus]")
         || dialog.querySelector("input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])");
       initialFocus?.focus();
     } else if (!open && dialog.open) {
       dialog.close();
     }
-  }, [open]);
+  }, [open, initialFocusSelector]);
 
   const closeIfAllowed = () => {
     if (!busy) onClose?.();
+  };
+
+  const handleKeyDown = (event) => {
+    if (event.key !== 'Tab') return;
+    const controls = [...event.currentTarget.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+      .filter((element) => element.getClientRects().length > 0);
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last?.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first?.focus();
+    }
   };
 
   const handleBackdropClick = (event) => {
@@ -36,11 +52,13 @@ export default function ModalDialog({ open, title, eyebrow, onClose, busy = fals
       ref={dialogRef}
       className={`modal-card quick-entry-dialog ${className}`.trim()}
       aria-labelledby={titleId}
+      aria-describedby={descriptionId}
       onClose={onClose}
       onCancel={(event) => {
         if (busy) event.preventDefault();
       }}
       onClick={handleBackdropClick}
+      onKeyDown={handleKeyDown}
     >
       <div className="modal-heading">
         <div>
