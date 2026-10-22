@@ -20,18 +20,23 @@ HealthMate+ combines PTHI-specific clinic workflows with explainable risk and pa
 
 ## Operating Context
 
-The application is used through standard desktop and laptop web browsers. It supports consultation documentation, follow-up work, appointment requests, school reporting, and account administration. Health screening, incident reporting, walk-in queue management, and immunization recording are outside the current prototype scope and intended revised proposal scope. The original proposal has not yet been revised and still includes a manual student incident self-report passage. Historical records for removed workflows remain in the database, but the current app does not expose them or accept new or changed screening and incident records. The final deployment may run on Hostinger with Supabase PostgreSQL and SMTP email; it has no offline fallback and must not assume localhost or a school-only LAN.
+The application is used through standard desktop and laptop web browsers. It supports consultation documentation, follow-up work, guardian appointment requests, appointment availability management, school reporting, and account administration. Nurses can create and maintain student incident reports, and linked guardians can view those reports; students do not self-report or sign in. Incident photos are a separate, defense-only capability requiring the feature flag, private storage, and incident-specific guardian consent. Health screening, walk-in queue management, and immunization recording remain outside current scope. Historical records for removed workflows remain in the database, but the current app does not expose them or accept new or changed screening records. The final deployment may run on Hostinger with Supabase PostgreSQL, private Supabase Storage, and SMTP email; it has no offline fallback and must not assume localhost or a school-only LAN.
 
 ## Capabilities and Constraints
 
 - Sign-in roles are guardian, school nurse, and system administrator. The legacy student database role remains only to preserve deactivated historical accounts.
+- A guardian can submit a self-registration request after email verification and a normalized student ID matches exactly one roster record. The account and student link stay pending until an administrator verifies the relationship against school records. Existing account invitations and staff invitations remain administrator-managed.
 - Guardians can access only linked student records and request appointments for those students. They attest to health-record submissions; nurses review before answers update the patient profile.
+- Administrators and school nurses can save role-appropriate dashboard widget visibility and order per account across devices.
 - Student roster imports are limited to student ID, name, grade, section, and adviser. Kindergarten and Grades 1–10 are supported. Student accounts, student portal access, and student appointment requests are removed.
 - Email OTP, expiring sessions, audit logs, and server-side authorization protect access.
 - Pain scores use the paper-defined 1–10 range and contribute to versioned risk rules.
 - Risk results are explainable decision support; demonstration rules remain visibly unapproved until a licensed PTHI clinician approves a version.
 - AI-generated consultation summaries are optional, privacy-minimized drafts that require nurse review. Deterministic fallback behavior keeps the workflow available when an AI provider is absent.
 - Reports cover daily, weekly, monthly, and custom periods using structured clinic data.
+- Nurses can block full or partial appointment periods after resolving any overlapping requested or scheduled appointments. Nurse rejection and cancellation decisions require a reason shown to linked guardians.
+- Administrators use `/cms` to manage the HealthMate+ application logo, the Philippine Tong Ho Institute seal, and an optional public landing-page community photo. They can edit landing-page hero copy, clinic information, announcements, and FAQs as a private draft, preview the saved draft, and publish it. Public announcements respect their configured Philippine-time start and expiry; public photos and text must not contain medical records or sensitive student information.
+- Incident reports contain nurse-maintained text for students and are visible only to nurses and linked guardians. Photo upload and viewing default off, require a current incident-specific guardian consent, and use private storage; photos expire after one year or are explicitly retired after defense without a preselected defense date.
 - The first release has no native mobile application, hospital laboratory, inpatient, emergency-room, or full pharmacy-management scope.
 - Development and demonstrations use fictional data unless the school formally authorizes real patient data processing.
 

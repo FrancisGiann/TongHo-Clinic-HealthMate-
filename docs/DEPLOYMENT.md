@@ -14,6 +14,8 @@ No production deployment, migration, email delivery, scheduled-job reliability, 
 
 Migrations create the schema only. No actual school paper records or authorized source dataset were available for migration. Historical import stays available for a future dataset only after PTHI authorization, privacy review, field mapping, duplicate policy, backup, and nurse-reviewed staging rehearsal. A launch may use newly entered, consented records and fictional staging data; that does not establish a legacy migration.
 
+Migration `007_self_signup_preferences_audit.sql` creates staff dashboard preference storage and adds the audit keyset index. Migration `008_adviser_approval_storage_incidents.sql` adds pending guardian signup review, appointment-unavailable periods and decision reasons, dedicated student-incident records, consent and durable photo-deletion metadata, and two fixed branding-image slots. Migration `009_landing_page_branding_images.sql` extends the schema with optional public landing-page hero and community photo slots. Both slots remain backend-supported for compatibility, while the active CMS exposes only the community photo because the public hero displays the school seal. Migration `010_landing_page_content.sql` adds versioned private draft and published landing-page copy. Apply pending migrations with `npm run db:migrate` during the reviewed deployment process, after a backup and against the intended environment. Migration 010 was not applied during this change.
+
 ## 2. Configure the Hostinger Node.js app
 
 - Plan: Business or Cloud with Node.js web-app support
@@ -26,7 +28,29 @@ Migrations create the schema only. No actual school paper records or authorized 
 
 Add the required database and SMTP variables from `.env.example` in hPanel. Do not upload a local `.env` file. Production startup fails closed if `DATABASE_URL`, verified PostgreSQL TLS, SMTP configuration, SMTP certificate verification, or the development-seed check is missing or unsafe.
 
-## 3. Email verification and security checks
+## 3. Private branding and incident images
+
+Custom branding images and optional incident photographs use the same configured Supabase Storage bucket, but the server confines them to separate `branding/` and `incidents/` key prefixes. Create a **private** bucket with no public read access, and configure `SUPABASE_URL`, `SUPABASE_STORAGE_BUCKET`, and `SUPABASE_SERVICE_ROLE_KEY` in the server environment. The service-role key must remain server-only and must never be sent to the browser. The API streams authorized incident photos through the server after checking the current student link, incident consent event, deletion state, and expiry; it does not create reusable public image URLs.
+
+Incident text reports work independently of image storage. Photo upload, display, and consent controls are disabled unless `INCIDENT_PHOTOS_ENABLED=true`; keep the default `false` until the private bucket, access controls, school consent notice, and retention process have been reviewed. The flag does not disable incident text or branding. Missing storage configuration keeps custom image uploads unavailable and falls back to the bundled application logo and school seal; the community section uses its bundled illustration when no photo is configured. The administrator-only `/cms` page manages the application logo, school seal, optional public community photo, and landing-page copy. Copy is saved as a versioned private draft and becomes public only when an administrator publishes it; `/landing-preview?preview=draft` requires an administrator session. The school seal remains in the landing-page hero. Public announcements are filtered by their start and expiry instants, and public photos appear without authentication: upload only school-approved images and never upload medical records or sensitive student information. Configure clinic details and announcements only from school-approved information; blank sections remain omitted from the public page.
+
+An incident photo is blocked immediately when consent is declined or revoked, when its incident consent changes, when deletion is requested, or at its one-year expiry. The hourly cleanup worker queues expired images and retries storage deletions using durable tasks; cleanup failures do not restore access. After the school-approved defense process ends, the institution must manually disable `INCIDENT_PHOTOS_ENABLED`, review the dry run, then explicitly queue and delete remaining incident photos. The CLI is limited to incident-image keys; it does not delete branding assets, incident text, or audit history. No defense end date is scheduled or assumed, and no cleanup is run during development verification.
+
+The cleanup command defaults to a read-only count. To preview the defense-retirement scope, run:
+
+```sh
+node server/cleanup-incident-photos.js --defense-ended
+```
+
+Only after the approved defense has ended, with `INCIDENT_PHOTOS_ENABLED=false`, a verified backup, and the exact configured private bucket name, run:
+
+```sh
+node server/cleanup-incident-photos.js --defense-ended --apply --bucket healthmate-private --confirm-incident-photos
+```
+
+Replace `healthmate-private` with the exact value configured in `SUPABASE_STORAGE_BUCKET`. The command rejects unknown arguments, an enabled photo flag, a bucket mismatch, or missing confirmation. Failed object removals stay queued for retry; inspect the result counts and server’s sanitized error codes without copying credentials or storage URLs into logs.
+
+## 4. Email verification and security checks
 
 Production always requires email OTP at sign-in; there is no per-account MFA switch. OTP, invitations, password resets, and notices require working SMTP. Non-implicit SMTP connections require STARTTLS, and certificate verification must remain enabled in production. For Hostinger SMTP on port 587, leave `SMTP_SECURE=false` so STARTTLS is required; use implicit TLS only when the selected provider documents it. `REQUIRE_LOGIN_OTP=false` is accepted only when `NODE_ENV=development`. The app does not simulate email delivery. See Nodemailer's [SMTP TLS options](https://nodemailer.com/smtp).
 
@@ -34,12 +58,12 @@ Before opening access, use fictional staging accounts and test a delivered OTP, 
 
 Session policy is server-enforced: 15 minutes idle, 12 hours absolute, and at most three active sessions per account. “Keep me signed in” creates a persistent cookie only up to that same 12-hour limit; it is not trusted-device recognition. Failed-password counters are durable in PostgreSQL. The additional IP throttles are in-memory per app process and are supplemental; they do not replace the durable counter or provider edge protections and may not be shared across app instances.
 
-## 4. Verify background work on the selected plan
+## 5. Verify background work on the selected plan
 
 Reminder and report-archive schedulers run inside the persistent `npm start` process. Hostinger documents server capabilities by plan, but this repository has not verified that the selected Business or Cloud process stays alive long enough for the configured intervals or restarts cleanly after deployment. Verify process persistence, restart behavior, logs, time zone, and duplicate handling in staging before enabling either scheduler. Do not treat in-process timers as a reliable cron service.
 
-Both schedulers are disabled by default. Only enable `CLINIC_REMINDER_SCHEDULER_ENABLED=true` after SMTP and delivery behavior pass staging checks. Only enable `REPORT_ARCHIVE_SCHEDULER_ENABLED=true` after migration, retention approval, and staging checks for daily, weekly, monthly, and duplicate snapshots. No past report history is synthesized.
+Reminder and report-archive schedulers are disabled by default. Only enable `CLINIC_REMINDER_SCHEDULER_ENABLED=true` after SMTP and delivery behavior pass staging checks. Only enable `REPORT_ARCHIVE_SCHEDULER_ENABLED=true` after migration, retention approval, and staging checks for daily, weekly, monthly, and duplicate snapshots. Incident-image cleanup and expired signup-code metadata cleanup start only when a database is configured; verify their retry behavior and process persistence in staging. No past report history is synthesized.
 
-## 5. Production verification record
+## 6. Production verification record
 
 Record the selected Hostinger plan, runtime version, Supabase project identity, migration versions, database TLS result, SMTP test result, trusted proxy hop count and observed `req.ip`, session/OTP checks, backup/restore rehearsal, and scheduler persistence results before claiming launch readiness. Confirm the production project is separate from development and contains no seeded development account identities or registry. Keep live patient records out of development screenshots and automated tests.
