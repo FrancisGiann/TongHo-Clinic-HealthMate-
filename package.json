@@ -20,12 +20,12 @@
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
-    "concurrently": "^10.0.5",
+    "concurrently": "^10.0.6",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "lucide-react": "latest",
-    "nodemailer": "^9.1.1",
+    "nodemailer": "^10.2.1",
     "pg": "^8.23.0",
     "react": "latest",
     "react-dom": "latest",
@@ -33,6 +33,6 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "latest",
-    "vite": "latest"
+    "vite": "~8.2.4"
   }
 }
