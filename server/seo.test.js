@@ -23,7 +23,8 @@ test('application HTML is never shared-cacheable and preserves the safe default'
   for(const req of [request(),request('/login'),request('/',{cookie:'synthetic=1'})]){
     const res=response();serveApplicationHtml(template)(req,res);
     assert.equal(res.headers['Cache-Control'],'private, no-store');
-    assert.match(res.body,/School Clinic System Demo/);
+    assert.ok(res.body.includes('<title>HealthMate+ | Tong Ho Clinic</title>'));
+    assert.ok(res.body.includes('HealthMate+ is a school clinic management system for Tong Ho.'));
   }
 });
 test('indexing middleware precedes API handlers and static serving',()=>{

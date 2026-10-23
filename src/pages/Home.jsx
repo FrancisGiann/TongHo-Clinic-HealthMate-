@@ -126,7 +126,6 @@ export default function Home({ authError = '' }) {
         <div className="hm-home-hero-copy">
           <h1 id="hm-home-title">{landingContent.hero.headline}</h1>
           <p>{landingContent.hero.introduction}</p>
-          <p className="hm-home-demo-notice"><strong>Development demo:</strong> This site uses fictional records for development and academic presentation. It is not a live clinic service.</p>
           <div className="hm-home-actions">
             <Link className="hm-home-primary" to="/login">{landingContent.hero.primaryActionLabel} <ArrowRight size={18} /></Link>
             <a className="hm-home-secondary" href="#portal-access">{landingContent.hero.secondaryActionLabel}</a>
