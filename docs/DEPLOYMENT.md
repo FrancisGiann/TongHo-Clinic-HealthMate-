@@ -22,7 +22,7 @@ Migration `007_self_signup_preferences_audit.sql` creates staff dashboard prefer
 - Runtime: Node.js 22.x
 - Build: `npm ci && npm run build`
 - Start: `npm start`
-- LiteSpeed/Hostinger application entry file: `server.cjs` (for hosts that load the entry with `require()`). This launcher dynamically imports `server.js`, preserving its production checks and scheduler flags. A rejected startup prints a generic message and exits with status 1 without logging the underlying error. Direct `npm start` remains supported.
+- LiteSpeed/Hostinger application entry file: `server.cjs` (for hosts that load the entry with `require()`). This launcher dynamically imports `server.js`, preserving its production checks and scheduler flags. A rejected startup prints an allowlisted diagnostic code and exits with status 1 without logging the underlying error. Codes identify production configuration guards, development seed data, module/file loading, network/TLS failures, and PostgreSQL authentication/schema/permission failures; unknown errors produce `UNCLASSIFIED_STARTUP_FAILURE`. Network codes identify the failure category, not a verified cause. Do not disable production guards to resolve a code. Direct `npm start` remains supported.
 - Port: use Hostinger's injected `PORT`
 - Environment: set `NODE_ENV=production`, `APP_URL=https://your-domain.example`, and `COOKIE_SECURE=true`
 - Proxy: set `TRUST_PROXY_HOPS` only after Hostinger confirms the exact trusted proxy hop count. The default `0` ignores forwarded addresses. Verify `req.ip` in a staging deployment before relying on IP throttles; do not trust client-supplied `X-Forwarded-For` values.
