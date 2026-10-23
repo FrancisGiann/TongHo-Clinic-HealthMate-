@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { indexingHeaders, serveApplicationHtml } from './seo.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -293,6 +294,7 @@ export function createApp({
   const transaction = transactionFn;
   const clinicDataTransaction = clinicDataTransactionFn;
   app.disable('x-powered-by');
+  app.use(indexingHeaders);
   app.set('trust proxy', trustProxyHops());
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -2973,10 +2975,13 @@ export function createApp({
   });
 
   if (existsSync(distDir)) {
-    app.use(express.static(distDir));
+    const sendApplicationHtml = serveApplicationHtml(readFileSync(join(distDir, 'index.html'), 'utf8'));
+    app.get('/', sendApplicationHtml);
+    app.get('/index.html', sendApplicationHtml);
+    app.use(express.static(distDir, { index: false }));
     app.get('/{*splat}', (req, res, next) => {
       if (req.path.startsWith('/api/')) return next();
-      return res.sendFile(join(distDir, 'index.html'));
+      return sendApplicationHtml(req, res);
     });
   }
 
