@@ -49,3 +49,37 @@ test('signup metadata cleanup is inert when the database is not configured', asy
   await stop();
   await stop.drain();
 });
+
+
+test('GUARDIAN_SIGNUP_OTP_CLEANUP_ENABLED=false prevents startup and interval registration even with a configured database', async () => {
+  for (const value of ['false', ' FALSE ']) {
+    const stop = startGuardianSignupOtpCleanupScheduler({
+      enabled: true,
+      env: { GUARDIAN_SIGNUP_OTP_CLEANUP_ENABLED: value },
+      run: () => assert.fail('cleanup must not run'),
+      setTimeoutFn: () => assert.fail('startup timer must not be registered'),
+      setIntervalFn: () => assert.fail('interval must not be registered'),
+    });
+    await stop();
+    await stop.drain();
+  }
+});
+
+test('GUARDIAN_SIGNUP_OTP_CLEANUP_ENABLED preserves omitted/true behavior and cannot enable a missing database', async () => {
+  for (const env of [{}, { GUARDIAN_SIGNUP_OTP_CLEANUP_ENABLED: 'true' }]) {
+    let startup;
+    let interval;
+    let runs = 0;
+    const stop = startGuardianSignupOtpCleanupScheduler({
+      enabled: true, env, run: async () => { runs += 1; },
+      setTimeoutFn: (fn) => { startup = fn; return 1; },
+      setIntervalFn: (fn) => { interval = fn; return 2; },
+      clearTimeoutFn() {}, clearIntervalFn() {},
+    });
+    startup(); await stop.drain();
+    interval(); await stop.drain();
+    assert.equal(runs, 2);
+    await stop();
+    await startGuardianSignupOtpCleanupScheduler({ enabled: false, env, setTimeoutFn: () => assert.fail('database required') })();
+  }
+});

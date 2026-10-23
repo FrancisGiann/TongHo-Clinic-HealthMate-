@@ -67,3 +67,16 @@ Reminder and report-archive schedulers are disabled by default. Only enable `CLI
 ## 6. Production verification record
 
 Record the selected Hostinger plan, runtime version, Supabase project identity, migration versions, database TLS result, SMTP test result, trusted proxy hop count and observed `req.ip`, session/OTP checks, backup/restore rehearsal, and scheduler persistence results before claiming launch readiness. Confirm the production project is separate from development and contains no seeded development account identities or registry. Keep live patient records out of development screenshots and automated tests.
+
+## First-deployment cleanup switches
+
+Set all four server environment flags before starting the deployment:
+
+```env
+GUARDIAN_SIGNUP_OTP_CLEANUP_ENABLED=false
+INCIDENT_PHOTO_CLEANUP_ENABLED=false
+CLINIC_REMINDER_SCHEDULER_ENABLED=false
+REPORT_ARCHIVE_SCHEDULER_ENABLED=false
+```
+
+The first two switches prevent both the initial cleanup run and subsequent interval registration. Restart the application after changing them. Omission preserves the previous cleanup behavior when a database is configured; explicitly set `false` for the first deployment. They do not disable normal request-driven signup validation, consent handling, or explicitly invoked cleanup CLI commands. `INCIDENT_PHOTOS_ENABLED=false` alone does not disable cleanup. Review pending deletions and retention separately before enabling either cleanup job. No schema change is needed.

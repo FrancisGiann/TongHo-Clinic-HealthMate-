@@ -40,9 +40,9 @@ const stopReportArchiveScheduler = startReportArchiveScheduler({
   databaseConfigured,
 });
 const stopIncidentPhotoCleanupScheduler = startIncidentPhotoCleanupScheduler({
-  databaseConfigured,
+  enabled: databaseConfigured,
 });
-const stopGuardianSignupOtpCleanupScheduler = startGuardianSignupOtpCleanupScheduler({ databaseConfigured });
+const stopGuardianSignupOtpCleanupScheduler = startGuardianSignupOtpCleanupScheduler({ enabled: databaseConfigured });
 
 let shuttingDown = false;
 async function shutdown(signal) {

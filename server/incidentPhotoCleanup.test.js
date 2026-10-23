@@ -100,3 +100,37 @@ test('cleanup scheduler is disabled without a configured database and drains act
   const disabled = startIncidentPhotoCleanupScheduler({ enabled: false });
   await disabled.drain();
 });
+
+
+test('INCIDENT_PHOTO_CLEANUP_ENABLED=false prevents startup and interval registration even with a configured database', async () => {
+  for (const value of ['false', ' FALSE ']) {
+    const stop = startIncidentPhotoCleanupScheduler({
+      enabled: true,
+      env: { INCIDENT_PHOTO_CLEANUP_ENABLED: value },
+      run: () => assert.fail('cleanup must not run'),
+      setTimeoutFn: () => assert.fail('startup timer must not be registered'),
+      setIntervalFn: () => assert.fail('interval must not be registered'),
+    });
+    await stop();
+    await stop.drain();
+  }
+});
+
+test('INCIDENT_PHOTO_CLEANUP_ENABLED preserves omitted/true behavior and cannot enable a missing database', async () => {
+  for (const env of [{}, { INCIDENT_PHOTO_CLEANUP_ENABLED: 'true' }]) {
+    let startup;
+    let interval;
+    let runs = 0;
+    const stop = startIncidentPhotoCleanupScheduler({
+      enabled: true, env, run: async () => { runs += 1; },
+      setTimeoutFn: (fn) => { startup = fn; return 1; },
+      setIntervalFn: (fn) => { interval = fn; return 2; },
+      clearTimeoutFn() {}, clearIntervalFn() {},
+    });
+    startup(); await stop.drain();
+    interval(); await stop.drain();
+    assert.equal(runs, 2);
+    await stop();
+    await startIncidentPhotoCleanupScheduler({ enabled: false, env, setTimeoutFn: () => assert.fail('database required') })();
+  }
+});

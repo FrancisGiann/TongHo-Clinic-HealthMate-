@@ -142,8 +142,8 @@ export async function runIncidentPhotoCleanup({ storage = privateStorageFromEnvi
   return { dryRun: false, defenseEnded, newlyExpired: expiration.newlyExpired, due: dueCount.rows[0]?.count || 0, removed, failed };
 }
 
-export function startIncidentPhotoCleanupScheduler({ run = () => runIncidentPhotoCleanup(), enabled = databaseConfigured, intervalMs = 60 * 60 * 1000, initialDelayMs = 15_000, setTimeoutFn = setTimeout, setIntervalFn = setInterval, clearTimeoutFn = clearTimeout, clearIntervalFn = clearInterval } = {}) {
-  if (!enabled) {
+export function startIncidentPhotoCleanupScheduler({ run = () => runIncidentPhotoCleanup(), enabled = databaseConfigured, env = process.env, intervalMs = 60 * 60 * 1000, initialDelayMs = 15_000, setTimeoutFn = setTimeout, setIntervalFn = setInterval, clearTimeoutFn = clearTimeout, clearIntervalFn = clearInterval } = {}) {
+  if (!enabled || String(env.INCIDENT_PHOTO_CLEANUP_ENABLED || '').trim().toLowerCase() === 'false') {
     const stop = () => Promise.resolve();
     stop.drain = stop;
     return stop;

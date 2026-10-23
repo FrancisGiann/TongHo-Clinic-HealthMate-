@@ -4,6 +4,7 @@ import { clearExpiredGuardianSignupOtpMetadata } from './auth.js';
 export function startGuardianSignupOtpCleanupScheduler({
   run = () => clearExpiredGuardianSignupOtpMetadata(),
   enabled = databaseConfigured,
+  env = process.env,
   intervalMs = 60 * 60 * 1000,
   initialDelayMs = 0,
   setTimeoutFn = setTimeout,
@@ -11,7 +12,7 @@ export function startGuardianSignupOtpCleanupScheduler({
   clearTimeoutFn = clearTimeout,
   clearIntervalFn = clearInterval,
 } = {}) {
-  if (!enabled) {
+  if (!enabled || String(env.GUARDIAN_SIGNUP_OTP_CLEANUP_ENABLED || '').trim().toLowerCase() === 'false') {
     const stop = () => Promise.resolve();
     stop.drain = stop;
     return stop;
