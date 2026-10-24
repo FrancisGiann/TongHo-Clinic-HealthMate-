@@ -1,0 +1,25 @@
+{
+  "name": "HealthMate+ | Tong Ho Clinic",
+  "short_name": "HealthMate+",
+  "description": "HealthMate+ is a school clinic management system for Tong Ho.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "browser",
+  "theme_color": "#21185f",
+  "background_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/icons/healthmate-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/healthmate-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
