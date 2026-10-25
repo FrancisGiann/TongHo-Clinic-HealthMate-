@@ -100,7 +100,7 @@ export default function Students({ data, setData }) {
         </div>
         <div className="intro-actions"><button type="button" className="secondary-btn" onClick={exportStudents}><Download size={16} /> Export CSV</button><button type="button" className="secondary-btn" onClick={() => navigate('/faculty/new')}><Plus size={17} /> Register faculty</button><button type="button" className="primary-btn" onClick={() => navigate('/students/new')}><Plus size={17} /> Register student</button></div>
       </div>
-      <div className="patient-toolbar">
+      <div className="patient-search-toolbar">
         <div className="search-box">
           <Search size={18} aria-hidden="true" />
           <input
@@ -110,12 +110,20 @@ export default function Students({ data, setData }) {
             aria-label="Search patient records"
           />
         </div>
+        <label className="directory-filter">Record type<select value={patientType} onChange={(event) => updateListParams(searchParams, setSearchParams, { filter: event.target.value === 'all' ? null : event.target.value, ...(event.target.value === 'faculty' ? { grade: null, section: null } : {}) }, { resetPage: true })}><option value="all">All patients</option><option value="student">Students</option><option value="faculty">Faculty</option></select></label>
+      </div>
+      <details className="patient-extra-filters">
+        <summary>Filters and sort <span>{[gradeFiltersEnabled && grade, gradeFiltersEnabled && section, list.sort !== 'name', list.order !== 'asc'].filter(Boolean).length || 'Default'}</span></summary>
+        <div className="patient-filter-options">
         <label className="directory-filter">Sort by<select value={list.sort} onChange={(event) => setListValue('sort', event.target.value)}><option value="name">Name</option><option value="grade">Grade</option><option value="latestVisit">Latest visit</option></select></label>
         <label className="directory-filter">Order<select value={list.order} onChange={(event) => setListValue('order', event.target.value)}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
-        <label className="directory-filter">Record type<select value={patientType} onChange={(event) => updateListParams(searchParams, setSearchParams, { filter: event.target.value === 'all' ? null : event.target.value, ...(event.target.value === 'faculty' ? { grade: null, section: null } : {}) }, { resetPage: true })}><option value="all">All patients</option><option value="student">Students</option><option value="faculty">Faculty</option></select></label>
+        {gradeFiltersEnabled && <>
         <label className="directory-filter">Grade<select value={gradeFiltersEnabled ? grade : ''} disabled={!gradeFiltersEnabled} onChange={(event) => updateListParams(searchParams, setSearchParams, { grade: event.target.value, section: null }, { resetPage: true })}><option value="">All grades</option>{grades.map((value) => <option key={value}>{value}</option>)}</select></label>
         <label className="directory-filter">Section<select value={gradeFiltersEnabled ? section : ''} disabled={!gradeFiltersEnabled} onChange={(event) => setListValue('section', event.target.value)}><option value="">All sections</option>{sections.map((value) => <option key={value}>{value}</option>)}</select></label>
-      </div>
+        </>}
+        </div>
+        <button type="button" className="table-action" onClick={() => updateListParams(searchParams, setSearchParams, { grade: null, section: null, sort: null, order: null }, { resetPage: true })}>Reset filters and sort</button>
+      </details>
       <p className="field-hint" aria-live="polite">Showing {pageResult.total} of {totalPatientRecords} patient records.</p>
       <div className="student-grid">
         {patients.map((student, index) => (

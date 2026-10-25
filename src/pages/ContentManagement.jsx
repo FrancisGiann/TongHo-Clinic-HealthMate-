@@ -14,15 +14,18 @@ export default function ContentManagement() {
         <Link className="secondary-btn" to="/landing-preview" target="_blank" rel="noopener noreferrer">View landing page <ArrowUpRight size={16} aria-hidden="true" /></Link>
       </header>
       <nav className="cms-section-nav" aria-label="Content management sections">
-        <a href="#cms-landing-content">Landing page content</a>
-        <a href="#cms-school-identity">School identity and images</a>
+        <a href="#cms-landing-content">Website text</a>
+        <a href="#cms-school-identity" onClick={() => { document.getElementById('cms-school-identity').open = true; }}>Logos and photos</a>
       </nav>
       <p className="disabled-note cms-publish-note"><strong>Publishing:</strong> Copy is saved as a private draft until you publish it. School identity images publish immediately when saved.</p>
       <LandingContentEditor />
+      <details className="cms-images-disclosure" id="cms-school-identity">
+        <summary><strong>Logos and photos</strong><span>School seal, application logo and homepage imagery. Image saves publish immediately.</span></summary>
       <p className="disabled-note cms-public-image-note"><strong>Public image guidance:</strong> Landing-page photos are visible before sign-in. Upload only school-approved images; never upload medical records or sensitive student information.</p>
-      <section className="panel settings-tab-panel cms-image-panel" id="cms-school-identity" aria-label="School identity and landing page images">
+      <section className="panel settings-tab-panel cms-image-panel" aria-label="School identity and landing page images">
         <BrandingEditor />
       </section>
+      </details>
     </div>
   );
 }

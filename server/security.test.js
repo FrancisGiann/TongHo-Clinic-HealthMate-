@@ -122,15 +122,15 @@ test('production startup requires TLS, SMTP, and an unseeded production database
     databaseConfigured: true,
     databaseTlsVerified: true,
     emailConfigured: true,
-    smtpTlsVerified: true,
+    emailTlsVerified: true,
     hasDevelopmentAccounts: false,
     hasSeedRegistry: false,
   };
   assert.equal(productionStartupIssue(ready), null);
   assert.match(productionStartupIssue({ ...ready, databaseConfigured: false }), /DATABASE_URL/);
   assert.match(productionStartupIssue({ ...ready, databaseTlsVerified: false }), /verified PostgreSQL TLS/);
-  assert.match(productionStartupIssue({ ...ready, emailConfigured: false }), /SMTP/);
-  assert.match(productionStartupIssue({ ...ready, smtpTlsVerified: false }), /certificate-verified SMTP TLS/);
+  assert.match(productionStartupIssue({ ...ready, emailConfigured: false }), /Resend/);
+  assert.match(productionStartupIssue({ ...ready, emailTlsVerified: false }), /certificate-verified email HTTPS/);
   assert.match(productionStartupIssue({ ...ready, hasDevelopmentAccounts: true }), /development-only seed data/);
   assert.match(productionStartupIssue({ ...ready, hasSeedRegistry: true }), /development-only seed data/);
   assert.equal(productionStartupIssue({ ...ready, nodeEnv: 'development', emailConfigured: false }), null);

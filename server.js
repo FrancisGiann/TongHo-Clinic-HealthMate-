@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { createApp, runClinicReminders } from './server/app.js';
 import { closeDatabase, databaseConfigured, databaseTlsVerified, query } from './server/db.js';
-import { emailConfigured } from './server/email.js';
+import { emailConfigured, emailTlsVerified } from './server/email.js';
 import { startClinicReminderScheduler } from './server/reminderScheduler.js';
 import { runReportArchiveSweep, startReportArchiveScheduler } from './server/reportArchives.js';
 import { startIncidentPhotoCleanupScheduler } from './server/incidentPhotoCleanup.js';
@@ -21,7 +21,7 @@ if (process.env.NODE_ENV === 'production') {
     databaseConfigured,
     databaseTlsVerified,
     emailConfigured: emailConfigured(),
-    smtpTlsVerified: process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== 'false',
+    emailTlsVerified: emailTlsVerified(),
     hasDevelopmentAccounts: seedCheck.rows[0].has_development_accounts,
     hasSeedRegistry: seedCheck.rows[0].has_seed_registry,
   });

@@ -4,23 +4,25 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { complaintLabels, initialPass, resolvePrintContext, summaryFields } from '../utils/printDocuments.js';
 import { PassDocument, SummaryDocument } from '../components/print/PrintDocuments.jsx';
 import '../components/print/print.css';
+import { consultationReportReturn } from '../utils/consultationReport.js';
 
 export default function VisitPrint({ data, user }) {
   const { studentId, visitId, passType } = useParams();
   const [search] = useSearchParams();
   const selectedVisit = visitId || search.get('visit');
   const context = resolvePrintContext(data, user, studentId, selectedVisit, passType);
-  if (!context) return <section className="panel"><h2>Document unavailable</h2><p>A school nurse must select a valid student and consultation.</p><Link to="/">Back</Link></section>;
-  return <PrintWorkspace key={`${user.id}:${studentId}:${selectedVisit || ''}:${passType || 'summary'}`} context={context} type={passType} />;
+  const fromReports = !passType && search.get('from') === 'reports' && user?.role === 'school_nurse';
+  if (!context) return <section className="panel"><h2>Document unavailable</h2><p>A school nurse must select a valid student and consultation.</p><Link to={fromReports ? consultationReportReturn() : '/'}>{fromReports ? 'Back to Reports' : 'Back'}</Link></section>;
+  return <PrintWorkspace key={`${user.id}:${studentId}:${selectedVisit || ''}:${passType || 'summary'}`} context={context} type={passType} fromReports={fromReports} />;
 }
-function PrintWorkspace({ context, type }) {
+function PrintWorkspace({ context, type, fromReports }) {
   const [draft, setDraft] = useState(() => initialPass(context));
   const [preview, setPreview] = useState(!type);
   const [fits, setFits] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const root = useRef(null);
   const navigate = useNavigate();
-  const back = `/students/${encodeURIComponent(context.student.id)}`;
+  const back = fromReports ? consultationReportReturn(context.student.id, context.visit.id) : `/students/${encodeURIComponent(context.student.id)}`;
   const update = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
   useEffect(() => {
     const escape = (event) => { if (event.key === 'Escape') { if (type && preview) setPreview(false); else navigate(back); } };
@@ -43,7 +45,7 @@ function PrintWorkspace({ context, type }) {
   const field = (key, label, inputType = 'text', maxLength = 160) => <label key={key}>{label}<input type={inputType} value={draft[key]} maxLength={maxLength} onChange={(event) => update(key, event.target.value)} /></label>;
   return <section className="print-workspace">
     <div className="page-intro"><div><h2>{type ? (type === 'clinic' ? 'Clinic Pass' : 'Student Gate Pass') : 'Consultation summary'}</h2><p>{type ? 'Fill and print. This form is not saved.' : 'Only the selected consultation is included.'}</p></div></div>
-    <div className="print-actions"><Link className="secondary-btn" to={back}>Cancel / Back to profile</Link>{preview && type && <button className="secondary-btn" onClick={() => setPreview(false)}>Back to form</button>}{preview && <button className="primary-btn" disabled={!fits} onClick={() => window.print()}>Print</button>}</div>
+    <div className="print-actions"><Link className="secondary-btn" to={back}>{fromReports ? 'Cancel / Back to Reports' : 'Cancel / Back to profile'}</Link>{preview && type && <button className="secondary-btn" onClick={() => setPreview(false)}>Back to form</button>}{preview && <button className="primary-btn" disabled={!fits} onClick={() => window.print()}>Print</button>}</div>
     {!type && <p className="field-hint">Current grade, section and school year are omitted because they are not historical consultation snapshots. Unverified summary text and private notes are excluded.</p>}
     {type && !preview && <form className="panel pass-editor" onSubmit={(event) => { event.preventDefault(); setPreview(true); }}>
       <p>Check the year, grade and teacher: suggestions come from the current profile, not a historical snapshot. Time fields are optional and are never filled from consultation save time.</p>

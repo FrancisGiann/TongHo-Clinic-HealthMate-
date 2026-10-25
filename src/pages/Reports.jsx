@@ -6,6 +6,7 @@ import { api } from "../utils/api";
 import { formatManilaDateTime, manilaCalendarDate, shiftCalendarDate } from "../utils/dateTime";
 import { clinicReportPrintModel, formatHealthField, patientSummaryPrintModel } from '../utils/reportPrint.js';
 import StudentPicker from '../components/StudentPicker';
+import IndividualConsultationReport from '../components/IndividualConsultationReport';
 import '../components/print/print.css';
 import "./Reports.css";
 export default function Reports({ data = {}, user }) {
@@ -14,7 +15,7 @@ export default function Reports({ data = {}, user }) {
   const printPreviewReturnFocusRef = useRef(null);
   const today = manilaCalendarDate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const reportTab = searchParams.get('tab') === 'patient' && user?.role === 'school_nurse' ? 'patient' : 'clinic';
+  const reportTab = user?.role === 'school_nurse' && ['patient', 'consultation'].includes(searchParams.get('tab')) ? searchParams.get('tab') : 'clinic';
   const initialPeriod = searchParams.get('period') === 'daily' ? 'daily' : 'monthly';
   const [period, setPeriod] = useState(initialPeriod);
   const [start, setStart] = useState(initialPeriod === 'daily' ? today : `${today.slice(0, 8)}01`);
@@ -109,7 +110,7 @@ export default function Reports({ data = {}, user }) {
   };
   const changeTab = (tab) => {
     const next = new URLSearchParams(searchParams);
-    if (tab === 'patient') next.set('tab', 'patient');
+    if (['patient', 'consultation'].includes(tab)) next.set('tab', tab);
     else next.delete('tab');
     setSearchParams(next);
   };
@@ -159,8 +160,8 @@ export default function Reports({ data = {}, user }) {
   
   return (
     <div className="form-page reports-page">
-      {user?.role === 'school_nurse' && <div className="report-tabs" role="tablist" aria-label="Report type"><button type="button" role="tab" aria-selected={reportTab === 'clinic'} className={reportTab === 'clinic' ? 'active' : ''} onClick={() => changeTab('clinic')}>Clinic report</button><button type="button" role="tab" aria-selected={reportTab === 'patient'} className={reportTab === 'patient' ? 'active' : ''} onClick={() => changeTab('patient')}>Patient summary</button></div>}
-      {reportTab === 'patient' ? <PatientSummaryPanel
+      {user?.role === 'school_nurse' && <div className="report-tabs" role="tablist" aria-label="Report type"><button type="button" role="tab" aria-selected={reportTab === 'clinic'} className={reportTab === 'clinic' ? 'active' : ''} onClick={() => changeTab('clinic')}>Clinic report</button><button type="button" role="tab" aria-selected={reportTab === 'patient'} className={reportTab === 'patient' ? 'active' : ''} onClick={() => changeTab('patient')}>Patient summary</button><button type="button" role="tab" aria-selected={reportTab === 'consultation'} className={reportTab === 'consultation' ? 'active' : ''} onClick={() => changeTab('consultation')}>Individual consultation</button></div>}
+      {reportTab === 'consultation' ? <IndividualConsultationReport data={data} user={user} /> : reportTab === 'patient' ? <PatientSummaryPanel
         patients={data.students || []} patientId={patientId} patient={summaryPatient}
         start={summaryStart} end={summaryEnd} setStart={setSummaryStart} setEnd={setSummaryEnd}
         summary={patientSummary} loading={summaryLoading} error={summaryError}

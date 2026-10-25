@@ -1,51 +1,49 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import nodemailer from 'nodemailer';
-import { smtpSecurityConfiguration } from './email.js';
+import { emailConfigured, emailTlsVerified, sendEmail } from './email.js';
+import { otpEmail } from './emailTemplates.js';
+const env = { RESEND_API_KEY: 'synthetic-private-key', RESEND_FROM_EMAIL: 'clinic@example.invalid', RESEND_FROM_NAME: 'HealthMate+' };
 
-test('SMTP requires certificate-verified STARTTLS unless implicit TLS is selected', () => {
-  assert.deepEqual(smtpSecurityConfiguration({ SMTP_SECURE: 'false' }), {
-    secure: false,
-    requireTLS: true,
-    tls: { rejectUnauthorized: true },
-  });
-  assert.deepEqual(smtpSecurityConfiguration({ SMTP_SECURE: 'true', SMTP_TLS_REJECT_UNAUTHORIZED: 'true' }), {
-    secure: true,
-    requireTLS: false,
-    tls: { rejectUnauthorized: true },
-  });
-  assert.equal(smtpSecurityConfiguration({ SMTP_TLS_REJECT_UNAUTHORIZED: 'false' }).tls.rejectUnauthorized, false);
+test('Resend configuration is required; SMTP alone cannot enable delivery', () => {
+  assert.equal(emailConfigured(env), true);
+  assert.equal(emailConfigured({ SMTP_HOST: 'host', SMTP_USER: 'user', SMTP_PASS: 'secret' }), false);
+  assert.equal(emailConfigured({ ...env, RESEND_API_KEY: '' }), false);
+  assert.equal(emailConfigured({ ...env, RESEND_FROM_EMAIL: 'bad\naddress' }), false);
+  assert.equal(emailConfigured({ ...env, RESEND_FROM_NAME: 'Name\r\nBcc: x' }), false);
+  assert.equal(emailTlsVerified({ NODE_TLS_REJECT_UNAUTHORIZED: '0' }), false);
 });
 
-test('OTP email composes through Nodemailer without network delivery', async (t) => {
-  const env = {
-    SMTP_HOST: 'smtp.example.invalid', SMTP_PORT: '587',
-    SMTP_USER: 'sender@example.invalid', SMTP_PASS: 'synthetic-test-only',
-    SMTP_FROM_EMAIL: 'sender@example.invalid', SMTP_FROM_NAME: 'HealthMate+',
-    SMTP_SECURE: 'false', SMTP_TLS_REJECT_UNAUTHORIZED: 'true',
-  };
-  const previous = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
-  const transport = nodemailer.createTransport({ jsonTransport: true });
-  t.mock.method(nodemailer, 'createTransport', (options) => {
-    assert.equal(options.requireTLS, true);
-    assert.equal(options.tls.rejectUnauthorized, true);
-    return transport;
-  });
-  Object.assign(process.env, env);
-  try {
-    const { sendOtpEmail } = await import('./email.js?offline-compatibility-test');
-    const result = await sendOtpEmail('recipient@example.invalid', '123456', 'verification');
-    const message = JSON.parse(result.message);
-    assert.equal(message.subject, 'HealthMate+ verification code');
-    assert.equal(message.to[0].address, 'recipient@example.invalid');
-    assert.match(message.text, /123456/);
-    assert.match(message.html, /123456/);
-    assert.deepEqual(result.envelope.to, ['recipient@example.invalid']);
-  } finally {
-    transport.close();
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
+test('Resend receives the original recipient, subject, HTML and text with a bounded HTTPS request', async () => {
+  const message = { to: 'recipient@example.invalid', ...otpEmail('012345', 'login') };
+  let calls = 0;
+  const result = await sendEmail(message, { env, fetchFn: async (url, options) => {
+    calls++;
+    assert.equal(url, 'https://api.resend.com/emails');
+    assert.equal(options.redirect, 'error');
+    assert.equal(options.method, 'POST');
+    assert.equal(options.headers.Authorization, `Bearer ${env.RESEND_API_KEY}`);
+    assert.ok(options.signal instanceof AbortSignal);
+    assert.deepEqual(JSON.parse(options.body), { from: 'HealthMate+ <clinic@example.invalid>', ...message });
+    return { ok: true, json: async () => ({ id: 'synthetic-id' }) };
+  } });
+  assert.deepEqual(result, { id: 'synthetic-id' });
+  assert.equal(calls, 1);
+});
+
+test('delivery failures are sanitized and never retried or sent via SMTP', async () => {
+  for (const status of [401, 403, 429, 422, 500]) {
+    let calls = 0;
+    await assert.rejects(sendEmail({ to: 'private@example.invalid' }, { env, fetchFn: async () => {
+      calls++; return { ok: false, status, json: async () => ({ message: 'PRIVATE_PROVIDER_MESSAGE' }) };
+    } }), (error) => {
+      assert.doesNotMatch(error.message, /private@example|synthetic-private-key|PRIVATE_PROVIDER_MESSAGE/);
+      assert.match(error.code, /^EMAIL_/); return true;
+    });
+    assert.equal(calls, 1);
   }
+  await assert.rejects(sendEmail({}, { env, fetchFn: async () => { throw new Error('secret provider detail'); } }), { code: 'EMAIL_DELIVERY_UNCONFIRMED' });
+  await assert.rejects(sendEmail({}, { env, fetchFn: async () => ({ ok: true, json: async () => ({}) }) }), { code: 'EMAIL_DELIVERY_UNCONFIRMED' });
+  const never = async () => { assert.fail('must not call provider'); };
+  await assert.rejects(sendEmail({}, { env: {}, fetchFn: never }), { code: 'EMAIL_NOT_CONFIGURED' });
+  await assert.rejects(sendEmail({}, { env: { ...env, NODE_TLS_REJECT_UNAUTHORIZED: '0' }, fetchFn: never }), { code: 'EMAIL_TLS_CONFIGURATION' });
 });

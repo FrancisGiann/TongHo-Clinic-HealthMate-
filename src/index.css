@@ -8506,3 +8506,45 @@ fieldset.form-section { min-width: 0; border: 0; }
   .cms-repeater-heading > button { width: 100%; justify-content: center; }
   .cms-content-editor { padding: 14px; }
 }
+
+/* Workspace header and focused content editing. */
+.main-content > .topbar { position: sticky; top: 0; z-index: 25; }
+.cms-content-toolbar { top: calc(var(--workspace-header-height, 91px) + 8px); }
+.content-management-page :is(section[id], details[id], summary) { scroll-margin-top: calc(var(--workspace-header-height, 91px) + 24px); }
+.cms-edit-section, .cms-images-disclosure { min-width: 0; border-bottom: 1px solid var(--line); }
+.cms-edit-section > summary, .cms-images-disclosure > summary { cursor: pointer; padding: 18px 0; color: var(--ink); }
+.cms-edit-section > summary strong, .cms-images-disclosure > summary strong { font-size: 16px; }
+.cms-edit-section > summary span, .cms-images-disclosure > summary span { display: block; margin: 5px 0 0 20px; max-width: 75ch; color: var(--muted); font-size: 14px; font-weight: 400; line-height: 1.5; }
+.cms-edit-section > summary:focus-visible, .cms-images-disclosure > summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
+.cms-edit-section .cms-content-group { margin-top: 0; border-top: 0; padding-top: 4px; }
+.cms-edit-section .cms-content-group legend.sr-only { width: 1px; margin: -1px; }
+.registration-review-filters { display: grid; grid-template-columns: minmax(240px, 2fr) repeat(3, minmax(130px, 1fr)); gap: 16px; align-items: end; margin: 20px 0 16px; }
+.registration-review-filters > label { display: grid; gap: 6px; min-width: 0; margin: 0; color: var(--ink); font-size: 14px; font-weight: 600; }
+.registration-review-filters :is(input, select) { width: 100%; min-width: 0; height: 44px; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--white); color: var(--ink); font: inherit; font-weight: 400; line-height: 1.4; }
+.registration-review :is(input, select, textarea, button):focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
+.registration-review-actions :is(.primary-btn, .table-action, .secondary-btn) { min-height: 44px; justify-content: center; text-align: center; }
+.registration-review-actions .check-label { font-weight: 400; line-height: 1.5; }
+.registration-review-actions .check-label input { width: 18px; height: 18px; flex: 0 0 18px; margin: 2px 0 0; }
+.registration-review-actions textarea { display: block; width: 100%; margin-top: 6px; padding: 10px 12px; }
+@media (max-width: 1000px) { .registration-review-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) {
+  .cms-content-toolbar { position: static; }
+  .cms-content-action-buttons { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .registration-review-filters { grid-template-columns: minmax(0, 1fr); }
+}
+@media print { .main-content > .topbar { position: static; } }
+.patient-search-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 240px); align-items: end; gap: 16px; margin-bottom: 12px; }
+.patient-search-toolbar .search-box { width: 100%; min-width: 0; height: 48px; }
+.patient-extra-filters { margin-bottom: 16px; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+.patient-extra-filters > summary { cursor: pointer; padding: 10px 0; color: var(--teal-dark); font-weight: 600; }
+.patient-extra-filters > summary span { margin-left: 8px; color: var(--muted); font-size: 13px; font-weight: 400; }
+.patient-extra-filters > summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
+.patient-filter-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 10px 0 14px; }
+.hm-login-card .login-options-row { flex-wrap: wrap; gap: 8px 16px; }
+.hm-login-card .login-options-row .remember-me { flex: 1 1 210px; }
+.hm-login-card .login-options-row .text-link-button { flex: 0 0 auto; white-space: nowrap; min-height: 44px; }
+@media (max-width: 700px) {
+  .patient-search-toolbar { grid-template-columns: minmax(0, 1fr); }
+  .patient-filter-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 420px) { .patient-filter-options { grid-template-columns: minmax(0, 1fr); } }

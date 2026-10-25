@@ -1,3 +1,4 @@
+import { invitationEmail, notificationEmail } from './emailTemplates.js';
 import crypto from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { indexingHeaders, serveApplicationHtml } from './seo.js';
@@ -35,7 +36,7 @@ import {
   validatePassword,
   verifyPassword,
 } from './auth.js';
-import { emailConfigured, escapeHtml, sendEmail } from './email.js';
+import { emailConfigured, sendEmail } from './email.js';
 import { approveDraftRiskRule, assessRisk, createRiskRuleDraft, ensureConservativeCandidateDraft, getConservativeCandidateRuleDraft, getDemonstrationRules, riskAllowsAcknowledgedIncomplete, riskNeedsNurseAcknowledgement, selectRiskRules, validateRiskRules } from './domain/risk.js';
 import { buildClinicReport, reportForRole, reportSnapshotForStorage } from './domain/reporting.js';
 import { applyStockAdjustment, validateInventoryArchive, validateInventoryItem, validateStockAdjustment } from './domain/inventory.js';
@@ -54,7 +55,7 @@ import { runClinicReminderSweep } from './reminders.js';
 import { canRollbackImport, normalizeImportRows, selectedImportRows } from './domain/imports.js';
 import { patientRosterIdentitySql, rosterIdTrimCharacters } from './domain/roster.js';
 import { ensureSameOrigin, loginOtpRequired, rateLimit, requestOriginAllowed, trustProxyHops } from './security.js';
-import { buildInvitationActivationUrl } from './invitationUrl.js';
+import { buildInvitationActivationUrl, buildSignInUrl } from './invitationUrl.js';
 import { recordNurseLicenseVerification, validateNurseLicenseUpdate } from './domain/nurseLicense.js';
 import { acceptedProfileFields, normalizeDocumentReceiptStatus, normalizeHealthRecordAnswers, validatePaperSignatureForAcceptance } from './domain/health-records.js';
 import { persistHealthRecordStatusNotifications } from './domain/healthRecordNotifications.js';
@@ -157,9 +158,7 @@ async function notifyLinkedUsers(patientId, { type, subject, body, dedupeKey }) 
     try {
       await sendEmail({
         to: user.email,
-        subject,
-        text: body,
-        html: `<p>Hello ${escapeHtml(user.name)},</p><p>${escapeHtml(body).replaceAll('\n', '<br>')}</p><p>Sign in to HealthMate+ for authorized details.</p>`,
+        ...notificationEmail({ name: user.name, subject, body, authorizedDetails: true }),
       });
       statuses.push('sent');
       try {
@@ -860,9 +859,7 @@ export function createApp({
     try {
       await sendEmail({
         to: email,
-        subject: 'Your HealthMate+ account invitation',
-        text: `You were invited to HealthMate+. Activate your account: ${activationUrl}`,
-        html: `<p>Hello ${escapeHtml(name)},</p><p>You were invited to HealthMate+.</p><p><a href="${escapeHtml(activationUrl)}">Activate your account</a></p><p>This link expires in 72 hours.</p>`,
+        ...invitationEmail(name, activationUrl, buildSignInUrl()),
       });
     } catch (error) {
       await audit(req, 'INVITATION_EMAIL_FAILED', { email, reason: error.code || 'delivery_error' }, 'user', userId);
@@ -888,7 +885,7 @@ export function createApp({
       return current.rows[0]?.decision_email_status || 'not_sent';
     }
     const recipient = claim.rows[0];
-    const message = guardianSignupDecisionEmail(recipient.status, recipient.name);
+    const message = guardianSignupDecisionEmail(recipient.status, recipient.name, buildSignInUrl());
     try {
       await sendEmail({ to: recipient.email, ...message });
       await query("UPDATE guardian_signup_requests SET decision_email_status='sent',decision_email_error_code=NULL,updated_at=NOW() WHERE id=$1", [requestId]);
@@ -1128,13 +1125,11 @@ export function createApp({
     try {
       await sendEmail({
         to: account.email,
-        subject: 'Your HealthMate+ account invitation',
-        text: `Activate your HealthMate+ account: ${activationUrl}`,
-        html: `<p>Hello ${escapeHtml(account.name)},</p><p><a href="${escapeHtml(activationUrl)}">Activate your HealthMate+ account</a></p><p>This link expires in 72 hours.</p>`,
+        ...invitationEmail(account.name, activationUrl, buildSignInUrl()),
       });
     } catch (error) {
       await audit(req, 'INVITATION_EMAIL_FAILED', { email: account.email, reason: error.code || 'delivery_error' }, 'user', account.id);
-      return errorResponse(res, 502, 'EMAIL_DELIVERY_FAILED', 'The invitation was renewed, but the email could not be delivered. Check SMTP settings and retry.');
+      return errorResponse(res, 502, 'EMAIL_DELIVERY_FAILED', 'The invitation was renewed, but the email could not be delivered. Check Resend configuration and delivery status before retrying.');
     }
     await audit(req, 'INVITATION_RESENT', { email: account.email }, 'user', account.id);
     return res.json({ data: { success: true, message: 'Invitation resent.' } });
@@ -2957,7 +2952,7 @@ export function createApp({
         continue;
       }
       try {
-        await sendEmail({ to: recipient.email, subject, text: body, html: `<p>Hello ${escapeHtml(recipient.name)},</p><p>${escapeHtml(body)}</p>` });
+        await sendEmail({ to: recipient.email, ...notificationEmail({ name: recipient.name, subject, body }) });
         await query("UPDATE notifications SET status='sent',sent_at=NOW() WHERE id=$1", [emailNotice.id]);
         emailsSent += 1;
       } catch {

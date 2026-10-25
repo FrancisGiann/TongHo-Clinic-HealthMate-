@@ -71,8 +71,8 @@ export default function GuardianSignupRequests() {
         <div><h4 id="guardian-signup-review-title">Guardian registration requests</h4><p>Review the submitted relationship against school records before approving an account.</p></div>
         <button type="button" className="secondary-btn" onClick={() => setRetry((count) => count + 1)} disabled={loading}><RotateCcw size={15} /> {loading ? 'Refreshing…' : 'Refresh'}</button>
       </div>
-      <div className="settings-users-toolbar">
-        <label className="search-box"><span className="sr-only">Search guardian requests</span><input type="search" maxLength={100} value={filters.q} placeholder="Search name, email, username, or student ID" onChange={(event) => updateFilter({ q: event.target.value })} /></label>
+      <div className="registration-review-filters">
+        <label>Search guardian requests<input type="search" maxLength={100} value={filters.q} placeholder="Name, email, username or student ID" onChange={(event) => updateFilter({ q: event.target.value })} /></label>
         <label>Status<select value={filters.status} onChange={(event) => updateFilter({ status: event.target.value })}><option value="pending_review">Awaiting review</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="all">All requests</option></select></label>
         <label>Order<select value={filters.order} onChange={(event) => updateFilter({ order: event.target.value })}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
         <label>Page size<select value={filters.limit} onChange={(event) => updateFilter({ limit: Number(event.target.value) })}>{PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}</select></label>

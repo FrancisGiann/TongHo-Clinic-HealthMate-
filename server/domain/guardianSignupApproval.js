@@ -1,3 +1,5 @@
+import { guardianDecisionEmail } from '../emailTemplates.js';
+
 export const GUARDIAN_SIGNUP_STATUSES = Object.freeze(['pending_review', 'approved', 'rejected']);
 export const GUARDIAN_SIGNUP_PAGE_SIZES = Object.freeze([10, 25, 50]);
 
@@ -36,21 +38,8 @@ export function validateGuardianSignupDecisionReason(value) {
   return reason.length >= 1 && reason.length <= 500 ? { valid: true, value: reason } : { valid: false };
 }
 
-export function guardianSignupDecisionEmail(status, name) {
+export function guardianSignupDecisionEmail(status, name, signInUrl) {
   const approved = status === 'approved';
   const greeting = String(name || 'Guardian').replace(/[\r\n\u0000-\u001f]/g, ' ').slice(0, 160);
-  if (approved) return {
-    subject: 'Your HealthMate+ guardian account is approved',
-    text: `Hello ${greeting}, your guardian account has been approved. You can now sign in using the email and password you registered.`,
-    html: `<p>Hello ${escapeHtml(greeting)}, your guardian account has been approved.</p><p>You can now sign in using the email and password you registered.</p>`,
-  };
-  return {
-    subject: 'Your HealthMate+ guardian account request needs an update',
-    text: `Hello ${greeting}, your guardian account request was not approved. Contact the school clinic administrator for next steps.`,
-    html: `<p>Hello ${escapeHtml(greeting)}, your guardian account request was not approved.</p><p>Contact the school clinic administrator for next steps.</p>`,
-  };
-}
-
-function escapeHtml(value) {
-  return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+  return guardianDecisionEmail(approved, greeting, signInUrl);
 }

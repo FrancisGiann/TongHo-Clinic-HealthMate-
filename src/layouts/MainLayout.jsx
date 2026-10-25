@@ -104,6 +104,15 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
   const mobileMenuButtonRef = useRef(null);
   const mobileCloseButtonRef = useRef(null);
   const pageTitleRef = useRef(null);
+  const topbarRef = useRef(null);
+  useEffect(() => {
+    const header = topbarRef.current;
+    const update = () => header.parentElement.style.setProperty('--workspace-header-height', `${header.getBoundingClientRect().height}px`);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
   const location = useLocation();
   const previousPathRef = useRef(location.pathname);
   const navigate = useNavigate();
@@ -332,7 +341,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
       </aside>
       {mobileOpen && <button type="button" className="mobile-nav-scrim" onClick={() => { setMobileOpen(false); mobileMenuButtonRef.current?.focus(); }} aria-label="Close navigation menu" />}
       <main className="main-content">
-        <header className="topbar">
+        <header className="topbar" ref={topbarRef}>
           <button
             ref={mobileMenuButtonRef}
             className="icon-btn mobile-menu"

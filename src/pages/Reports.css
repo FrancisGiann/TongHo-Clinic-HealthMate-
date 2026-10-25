@@ -90,3 +90,9 @@
   .report-print-root .print-preview-actions button { flex: 1; justify-content: center; }
   .report-print-document { padding: 7mm; }
 }
+
+.report-tabs { flex-wrap: wrap; }
+.individual-consultation-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
+.individual-consultation-fields > label { min-width: 0; }
+.individual-consultation-fields select { display: block; width: 100%; min-width: 0; margin-top: 8px; }
+@media (max-width: 700px) { .individual-consultation-fields { grid-template-columns: minmax(0, 1fr); } }

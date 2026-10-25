@@ -27,7 +27,7 @@ Migration `007_self_signup_preferences_audit.sql` creates staff dashboard prefer
 - Environment: set `NODE_ENV=production`, `APP_URL=https://your-domain.example`, and `COOKIE_SECURE=true`
 - Proxy: set `TRUST_PROXY_HOPS` only after Hostinger confirms the exact trusted proxy hop count. The default `0` ignores forwarded addresses. Verify `req.ip` in a staging deployment before relying on IP throttles; do not trust client-supplied `X-Forwarded-For` values.
 
-Add the required database and SMTP variables from `.env.example` in hPanel. Do not upload a local `.env` file. Production startup fails closed if `DATABASE_URL`, verified PostgreSQL TLS, SMTP configuration, SMTP certificate verification, or the development-seed check is missing or unsafe.
+Add the required database and Resend variables from `.env.example` in hPanel. Do not upload a local `.env` file. Production startup fails closed if `DATABASE_URL`, verified PostgreSQL TLS, Resend configuration, email HTTPS certificate verification, or the development-seed check is missing or unsafe.
 
 ## 3. Private branding and incident images
 
@@ -53,7 +53,11 @@ Replace `healthmate-private` with the exact value configured in `SUPABASE_STORAG
 
 ## 4. Email verification and security checks
 
-Production always requires email OTP at sign-in; there is no per-account MFA switch. OTP, invitations, password resets, and notices require working SMTP. Non-implicit SMTP connections require STARTTLS, and certificate verification must remain enabled in production. For Hostinger SMTP on port 587, leave `SMTP_SECURE=false` so STARTTLS is required; use implicit TLS only when the selected provider documents it. `REQUIRE_LOGIN_OTP=false` is accepted only when `NODE_ENV=development`. The app does not simulate email delivery. See Nodemailer's [SMTP TLS options](https://nodemailer.com/smtp).
+Production always requires email OTP at sign-in. All email uses Resend's HTTPS API; SMTP and personal Gmail settings are ignored, with no fallback. Set server-only `RESEND_API_KEY`, `RESEND_FROM_EMAIL` and optionally `RESEND_FROM_NAME` (default HealthMate+). Never use a `VITE_` prefix or put keys in source/client files. Missing Resend configuration prevents production startup. Keep HTTPS certificate verification enabled (`NODE_TLS_REJECT_UNAUTHORIZED=0` is rejected). Existing OTP expiry (5 minutes), invitation expiry (72 hours), recipients and authentication rules remain unchanged.
+
+Before deployment, separately approve and verify a domain you own in Resend, then choose a sender address on that verified domain. A dedicated sending subdomain such as `mail.healthmateplus.com` is an option, not an already-configured address. Add only the DNS records Resend provides after checking existing mail/DNS; do not replace unrelated MX records. Store a sending-scoped API key in Hostinger's server secret settings, never ordinary chat. Domain verification cannot be established by the app's presence check. During approved setup, verify that click/open tracking is disabled for transactional authentication mail and review provider TLS settings; current provider settings are not established by local tests. No live setup or sending is performed by the template tests.
+
+The implementation uses Node's built-in fetch against the fixed Resend endpoint, so no new SDK dependency is needed. Requests time out after 10 seconds and do not automatically retry: a timeout may mean acceptance is uncertain. API acceptance is not proof of inbox delivery. Check provider status before manually retrying an uncertain send. Non-secret error codes distinguish missing configuration, rejected configuration, rate limits and unconfirmed delivery. See [Resend sending API](https://resend.com/docs/api-reference/emails/send-email) and [verified domains](https://resend.com/docs/dashboard/domains/introduction).
 
 Before opening access, use fictional staging accounts and test a delivered OTP, invalid and expired codes, password reset, login throttling, session idle expiry, 12-hour absolute expiry, three-session cap, per-session revocation, and sign-out-everywhere. Verify that account/session APIs return only the signed-in user's sessions. Check `/api/health` for configuration, then send and receive an actual staging email; a `configured` health value does not prove delivery.
 
@@ -63,11 +67,11 @@ Session policy is server-enforced: 15 minutes idle, 12 hours absolute, and at mo
 
 Reminder and report-archive schedulers run inside the persistent `npm start` process. Hostinger documents server capabilities by plan, but this repository has not verified that the selected Business or Cloud process stays alive long enough for the configured intervals or restarts cleanly after deployment. Verify process persistence, restart behavior, logs, time zone, and duplicate handling in staging before enabling either scheduler. Do not treat in-process timers as a reliable cron service.
 
-Reminder and report-archive schedulers are disabled by default. Only enable `CLINIC_REMINDER_SCHEDULER_ENABLED=true` after SMTP and delivery behavior pass staging checks. Only enable `REPORT_ARCHIVE_SCHEDULER_ENABLED=true` after migration, retention approval, and staging checks for daily, weekly, monthly, and duplicate snapshots. Incident-image cleanup and expired signup-code metadata cleanup start only when a database is configured; verify their retry behavior and process persistence in staging. No past report history is synthesized.
+Reminder and report-archive schedulers are disabled by default. Only enable `CLINIC_REMINDER_SCHEDULER_ENABLED=true` after Resend and delivery behavior pass staging checks. Only enable `REPORT_ARCHIVE_SCHEDULER_ENABLED=true` after migration, retention approval, and staging checks for daily, weekly, monthly, and duplicate snapshots. Incident-image cleanup and expired signup-code metadata cleanup start only when a database is configured; verify their retry behavior and process persistence in staging. No past report history is synthesized.
 
 ## 6. Production verification record
 
-Record the selected Hostinger plan, runtime version, Supabase project identity, migration versions, database TLS result, SMTP test result, trusted proxy hop count and observed `req.ip`, session/OTP checks, backup/restore rehearsal, and scheduler persistence results before claiming launch readiness. Confirm the production project is separate from development and contains no seeded development account identities or registry. Keep live patient records out of development screenshots and automated tests.
+Record the selected Hostinger plan, runtime version, Supabase project identity, migration versions, database TLS result, Resend delivery test result, trusted proxy hop count and observed `req.ip`, session/OTP checks, backup/restore rehearsal, and scheduler persistence results before claiming launch readiness. Confirm the production project is separate from development and contains no seeded development account identities or registry. Keep live patient records out of development screenshots and automated tests.
 
 ## First-deployment cleanup switches
 

@@ -76,7 +76,7 @@ export default function LandingContentEditor() {
 
   const payload = useMemo(() => contentFromForm(form), [form]);
   const validation = useMemo(() => validateLandingContent(payload), [payload]);
-  const isDirty = !validation.valid || !contentEqual(validation.value, saved?.draftContent);
+  const isDirty = Boolean(saved) && (!validation.valid || !contentEqual(validation.value, saved.draftContent));
   const draftMatchesPublished = Boolean(saved) && contentEqual(saved.draftContent, saved.publishedContent);
   const busy = saving || publishing;
 
@@ -161,7 +161,7 @@ export default function LandingContentEditor() {
     <section className="cms-content-editor" id="cms-landing-content" aria-labelledby="cms-landing-content-title">
       <header className="cms-content-editor-heading">
         <div>
-          <h3 id="cms-landing-content-title">Landing page content</h3>
+          <h3 id="cms-landing-content-title">Website text</h3>
           <p>Save changes as a private draft, preview the saved draft, then publish when it is ready.</p>
         </div>
         <button type="button" className="secondary-btn" onClick={reloadSaved} disabled={loading || busy}>Reload saved content</button>
@@ -174,8 +174,8 @@ export default function LandingContentEditor() {
 
       {error && <div className="error-banner" role="alert">
         <span>{conflict ? `${error} Your unsaved edits are preserved; reload only if you want to replace them with the saved version.` : error}</span>
-        <button type="button" className="secondary-btn" onClick={() => conflict ? reloadSaved() : setLoadAttempt((value) => value + 1)} disabled={loading || busy}>
-          {conflict ? 'Reload saved version' : 'Retry'}
+        <button type="button" className="secondary-btn" onClick={() => saved ? reloadSaved() : setLoadAttempt((value) => value + 1)} disabled={loading || busy}>
+          {saved ? 'Reload saved version' : 'Retry'}
         </button>
       </div>}
       {message && <p className="success-message" role="status">{message}</p>}
@@ -187,9 +187,10 @@ export default function LandingContentEditor() {
             {isDirty ? 'Save your edits before previewing or publishing.' : 'Preview opens the saved draft; publishing makes it public.'}
           </div>
           <div className="cms-content-action-buttons">
+            <button type="button" className="table-action" disabled={busy || !isDirty} onClick={() => { if (window.confirm('Discard your unsaved edits and return to the saved draft?')) { setForm(formFromContent(saved.draftContent)); setError(''); setMessage('Unsaved edits discarded. Saved draft restored.'); } }}>Cancel edits</button>
             <button type="button" className="secondary-btn" onClick={previewDraft} disabled={busy || isDirty}>Preview saved draft</button>
-            <button type="submit" className="secondary-btn" disabled={busy || !isDirty || !validation.valid}>{saving ? 'Saving draft…' : 'Save draft'}</button>
-            <button type="button" className="primary-btn" onClick={publishDraft} disabled={busy || isDirty || !validation.valid || draftMatchesPublished}>{publishing ? 'Publishing…' : 'Publish saved draft'}</button>
+            <button type="submit" className="primary-btn" disabled={busy || !isDirty || !validation.valid}>{saving ? 'Saving draft…' : 'Save draft'}</button>
+            <button type="button" className="secondary-btn" onClick={publishDraft} disabled={busy || isDirty || !validation.valid || draftMatchesPublished}>{publishing ? 'Publishing…' : 'Publish saved draft'}</button>
           </div>
         </div>
         {!validation.valid && <div className="error-banner cms-validation-summary" role="alert">
@@ -197,8 +198,10 @@ export default function LandingContentEditor() {
           <ul>{Object.entries(validation.errors).map(([field, messageText]) => <li key={field}>{field}: {messageText}</li>)}</ul>
         </div>}
 
-        <fieldset className="cms-content-group">
-          <legend>Hero message</legend>
+        <details className="cms-edit-section">
+          <summary><strong>Welcome message</strong><span>Top of the homepage: heading, introduction and sign-in links.</span></summary>
+          <fieldset className="cms-content-group" disabled={busy}>
+          <legend className="sr-only">Welcome message</legend>
           <p className="field-hint">The school seal remains in the hero. Sign-in and access links keep their existing destinations.</p>
           <div className="cms-content-fields">
             <label>Headline
@@ -215,9 +218,12 @@ export default function LandingContentEditor() {
             </label>
           </div>
         </fieldset>
+        </details>
 
-        <fieldset className="cms-content-group">
-          <legend>Optional sections</legend>
+        <details className="cms-edit-section">
+          <summary><strong>Section visibility and order</strong><span>Choose which populated sections visitors see, and in what order.</span></summary>
+          <fieldset className="cms-content-group" disabled={busy}>
+          <legend className="sr-only">Section visibility and order</legend>
           <p className="field-hint">Sections with no information are omitted from the public page. Choose which populated sections appear and set their order.</p>
           <div className="cms-section-order-list">
             {form.sectionOrder.map((section, index) => (
@@ -234,9 +240,12 @@ export default function LandingContentEditor() {
             ))}
           </div>
         </fieldset>
+        </details>
 
-        <fieldset className="cms-content-group">
-          <legend>Clinic information</legend>
+        <details className="cms-edit-section">
+          <summary><strong>Clinic information</strong><span>Location, opening hours, contact details and services below the community introduction.</span></summary>
+          <fieldset className="cms-content-group" disabled={busy}>
+          <legend className="sr-only">Clinic information</legend>
           <p className="field-hint">Leave details blank until school-approved information is available. Contact details display as plain text.</p>
           <div className="cms-content-fields">
             <label>Location
@@ -263,9 +272,12 @@ export default function LandingContentEditor() {
             ))}
           </div>
         </fieldset>
+        </details>
 
-        <fieldset className="cms-content-group">
-          <legend>Announcements</legend>
+        <details className="cms-edit-section">
+          <summary><strong>Announcements</strong><span>Scheduled notices on the homepage. Expired notices stay in your draft.</span></summary>
+          <fieldset className="cms-content-group" disabled={busy}>
+          <legend className="sr-only">Announcements</legend>
           <p className="field-hint">Only notices within their start and expiry window appear publicly. Times use Philippine time ({LANDING_TIME_ZONE}, UTC+08:00).</p>
           <div className="cms-repeater-heading">
             <div><h4>Public notices</h4><p>Scheduled and expired notices stay in this draft for editing but are hidden from visitors.</p></div>
@@ -297,9 +309,12 @@ export default function LandingContentEditor() {
             ))}
           </div>
         </fieldset>
+        </details>
 
-        <fieldset className="cms-content-group">
-          <legend>Frequently asked questions</legend>
+        <details className="cms-edit-section">
+          <summary><strong>Frequently asked questions</strong><span>Expandable questions and answers on the homepage.</span></summary>
+          <fieldset className="cms-content-group" disabled={busy}>
+          <legend className="sr-only">Frequently asked questions</legend>
           <p className="field-hint">Answers are plain text and appear in expandable questions on the public page.</p>
           <div className="cms-repeater-heading">
             <div><h4>Questions and answers</h4><p>No example FAQs are pre-filled.</p></div>
@@ -322,6 +337,7 @@ export default function LandingContentEditor() {
             ))}
           </div>
         </fieldset>
+        </details>
 
       </form>}
     </section>

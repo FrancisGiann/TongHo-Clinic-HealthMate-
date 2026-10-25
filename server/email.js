@@ -1,62 +1,50 @@
-import nodemailer from 'nodemailer';
+import { otpEmail } from './emailTemplates.js';
+export { escapeHtml } from './emailTemplates.js';
 
-const placeholders = new Set(['', 'your-gmail-app-password', 'changeme', 'replace-me']);
-
-export function emailConfigured() {
-  return Boolean(
-    process.env.SMTP_HOST &&
-    process.env.SMTP_USER &&
-    process.env.SMTP_PASS &&
-    !placeholders.has(String(process.env.SMTP_PASS).trim().toLowerCase()),
-  );
+export function emailConfigured(env = process.env) {
+  const key = String(env.RESEND_API_KEY || '').trim();
+  const sender = String(env.RESEND_FROM_EMAIL || '').trim();
+  const name = String(env.RESEND_FROM_NAME || 'HealthMate+');
+  return Boolean(key && !['changeme', 'replace-me', 're_xxxxxxxxx'].includes(key.toLowerCase())
+    && /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(sender)
+    && !/[\r\n<>]/.test(name));
 }
 
-export function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
+export function emailTlsVerified(env = process.env) {
+  return env.NODE_TLS_REJECT_UNAUTHORIZED !== '0';
 }
 
-export function smtpSecurityConfiguration(env = process.env) {
-  const secure = String(env.SMTP_SECURE || 'false').toLowerCase() === 'true';
-  return {
-    secure,
-    requireTLS: !secure,
-    tls: { rejectUnauthorized: env.SMTP_TLS_REJECT_UNAUTHORIZED !== 'false' },
-  };
+function deliveryError(code, message) {
+  return Object.assign(new Error(message), { code });
 }
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT || 587),
-  ...smtpSecurityConfiguration(),
-  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-});
-
-export async function sendEmail({ to, subject, text, html }) {
-  if (!emailConfigured()) {
-    const error = new Error('Email delivery is not configured.');
-    error.code = 'EMAIL_NOT_CONFIGURED';
-    throw error;
+export async function sendEmail({ to, subject, text, html }, { fetchFn = globalThis.fetch, env = process.env } = {}) {
+  if (!emailConfigured(env)) throw deliveryError('EMAIL_NOT_CONFIGURED', 'Resend email delivery is not configured.');
+  if (!emailTlsVerified(env)) throw deliveryError('EMAIL_TLS_CONFIGURATION', 'Email delivery requires certificate-verified HTTPS.');
+  let response;
+  try {
+    response = await fetchFn('https://api.resend.com/emails', {
+      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10_000),
+      headers: { Authorization: `Bearer ${env.RESEND_API_KEY.trim()}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: `${env.RESEND_FROM_NAME || 'HealthMate+'} <${env.RESEND_FROM_EMAIL.trim()}>`, to, subject, text, html }),
+    });
+  } catch {
+    // Never expose provider errors, request bodies, API keys or recipient details.
+    // Do not automatically retry: a timed-out request may already have been accepted.
+    throw deliveryError('EMAIL_DELIVERY_UNCONFIRMED', 'Email delivery could not be confirmed.');
   }
-  return transporter.sendMail({
-    from: `${process.env.SMTP_FROM_NAME || 'HealthMate+'} <${process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER}>`,
-    to,
-    subject,
-    text,
-    html,
-  });
+  if (!response.ok) {
+    const code = response.status === 429 ? 'EMAIL_RATE_LIMITED'
+      : [401, 403].includes(response.status) ? 'EMAIL_PROVIDER_CONFIGURATION'
+      : 'EMAIL_DELIVERY_FAILED';
+    throw deliveryError(code, 'Resend did not accept the email. Check server email configuration and provider status.');
+  }
+  let result;
+  try { result = await response.json(); } catch { /* Malformed success remains unconfirmed. */ }
+  if (typeof result?.id !== 'string' || !result.id) throw deliveryError('EMAIL_DELIVERY_UNCONFIRMED', 'Email delivery could not be confirmed.');
+  return { id: result.id };
 }
 
 export async function sendOtpEmail(email, code, purpose = 'verification') {
-  const safeCode = escapeHtml(code);
-  return sendEmail({
-    to: email,
-    subject: `HealthMate+ ${purpose} code`,
-    text: `Your HealthMate+ ${purpose} code is ${code}. It expires in 5 minutes.`,
-    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:24px"><h2>HealthMate+</h2><p>Your ${escapeHtml(purpose)} code is:</p><p style="font-size:32px;font-weight:700;letter-spacing:6px">${safeCode}</p><p>This code expires in 5 minutes. Do not share it.</p></div>`,
-  });
+  return sendEmail({ to: email, ...otpEmail(code, purpose) });
 }

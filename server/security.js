@@ -39,12 +39,12 @@ export function loginOtpRequired(env = process.env) {
   return env.NODE_ENV !== 'development' || env.REQUIRE_LOGIN_OTP !== 'false';
 }
 
-export function productionStartupIssue({ nodeEnv, databaseConfigured, databaseTlsVerified, emailConfigured, smtpTlsVerified, hasDevelopmentAccounts, hasSeedRegistry }) {
+export function productionStartupIssue({ nodeEnv, databaseConfigured, databaseTlsVerified, emailConfigured, emailTlsVerified, hasDevelopmentAccounts, hasSeedRegistry }) {
   if (nodeEnv !== 'production') return null;
   if (!databaseConfigured) return 'Production requires DATABASE_URL.';
   if (!databaseTlsVerified) return 'Production requires verified PostgreSQL TLS.';
-  if (!emailConfigured) return 'Production requires configured SMTP because email verification is mandatory.';
-  if (!smtpTlsVerified) return 'Production requires certificate-verified SMTP TLS.';
+  if (!emailConfigured) return 'Production requires configured Resend because email verification is mandatory.';
+  if (!emailTlsVerified) return 'Production requires certificate-verified email HTTPS.';
   if (hasDevelopmentAccounts || hasSeedRegistry) return 'Production database contains development-only seed data.';
   return null;
 }
