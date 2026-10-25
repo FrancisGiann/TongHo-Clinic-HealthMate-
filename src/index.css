@@ -6559,6 +6559,10 @@ fieldset.form-section { min-width: 0; border: 0; }
   margin-inline: auto;
 }
 .hm-home-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--hm-paper);
   min-height: 96px;
   display: flex;
   align-items: center;
@@ -6786,6 +6790,7 @@ fieldset.form-section { min-width: 0; border: 0; }
 }
 .hm-home-footer {
   display: flex;
+  flex-direction: column;
   justify-content: space-between;
   gap: 20px;
   padding-block: 27px;
@@ -6793,6 +6798,17 @@ fieldset.form-section { min-width: 0; border: 0; }
   font-size: var(--type-compact);
 }
 .hm-home-footer a { color: var(--hm-blue); font-weight: 600; }
+.hm-home-footer-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+.hm-home-footer-heading a { display: inline-flex; align-items: center; min-height: 44px; }
+.hm-home-policies { border-block: 1px solid var(--hm-rule); }
+.hm-home-policies details + details { border-top: 1px solid var(--hm-rule); }
+.hm-home-policies summary { padding: 14px 0; min-height: 48px; color: var(--hm-blue); font-weight: 600; cursor: pointer; }
+.hm-home-policies summary:focus-visible { outline: 3px solid var(--hm-blue); outline-offset: 3px; }
+.hm-home-policy-copy { max-width: 72ch; padding: 4px 0 20px; color: var(--hm-ink); font-size: 16px; line-height: 1.65; overflow-wrap: anywhere; }
+.hm-home-policy-copy h2 { margin: 0 0 12px; font-size: 21px; }
+.hm-home-policy-copy p + p { margin-top: 14px; }
+.hm-home-cookie-note { margin: 0; line-height: 1.6; }
+.hm-home :is(#community, #portal-access, summary) { scroll-margin-top: var(--hm-header-offset, 112px); }
 .hm-login-page { padding-bottom: 64px; }
 .hm-login-topbar {
   min-height: 88px;
@@ -6911,11 +6927,12 @@ fieldset.form-section { min-width: 0; border: 0; }
   .hm-home-footer,
   .hm-login-topbar,
   .hm-login-layout { width: min(100% - 36px, 620px); }
-  .hm-home-header { min-height: 78px; flex-wrap: wrap; padding-block: 14px; }
+  .hm-home-header { min-height: 78px; flex-wrap: wrap; gap: 8px; padding-block: 14px; }
   .hm-home-brand { font-size: 18px; }
   .hm-home-brand img { width: 42px; height: 42px; }
   .hm-home-nav { width: 100%; justify-content: space-between; gap: 10px; font-size: var(--type-compact); }
-  .hm-home-nav-signin { min-height: 40px; padding-inline: 13px; }
+  .hm-home-nav a { display: inline-flex; align-items: center; min-height: 44px; }
+  .hm-home-nav-signin { min-height: 44px; padding-inline: 13px; }
   .hm-home-error,
   .hm-login-connection-error { width: min(100% - 36px, 620px); }
   .hm-home-hero { grid-template-columns: minmax(0, 1fr); gap: 34px; min-height: auto; padding-block: 54px; }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, HeartHandshake, ShieldCheck, Stethoscope, Users } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { useBranding } from '../hooks/useBranding.js';
@@ -27,12 +27,22 @@ function fallbackImageOnce(event, fallback, fallbackAlt, fallbackCaption) {
 }
 
 export default function Home({ authError = '' }) {
+  const headerRef = useRef(null);
   const branding = useBranding();
   const communityPhoto = branding.landingCommunityPhoto;
   const location = useLocation();
   const draftPreview = new URLSearchParams(location.search).get('preview') === 'draft';
   const [landingContent, setLandingContent] = useState(() => projectPublicLandingContent(createDefaultLandingContent()));
   const [previewError, setPreviewError] = useState('');
+
+  useEffect(() => {
+    const header = headerRef.current;
+    const updateOffset = () => header.parentElement.style.setProperty('--hm-header-offset', `${header.getBoundingClientRect().height + 16}px`);
+    updateOffset();
+    const observer = new ResizeObserver(updateOffset);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -107,7 +117,7 @@ export default function Home({ authError = '' }) {
       {draftPreview && <div className="hm-home-preview-banner" role="status">
         <span>{previewError ? 'Draft preview unavailable' : 'Previewing the saved draft. Only a signed-in system administrator can view this version.'}</span>
       </div>}
-      <header className="hm-home-header">
+      <header className="hm-home-header" ref={headerRef}>
         <Link className="hm-home-brand" to="/" aria-label="HealthMate+ home">
           <img src={branding.applicationLogo} alt="" onError={(event) => { event.currentTarget.src = '/healthmate-mark.svg'; }} />
           <span>HealthMate+</span>
@@ -203,8 +213,33 @@ export default function Home({ authError = '' }) {
       </section>
 
       <footer className="hm-home-footer">
-        <span>HealthMate+ · Philippine Tong Ho Institute</span>
-        <Link to="/login">Sign in</Link>
+        <div className="hm-home-footer-heading">
+          <span>HealthMate+ · Philippine Tong Ho Institute</span>
+          <Link to="/login">Sign in</Link>
+        </div>
+        <div className="hm-home-policies">
+          <details>
+            <summary>Terms and Conditions</summary>
+            <div className="hm-home-policy-copy">
+              <h2>Using HealthMate+</h2>
+              <p>HealthMate+ supports school clinic records, consultations, and appointment requests. Access depends on your account role and, for guardians, your verified relationship with a student.</p>
+              <p>Use only your own account. Keep your password and verification codes private, provide accurate information, and access or share records only when you are authorized to do so. Sign out when using a shared device.</p>
+              <p>An appointment request is subject to clinic review. Information in HealthMate+ supports clinic care; it does not replace a consultation or provide an emergency response service. For urgent concerns, contact the clinic directly or seek emergency assistance.</p>
+              <p>For account access, incorrect records, or questions about using the system, contact the school clinic or system administrator through the school’s established contact channels.</p>
+            </div>
+          </details>
+          <details>
+            <summary>Cookies and browser storage</summary>
+            <div className="hm-home-policy-copy">
+              <h2>What this application stores in your browser</h2>
+              <p>The <code>healthmate_session</code> cookie keeps you signed in. It contains a session identifier, not your clinic record, and is restricted from access by page scripts. Signing out clears this cookie. Sessions also expire automatically; choosing “Remember me” affects how long the browser keeps the cookie.</p>
+              <p>Browser storage remembers display preferences such as your theme and collapsed sidebar. Some account-settings state is kept temporarily for the current browser tab.</p>
+              <p>You can clear cookies and site storage in your browser settings. Clearing or blocking the sign-in cookie means you will need to sign in again or may be unable to use account features. Clearing preferences resets them on that browser.</p>
+              <p>Fonts are requested from Google Fonts, so your browser connects to that service when loading them.</p>
+            </div>
+          </details>
+        </div>
+        <p className="hm-home-cookie-note">This application uses a cookie for sign-in and browser storage for preferences. See the details above.</p>
       </footer>
     </main>
   );
