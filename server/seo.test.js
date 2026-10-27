@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { indexingHeaders, landingHtml, serveApplicationHtml } from './seo.js';
 import { createApp } from './app.js';
 const template = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -33,7 +33,9 @@ test('indexing middleware precedes API handlers and static serving',()=>{
   const policy=layers.findIndex(l=>l.handle===indexingHeaders);
   assert.ok(policy>=0);
   assert.ok(layers.findIndex(l=>l.route?.path==='/api/auth/me')>policy);
-  assert.ok(layers.findIndex(l=>l.name==='serveStatic')>policy);
+  const staticServing = layers.findIndex(l=>l.name==='serveStatic');
+  if (existsSync(new URL('../dist/', import.meta.url))) assert.ok(staticServing>policy);
+  else assert.equal(staticServing,-1);
 });
 test('sitemap contains exactly the public canonical root and robots permits rendering',()=>{
   const sitemap=readFileSync(new URL('../public/sitemap.xml',import.meta.url),'utf8');
