@@ -533,12 +533,184 @@ test('guardian signup approval rechecks account conflicts inside its transaction
   let statusCode = 200;
   let body;
   const response = { status(code) { statusCode = code; return this; }, json(value) { body = value; return this; } };
-  await handler({ params: { id: requestId }, body: { verifiedRelationship: true }, user: { id: 'admin-id', role: 'system_administrator' }, headers: {}, ip: 'test' }, response);
+  await handler({ params: { id: requestId }, body: { verifiedRelationship: true, patientId: 'legacy-student-id' }, user: { id: 'admin-id', role: 'system_administrator' }, headers: {}, ip: 'test' }, response);
   assert.equal(statusCode, 409);
   assert.equal(body.error.code, 'ACCOUNT_CONFLICT');
   assert.equal(committed, false, 'the transaction did not commit the signup request');
   assert.deepEqual(mutations, [], 'no active guardian or student link write follows a conflict');
   assert.equal(JSON.stringify(body).includes('bcrypt-hash'), false);
+});
+
+test('guardian signup email verification stores hints without requiring or writing a roster match', async () => {
+  const scenarios = [
+    {
+      metadata: { name: 'Guardian', username: 'guardian.one', passwordHash: '$2b$12$' + 'a'.repeat(53), childName: 'New student', gradeLevel: 'Grade 3', section: 'Emerald', studentId: 'NOT-YET-ON-ROSTER', relationship: 'Mother' },
+      expected: ['NOT-YET-ON-ROSTER', 'Mother', 'New student', 'Grade 3', 'Emerald'],
+    },
+    {
+      metadata: { name: 'Legacy Guardian', username: 'guardian.legacy', passwordHash: '$2b$12$' + 'b'.repeat(53), studentId: 'S-001', relationship: 'Parent' },
+      expected: ['S-001', 'Parent', '', '', ''],
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const statements = [];
+    let insertValues;
+    const client = { query: async (sql, values = []) => {
+      statements.push(sql);
+      if (sql.startsWith('INSERT INTO guardian_signup_requests')) insertValues = values;
+      if (sql.startsWith('SELECT id FROM users') || sql.startsWith('SELECT 1 FROM invitations') || sql.startsWith('SELECT id FROM guardian_signup_requests')) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 1 };
+    } };
+    const app = createApp({ consumeOtpFn: async (_id, _code, purpose, { onConsume }) => {
+      assert.equal(purpose, 'guardian_signup');
+      return onConsume({ id: 'challenge-id', destination: 'guardian@example.test', metadata: scenario.metadata }, client);
+    } });
+    const route = app.router.stack.find((layer) => layer.route?.path === '/api/auth/guardian-signup/verify' && layer.route.methods.post);
+    let statusCode = 200;
+    let body;
+    const response = { status(code) { statusCode = code; return this; }, json(value) { body = value; return this; } };
+    await route.route.stack.at(-1).handle({ body: { challengeId: 'challenge-id', code: '123456' }, headers: {}, ip: 'test' }, response);
+
+    assert.equal(statusCode, 200);
+    assert.equal(body.data.pendingReview, true);
+    assert.deepEqual(insertValues.slice(5, 10), scenario.expected);
+    assert.equal(statements.some((sql) => /\bFROM patients\b|\bINTO patients\b/.test(sql)), false);
+  }
+});
+
+test('guardian signup approval links only the explicitly selected student record', async () => {
+  const requestId = '00000000-0000-4000-8000-000000000121';
+  const claimedStudentId = 'CLAIMED-ID';
+  const chosenStudentId = 'school-record-42';
+  const mutations = [];
+  let auditDetails;
+  let committed = false;
+  const client = { query: async (sql, values = []) => {
+    if (sql.includes('SELECT * FROM guardian_signup_requests')) return { rows: [{ id: requestId, status: 'pending_review', password_hash: 'bcrypt-hash', email: 'parent@example.test', username: 'parent', student_id: claimedStudentId, relationship: 'Mother' }], rowCount: 1 };
+    if (sql.startsWith('SELECT id FROM users')) return { rows: [], rowCount: 0 };
+    if (sql.startsWith('SELECT id FROM invitations')) return { rows: [], rowCount: 0 };
+    if (sql.includes('FROM patients')) {
+      assert.match(sql, /WHERE id=\$1 AND patient_type='student' FOR UPDATE/);
+      assert.deepEqual(values, [chosenStudentId]);
+      return { rows: [{ id: chosenStudentId, name: 'Verified roster student', student_id: 'OFFICIAL-42', grade_level: 'Grade 6', section: 'Mabini' }], rowCount: 1 };
+    }
+    if (/^(INSERT|UPDATE|DELETE)\s/.test(sql.trim())) mutations.push({ sql, values });
+    if (values[1] === 'GUARDIAN_SIGNUP_APPROVED') auditDetails = JSON.parse(values[4]);
+    return { rows: [], rowCount: 1 };
+  } };
+  const app = createApp({
+    transactionFn: async (work) => { const result = await work(client); committed = true; return result; },
+    queryFn: async (sql) => sql.startsWith('SELECT decision_email_status')
+      ? { rows: [{ decision_email_status: 'queued' }], rowCount: 1 }
+      : { rows: [], rowCount: 0 },
+  });
+  const route = app.router.stack.find((layer) => layer.route?.path === '/api/admin/guardian-signup-requests/:id/approve' && layer.route.methods.patch);
+  let statusCode = 200;
+  let body;
+  const response = { status(code) { statusCode = code; return this; }, json(value) { body = value; return this; } };
+  await route.route.stack.at(-1).handle({ params: { id: requestId }, body: { verifiedRelationship: true, patientId: chosenStudentId }, user: { id: 'admin-id', role: 'system_administrator' }, headers: {}, ip: 'test' }, response);
+
+  assert.equal(statusCode, 200);
+  assert.equal(committed, true);
+  assert.deepEqual(body.data.request.linkedStudent, { id: chosenStudentId, name: 'Verified roster student', studentId: 'OFFICIAL-42', gradeLevel: 'Grade 6', section: 'Mabini' });
+  assert.equal(mutations.some(({ sql }) => sql.startsWith('INSERT INTO patients')), false);
+  assert.deepEqual(mutations.find(({ sql }) => sql.startsWith('INSERT INTO guardian_patient_links')).values.slice(1), [chosenStudentId, 'Mother']);
+  assert.deepEqual(mutations.find(({ sql }) => sql.startsWith('UPDATE guardian_signup_requests')).values, [requestId, chosenStudentId, 'admin-id']);
+  assert.deepEqual(auditDetails, { patientId: chosenStudentId });
+  assert.notEqual(chosenStudentId, claimedStudentId, 'the administrator can deliberately select a verified record that differs from the claim');
+});
+
+test('guardian signup approval rejects missing or invalid student selection and nonstudent records without writes', async () => {
+  const requestId = '00000000-0000-4000-8000-000000000122';
+  let transactionCalls = 0;
+  let committed = false;
+  const app = createApp({ transactionFn: async (work) => {
+    transactionCalls += 1;
+    const client = { query: async (sql) => {
+      if (sql.includes('SELECT * FROM guardian_signup_requests')) return { rows: [{ id: requestId, status: 'pending_review', password_hash: 'bcrypt-hash', email: 'parent@example.test', username: 'parent', student_id: 'S-001', relationship: 'Parent' }], rowCount: 1 };
+      if (sql.startsWith('SELECT id FROM users') || sql.startsWith('SELECT id FROM invitations')) return { rows: [], rowCount: 0 };
+      if (sql.includes('FROM patients')) return { rows: [], rowCount: 0 };
+      assert.doesNotMatch(sql.trim(), /^(INSERT|UPDATE|DELETE)\s/);
+      return { rows: [], rowCount: 1 };
+    } };
+    const result = await work(client);
+    committed = true;
+    return result;
+  } });
+  const route = app.router.stack.find((layer) => layer.route?.path === '/api/admin/guardian-signup-requests/:id/approve' && layer.route.methods.patch);
+  const handler = route.route.stack.at(-1).handle;
+  const invoke = async (bodyInput) => {
+    let statusCode = 200;
+    let body;
+    const response = { status(code) { statusCode = code; return this; }, json(value) { body = value; return this; } };
+    await handler({ params: { id: requestId }, body: bodyInput, user: { id: 'admin-id', role: 'system_administrator' }, headers: {}, ip: 'test' }, response);
+    return { statusCode, body };
+  };
+  assert.equal((await invoke({ verifiedRelationship: true })).statusCode, 400);
+  assert.equal((await invoke({ verifiedRelationship: true, patientId: 'bad\npatient' })).statusCode, 400);
+  assert.equal(transactionCalls, 0);
+  const nonstudent = await invoke({ verifiedRelationship: true, patientId: 'faculty-or-deleted-record' });
+  assert.equal(nonstudent.statusCode, 409);
+  assert.equal(nonstudent.body.error.code, 'STUDENT_SELECTION_INVALID');
+  assert.equal(transactionCalls, 1);
+  assert.equal(committed, false, 'a missing or nonstudent record leaves the request and guardian account untouched');
+});
+
+test('concurrent guardian signup decisions commit at most one guardian account and link', async () => {
+  const requestId = '00000000-0000-4000-8000-000000000123';
+  let requestStatus = 'pending_review';
+  let commitCount = 0;
+  const accountWrites = [];
+  const linkWrites = [];
+  let transactionTail = Promise.resolve();
+  const transactionFn = async (work) => {
+    const previous = transactionTail;
+    let release;
+    transactionTail = new Promise((resolve) => { release = resolve; });
+    await previous;
+    const transactionState = { status: requestStatus, accounts: [], links: [] };
+    const client = { query: async (sql, values = []) => {
+      if (sql.includes('SELECT * FROM guardian_signup_requests')) return { rows: [{ id: requestId, status: transactionState.status, password_hash: transactionState.status === 'pending_review' ? 'bcrypt-hash' : null, email: 'parent@example.test', username: 'parent', student_id: 'S-001', relationship: 'Parent' }], rowCount: 1 };
+      if (sql.startsWith('SELECT id FROM users') || sql.startsWith('SELECT id FROM invitations')) return { rows: [], rowCount: 0 };
+      if (sql.includes('FROM patients')) return { rows: [{ id: 'chosen-student', name: 'School student', student_id: 'S-002', grade_level: 'Grade 5', section: 'Rizal' }], rowCount: 1 };
+      if (sql.startsWith('INSERT INTO users')) transactionState.accounts.push(values);
+      if (sql.startsWith('INSERT INTO guardian_patient_links')) transactionState.links.push(values);
+      if (sql.startsWith('UPDATE guardian_signup_requests')) transactionState.status = 'approved';
+      return { rows: [], rowCount: 1 };
+    } };
+    try {
+      const result = await work(client);
+      requestStatus = transactionState.status;
+      commitCount += 1;
+      accountWrites.push(...transactionState.accounts);
+      linkWrites.push(...transactionState.links);
+      return result;
+    } finally {
+      release();
+    }
+  };
+  const app = createApp({
+    transactionFn,
+    queryFn: async (sql) => sql.startsWith('SELECT decision_email_status')
+      ? { rows: [{ decision_email_status: 'queued' }], rowCount: 1 }
+      : { rows: [], rowCount: 0 },
+  });
+  const route = app.router.stack.find((layer) => layer.route?.path === '/api/admin/guardian-signup-requests/:id/approve' && layer.route.methods.patch);
+  const handler = route.route.stack.at(-1).handle;
+  const invoke = async () => {
+    let statusCode = 200;
+    let body;
+    const response = { status(code) { statusCode = code; return this; }, json(value) { body = value; return this; } };
+    await handler({ params: { id: requestId }, body: { verifiedRelationship: true, patientId: 'chosen-student' }, user: { id: 'admin-id', role: 'system_administrator' }, headers: {}, ip: 'test' }, response);
+    return { statusCode, body };
+  };
+  const results = await Promise.all([invoke(), invoke()]);
+  assert.deepEqual(results.map((result) => result.statusCode).sort(), [200, 409]);
+  assert.equal(requestStatus, 'approved');
+  assert.equal(commitCount, 1);
+  assert.equal(accountWrites.length, 1);
+  assert.equal(linkWrites.length, 1);
 });
 
 test('incident list binds consent ownership to the actor while date filters keep separate parameters', async () => {

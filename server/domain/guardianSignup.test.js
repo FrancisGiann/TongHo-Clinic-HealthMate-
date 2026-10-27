@@ -5,7 +5,8 @@ import { guardianSignupAcceptedResponse, resolveGuardianStudentMatch, validateGu
 
 const validInput = {
   name: '  Sample Guardian  ', email: 'Guardian@Example.test', username: ' Guardian.User ',
-  password: 'StrongPassword1!', confirmPassword: 'StrongPassword1!', studentId: '  STU 001  ', relationship: 'Mother',
+  password: 'StrongPassword1!', confirmPassword: 'StrongPassword1!', childName: '  Sample Student  ',
+  gradeLevel: 'Grade 4', section: '  Rizal  ', studentId: '  STU 001  ', relationship: 'Mother',
 };
 
 test('guardian signup validates user-selected details and normalizes account and roster identifiers', () => {
@@ -13,7 +14,8 @@ test('guardian signup validates user-selected details and normalizes account and
   assert.equal(result.valid, true);
   assert.deepEqual(result.value, {
     name: 'Sample Guardian', email: 'guardian@example.test', username: 'guardian.user',
-    password: 'StrongPassword1!', studentId: 'STU 001', normalizedStudentId: 'stu 001', relationship: 'Mother',
+    password: 'StrongPassword1!', childName: 'Sample Student', gradeLevel: 'Grade 4', section: 'Rizal',
+    studentId: 'STU 001', normalizedStudentId: 'stu 001', relationship: 'Mother',
   });
 });
 
@@ -24,11 +26,26 @@ test('guardian signup rejects weak or mismatched passwords, invalid identity, an
 });
 
 test('signup challenge metadata requires a password hash and excludes plaintext password', () => {
-  const metadata = { name: 'Guardian', username: 'guardian.one', passwordHash: '$2b$12$' + 'a'.repeat(53), studentId: 'S-1', relationship: 'Parent' };
-  assert.equal(validGuardianSignupMetadata(metadata), true);
-  assert.equal(validGuardianSignupMetadata({ ...metadata, password: 'StrongPassword1!' }), false);
-  assert.equal(validGuardianSignupMetadata({ ...metadata, passwordHash: 'short' }), false);
+  const base = { name: 'Guardian', username: 'guardian.one', passwordHash: '$2b$12$' + 'a'.repeat(53), studentId: 'S-1', relationship: 'Parent' };
+  const legacy = { ...base };
+  const current = { ...base, childName: 'Student', gradeLevel: 'Grade 3', section: '' };
+  assert.equal(validGuardianSignupMetadata(legacy), true, 'old unconsumed OTP challenges remain usable');
+  assert.equal(validGuardianSignupMetadata(current), true);
+  assert.equal(validGuardianSignupMetadata({ ...current, password: 'StrongPassword1!' }), false);
+  assert.equal(validGuardianSignupMetadata({ ...current, passwordHash: 'short' }), false);
+  assert.equal(validGuardianSignupMetadata({ ...current, gradeLevel: 'Grade 13' }), false);
   assert.equal(normalizeIdentifier(' Guardian@Example.test '), 'guardian@example.test');
+});
+
+test('guardian signup accepts unknown or omitted student IDs while validating required child details', () => {
+  for (const studentId of ['NOT-YET-ON-ROSTER', '']) {
+    const result = validateGuardianSignup({ ...validInput, studentId }, { validEmail, validatePassword });
+    assert.equal(result.valid, true);
+    assert.equal(result.value.studentId, studentId);
+  }
+  const invalid = validateGuardianSignup({ ...validInput, studentId: 'x'.repeat(81), childName: ' ', gradeLevel: 'Grade 11', section: 'x'.repeat(81) }, { validEmail, validatePassword });
+  assert.equal(invalid.valid, false);
+  assert.deepEqual(Object.keys(invalid.errors).sort(), ['childName', 'gradeLevel', 'section', 'studentId']);
 });
 
 test('new, existing-account, and invited-email signup requests can share one non-enumerating response', () => {

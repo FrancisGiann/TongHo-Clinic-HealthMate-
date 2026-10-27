@@ -8291,6 +8291,11 @@ fieldset.form-section { min-width: 0; border: 0; }
 .branding-slot-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: flex-end; }
 .branding-slot-actions input[type="file"] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
 .registration-review-actions { min-width: 190px; display: grid; gap: 7px; }
+.registration-selected-student { display: grid; gap: 3px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft, #f1f5f9); overflow-wrap: anywhere; }
+.registration-selected-student strong { color: var(--ink); font-size: var(--type-compact); }
+.registration-selected-student span { color: var(--ink); }
+.registration-selected-student small { color: var(--muted); font-size: var(--type-compact); }
+.registration-add-student-link { width: fit-content; max-width: 100%; }
 .registration-review-actions .check-label { display: flex; align-items: flex-start; gap: 7px; font-size: var(--type-compact); }
 .registration-review-actions form { display: grid; gap: 7px; }
 .registration-review-actions textarea { min-height: 76px; }
@@ -8313,6 +8318,7 @@ fieldset.form-section { min-width: 0; border: 0; }
   .registration-request-review { display: grid; gap: 8px; padding-top: 10px; }
   .registration-request-review > strong { color: var(--ink); font-size: var(--type-compact); }
   .registration-review-actions { width: 100%; }
+  .registration-add-student-link { width: 100%; }
   .registration-review-actions .check-label > input { flex: 0 0 auto; width: 18px; min-width: 18px; }
   .registration-review-actions button { width: 100%; min-height: 44px; justify-content: center; white-space: normal; text-align: center; }
 }

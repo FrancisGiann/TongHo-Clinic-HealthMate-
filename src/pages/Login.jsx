@@ -13,6 +13,7 @@ import {
 } from '../utils/auth';
 import { getSafeReturnPath } from '../utils/navigation';
 import { useBranding } from '../hooks/useBranding.js';
+import { STUDENT_GRADE_LEVELS } from '../../shared/grades.js';
 
 export default function Login({ onLogin, authError = '' }) {
   const branding = useBranding();
@@ -29,7 +30,7 @@ export default function Login({ onLogin, authError = '' }) {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [activationUsername, setActivationUsername] = useState('');
-  const [guardianSignup, setGuardianSignup] = useState({ name: '', email: '', username: '', password: '', confirmPassword: '', studentId: '', relationship: 'Parent' });
+  const [guardianSignup, setGuardianSignup] = useState({ name: '', email: '', username: '', password: '', confirmPassword: '', childName: '', gradeLevel: '', section: '', studentId: '', relationship: 'Parent' });
   const [guardianSignupChallengeId, setGuardianSignupChallengeId] = useState('');
   const [guardianSignupResendSeconds, setGuardianSignupResendSeconds] = useState(0);
   const [guardianSignupStep, setGuardianSignupStep] = useState(1);
@@ -147,6 +148,9 @@ export default function Login({ onLogin, authError = '' }) {
       name: guardianSignup.name.trim(),
       email: guardianSignup.email.trim(),
       username: normalizeUsername(guardianSignup.username),
+      childName: guardianSignup.childName.trim(),
+      gradeLevel: guardianSignup.gradeLevel,
+      section: guardianSignup.section.trim(),
       studentId: guardianSignup.studentId.trim(),
     });
     setLoading(false);
@@ -182,8 +186,9 @@ export default function Login({ onLogin, authError = '' }) {
       setGuardianSignupStep(3);
       return;
     }
-    if (!guardianSignup.studentId.trim()) return reportSignupError('Enter the student ID provided by the school.', 'guardian-student-id');
-    setGuardianSignup((current) => ({ ...current, studentId: current.studentId.trim() }));
+    if (!guardianSignup.childName.trim()) return reportSignupError('Enter the student’s full name.', 'guardian-child-name');
+    if (!guardianSignup.gradeLevel) return reportSignupError('Choose the student’s grade.', 'guardian-grade-level');
+    setGuardianSignup((current) => ({ ...current, childName: current.childName.trim(), section: current.section.trim(), studentId: current.studentId.trim() }));
     await sendGuardianSignupCode();
   };
 
@@ -196,7 +201,7 @@ export default function Login({ onLogin, authError = '' }) {
     if (!result.success) return reportSignupError(result.error);
     setIdentifier(guardianSignup.email.trim());
     setPassword('');
-    setGuardianSignup({ name: '', email: '', username: '', password: '', confirmPassword: '', studentId: '', relationship: 'Parent' });
+    setGuardianSignup({ name: '', email: '', username: '', password: '', confirmPassword: '', childName: '', gradeLevel: '', section: '', studentId: '', relationship: 'Parent' });
     setCode('');
     setGuardianSignupChallengeId('');
     setGuardianSignupStep(1);
@@ -339,10 +344,13 @@ export default function Login({ onLogin, authError = '' }) {
             )}
             {mode === 'guardian-signup' && guardianSignupStep === 3 && (
               <>
-                <Intro headingRef={guardianSignupHeadingRef} title="Student link" text="Enter one student ID provided by the school and your relationship to that student." />
-                <Field icon={KeyRound} label="Student ID" inputId="guardian-student-id"><input id="guardian-student-id" maxLength={80} value={guardianSignup.studentId} onChange={(event) => setGuardianSignup((current) => ({ ...current, studentId: event.target.value }))} required /></Field>
+                <Intro headingRef={guardianSignupHeadingRef} title="Student details" text="Tell us which child you are registering for. The school will check the details against its records." />
+                <Field icon={User} label="Student’s full name" inputId="guardian-child-name"><input id="guardian-child-name" maxLength={160} autoComplete="off" value={guardianSignup.childName} onChange={(event) => setGuardianSignup((current) => ({ ...current, childName: event.target.value }))} required /></Field>
+                <Field icon={KeyRound} label="Grade" inputId="guardian-grade-level"><select id="guardian-grade-level" value={guardianSignup.gradeLevel} onChange={(event) => setGuardianSignup((current) => ({ ...current, gradeLevel: event.target.value }))} required><option value="">Choose a grade</option>{STUDENT_GRADE_LEVELS.map((grade) => <option key={grade} value={grade}>{grade}</option>)}</select></Field>
+                <Field icon={UserCheck} label="Section (optional)" inputId="guardian-section"><input id="guardian-section" maxLength={80} value={guardianSignup.section} onChange={(event) => setGuardianSignup((current) => ({ ...current, section: event.target.value }))} /></Field>
+                <Field icon={KeyRound} label="Student ID (if known)" inputId="guardian-student-id"><input id="guardian-student-id" maxLength={80} value={guardianSignup.studentId} onChange={(event) => setGuardianSignup((current) => ({ ...current, studentId: event.target.value }))} /></Field>
                 <Field icon={UserCheck} label="Relationship to student" inputId="guardian-relationship"><select id="guardian-relationship" value={guardianSignup.relationship} onChange={(event) => setGuardianSignup((current) => ({ ...current, relationship: event.target.value }))} required><option>Parent</option><option>Mother</option><option>Father</option><option>Guardian</option><option>Grandparent</option><option>Other relative</option></select></Field>
-                <p className="field-hint">After email verification, an administrator checks the relationship against school records before approving your account. No account or student link is active before approval.</p>
+                <p className="field-hint">A student ID is optional. After email verification, an administrator checks the child’s details and your relationship against school records. No account or student link is active before approval.</p>
                 {guardianSignupResendSeconds > 0 && <p className="field-hint" role="status">Wait for the current verification-code cooldown before requesting a new code.</p>}
                 <div className="signup-step-actions">
                   <button type="button" className="back-to-signin" onClick={moveGuardianSignupBack} disabled={loading}><ArrowLeft size={16} /> Back</button>
@@ -426,7 +434,7 @@ function Intro({ title, text, headingRef }) {
 }
 
 function SignupProgress({ step }) {
-  const labels = ['Your details', 'Account security', 'Student link', 'Verify email'];
+  const labels = ['Your details', 'Account security', 'Student details', 'Verify email'];
   return (
     <div className="guardian-signup-progress-wrap">
       <p className="guardian-signup-step-count">Step {step} of 4</p>

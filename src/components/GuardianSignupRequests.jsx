@@ -1,16 +1,22 @@
 import { useEffect, useState } from 'react';
 import { RotateCcw } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
 import { api } from '../utils/api';
+import StudentPicker from './StudentPicker';
 
 const PAGE_SIZES = [10, 25, 50];
 
-export default function GuardianSignupRequests() {
+const normalizedStudentId = (value) => String(value || '').trim().toLocaleLowerCase();
+
+export default function GuardianSignupRequests({ students = [] }) {
+  const location = useLocation();
   const [filters, setFilters] = useState({ q: '', status: 'pending_review', order: 'newest', page: 1, limit: 25 });
   const [result, setResult] = useState({ requests: [], page: 1, pageCount: 1, total: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState('');
   const [attestations, setAttestations] = useState({});
+  const [studentSelections, setStudentSelections] = useState({});
   const [rejectingId, setRejectingId] = useState('');
   const [rejectionReason, setRejectionReason] = useState('');
   const [message, setMessage] = useState('');
@@ -55,9 +61,40 @@ export default function GuardianSignupRequests() {
     }
   };
 
+  const suggestedStudentFor = (request) => {
+    const submittedId = normalizedStudentId(request.studentId);
+    if (!submittedId) return null;
+    const matches = students.filter((student) => student.patientType === 'student' && normalizedStudentId(student.studentId) === submittedId);
+    return matches.length === 1 ? matches[0] : null;
+  };
+  const renderStudentSelection = (request) => {
+    const selectedId = studentSelections[request.id] || '';
+    const selectedStudent = students.find((student) => String(student.id) === String(selectedId) && student.patientType === 'student');
+    const suggestion = suggestedStudentFor(request);
+    return <>
+      {suggestion && <p className="field-hint">Possible ID match: <strong>{suggestion.name}</strong> · {suggestion.studentId} · {suggestion.gradeLevel || 'Grade not recorded'}{suggestion.section ? ` · ${suggestion.section}` : ''} <button type="button" className="table-action" onClick={() => { setStudentSelections((current) => ({ ...current, [request.id]: String(suggestion.id) })); setAttestations((current) => ({ ...current, [request.id]: false })); }} disabled={Boolean(busyId)}>Select this record</button></p>}
+      {!suggestion && <p className="field-hint">{request.studentId ? 'No unique ID match. Search the school roster by the child’s name and grade.' : 'No student ID was supplied. Search the school roster by the child’s name and grade.'}</p>}
+      <StudentPicker
+        students={students.filter((student) => student.patientType === 'student')}
+        value={selectedId}
+        onChange={(patientId) => { setStudentSelections((current) => ({ ...current, [request.id]: patientId })); setAttestations((current) => ({ ...current, [request.id]: false })); }}
+        label="Choose school student record"
+        itemLabel="student"
+        searchPlaceholder="Search by student name or ID"
+        description="The ID suggestion is not selected automatically. Choose a roster record after checking school records."
+        required
+        disabled={Boolean(busyId)}
+      />
+      {selectedStudent ? <div className="registration-selected-student"><strong>Chosen school record</strong><span>{selectedStudent.name} · {selectedStudent.studentId || 'Student ID unavailable'}</span><small>{selectedStudent.gradeLevel || 'Grade not recorded'}{selectedStudent.section ? ` · ${selectedStudent.section}` : ''}</small></div> : <p className="field-hint">Select a student record to enable approval.</p>}
+      <Link className="secondary-btn registration-add-student-link" to="/students/new" state={{ returnTo: `${location.pathname}${location.search}` }}>Add verified student record</Link>
+      <p className="field-hint">Staff must verify the official student ID, name, and grade before saving a roster record. Guardian claims never create student records.</p>
+    </>;
+  };
+
   const renderReviewActions = (request) => request.status === 'pending_review' ? <div className="registration-review-actions">
+    {renderStudentSelection(request)}
     <label className="check-label"><input type="checkbox" checked={Boolean(attestations[request.id])} onChange={(event) => setAttestations((current) => ({ ...current, [request.id]: event.target.checked }))} disabled={Boolean(busyId)} /> I verified this relationship against school records.</label>
-    <button type="button" className="primary-btn" onClick={() => finish(request.id, 'approve', { verifiedRelationship: true })} disabled={Boolean(busyId) || !attestations[request.id]}>{busyId === request.id ? 'Saving…' : 'Approve'}</button>
+    <button type="button" className="primary-btn" onClick={() => finish(request.id, 'approve', { verifiedRelationship: true, patientId: studentSelections[request.id] })} disabled={Boolean(busyId) || !attestations[request.id] || !students.some((student) => student.patientType === 'student' && String(student.id) === String(studentSelections[request.id]))}>{busyId === request.id ? 'Saving…' : 'Approve'}</button>
     {rejectingId === request.id ? <form onSubmit={(event) => { event.preventDefault(); finish(request.id, 'reject', { reason: rejectionReason }); }}>
       <label>Reason for rejection<textarea value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} minLength={1} maxLength={500} required disabled={Boolean(busyId)} /></label>
       <button type="submit" className="secondary-btn" disabled={Boolean(busyId) || !rejectionReason.trim()}>{busyId === request.id ? 'Saving…' : 'Confirm rejection'}</button>
@@ -83,11 +120,11 @@ export default function GuardianSignupRequests() {
       {!loading && !error && !result.requests.length && <p className="empty-state">No guardian registration requests match these filters.</p>}
       {!error && result.requests.length > 0 && <>
         <div className="admin-table-wrap registration-request-table"><table className="admin-table" aria-label="Guardian registration requests">
-          <thead><tr><th>Submitted</th><th>Applicant</th><th>Student link claim</th><th>Status</th><th>Review</th></tr></thead>
+          <thead><tr><th>Submitted</th><th>Applicant</th><th>Submitted child details</th><th>Status</th><th>Review</th></tr></thead>
         <tbody>{result.requests.map((request) => <tr key={request.id}>
           <td>{request.createdAt ? new Date(request.createdAt).toLocaleString() : 'Date unavailable'}</td>
           <td><strong>{request.name}</strong><small>{request.email} · @{request.username}</small></td>
-          <td><strong>{request.studentId}</strong><small>{request.relationship}</small></td>
+          <td><strong>{request.childName || 'Child name not recorded'}</strong><small>{request.gradeLevel || 'Grade not recorded'}{request.section ? ` · ${request.section}` : ''}</small><small>Student ID claim: {request.studentId || 'Not supplied'}</small><small>Relationship: {request.relationship}</small>{request.linkedStudent ? <div className="registration-selected-student"><strong>Linked school record</strong><span>{request.linkedStudent.name} · {request.linkedStudent.studentId || 'Student ID unavailable'}</span><small>{request.linkedStudent.gradeLevel || 'Grade not recorded'}{request.linkedStudent.section ? ` · ${request.linkedStudent.section}` : ''}</small></div> : request.linkedStudentStatus === 'not_recorded' && <small>Linked school record not recorded for this earlier approval.</small>}</td>
           <td><span className={`status-chip ${request.status === 'approved' ? 'success' : request.status === 'rejected' ? 'critical' : 'warn'}`}>{request.status === 'pending_review' ? 'Awaiting review' : request.status}</span><small>Decision email: {request.decisionEmailStatus}</small>{request.status === 'rejected' && request.decisionReason && <small>Reason: {request.decisionReason}</small>}</td>
           <td>{renderReviewActions(request)}</td>
         </tr>)}</tbody>
@@ -96,7 +133,8 @@ export default function GuardianSignupRequests() {
           {result.requests.map((request) => <article className="registration-request-card" role="listitem" aria-label={`${request.name} registration request`} key={request.id}>
             <div className="registration-request-field"><span>Submitted</span><strong>{request.createdAt ? new Date(request.createdAt).toLocaleString() : 'Date unavailable'}</strong></div>
             <div className="registration-request-field"><span>Applicant</span><div><strong>{request.name}</strong><small>{request.email} · @{request.username}</small></div></div>
-            <div className="registration-request-field"><span>Student link</span><div><strong>{request.studentId}</strong><small>{request.relationship}</small></div></div>
+            <div className="registration-request-field"><span>Submitted child</span><div><strong>{request.childName || 'Child name not recorded'}</strong><small>{request.gradeLevel || 'Grade not recorded'}{request.section ? ` · ${request.section}` : ''}</small><small>Student ID claim: {request.studentId || 'Not supplied'}</small><small>Relationship: {request.relationship}</small></div></div>
+            {request.linkedStudent ? <div className="registration-request-field"><span>Linked record</span><div><strong>{request.linkedStudent.name}</strong><small>{request.linkedStudent.studentId || 'Student ID unavailable'} · {request.linkedStudent.gradeLevel || 'Grade not recorded'}{request.linkedStudent.section ? ` · ${request.linkedStudent.section}` : ''}</small></div></div> : request.linkedStudentStatus === 'not_recorded' && <div className="registration-request-field"><span>Linked record</span><small>Not recorded for this earlier approval.</small></div>}
             <div className="registration-request-field"><span>Status</span><div><span className={`status-chip ${request.status === 'approved' ? 'success' : request.status === 'rejected' ? 'critical' : 'warn'}`}>{request.status === 'pending_review' ? 'Awaiting review' : request.status}</span><small>Decision email: {request.decisionEmailStatus}</small>{request.status === 'rejected' && request.decisionReason && <small>Reason: {request.decisionReason}</small>}</div></div>
             <div className="registration-request-review"><strong>Review</strong>{renderReviewActions(request)}</div>
           </article>)}

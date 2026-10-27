@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { query, transaction } from './db.js';
 import { normalizeRosterIdentifier, patientRosterIdentitySql, rosterIdTrimCharacters } from './domain/roster.js';
 import { publicVisitRecord } from './domain/visitRequests.js';
+import { isStudentGradeLevel } from '../shared/grades.js';
 
 const collectionMap = {
   visits: { table: 'visits', patient: true },
@@ -27,8 +28,6 @@ const administratorPatientFields = [
   'patientType', 'studentId', 'facultyId', 'name', 'gradeLevel', 'section', 'adviser', 'department', 'position', 'email', 'contactNumber', 'birthDate', 'gender', 'guardianName', 'guardianPhone', 'guardianRelation',
 ];
 const studentRosterFields = ['studentId', 'name', 'gradeLevel', 'section', 'adviser'];
-const validStudentGrades = new Set(['Kindergarten', ...Array.from({ length: 10 }, (_, index) => `Grade ${index + 1}`)]);
-
 function rosterError(status, code, message) {
   const error = new Error(message);
   error.status = status;
@@ -61,7 +60,7 @@ function validateChangedStudentRoster(record) {
   if (!values.studentId) throw rosterError(400, 'VALIDATION_ERROR', 'Student ID is required.');
   if (!values.name) throw rosterError(400, 'VALIDATION_ERROR', 'Student name is required.');
   if (!values.gradeLevel) throw rosterError(400, 'VALIDATION_ERROR', 'Grade level is required.');
-  if (!validStudentGrades.has(values.gradeLevel)) {
+  if (!isStudentGradeLevel(values.gradeLevel)) {
     throw rosterError(400, 'VALIDATION_ERROR', 'Grade level must be Kindergarten or Grade 1 through Grade 10.');
   }
   Object.assign(record, values);

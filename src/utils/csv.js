@@ -1,3 +1,5 @@
+import { isStudentGradeLevel } from '../../shared/grades.js';
+
 const spreadsheetFormulaPrefix = /^[=+\-@\t\r]/;
 
 export function parseCsv(text) {
@@ -56,7 +58,7 @@ export function validateStudentImport(rows, existingStudents = []) {
     const gradeLevel = String(cells[gradeIndex] || '').trim();
     const key = studentId.toLowerCase();
     if (!studentId || !name) errors.push(`Row ${index + 2}: Student ID and Name are required.`);
-    else if (!['Kindergarten', ...Array.from({ length: 10 }, (_, grade) => `Grade ${grade + 1}`)].includes(gradeLevel)) errors.push(`Row ${index + 2}: Grade must be Kindergarten or Grade 1 through Grade 10.`);
+    else if (!isStudentGradeLevel(gradeLevel)) errors.push(`Row ${index + 2}: Grade must be Kindergarten or Grade 1 through Grade 10.`);
     else if (seen.has(key) || existing.has(key)) errors.push(`Row ${index + 2}: duplicate Student ID ${studentId}.`);
     else {
       seen.add(key);

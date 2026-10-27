@@ -9,9 +9,11 @@ test('guardian signup request pagination validates bounded filters and sizes', (
   }
 });
 
-test('guardian signup admin projection never returns a password hash or raw metadata', () => {
-  const request = publicGuardianSignupRequest({ id: 'request-id', name: 'Parent', email: 'p@example.test', username: 'parent', student_id: 'S 1', relationship: 'Parent', status: 'pending_review', password_hash: 'secret', metadata: { password: 'raw' } });
+test('guardian signup admin projection exposes child hints and selected roster identity without secrets', () => {
+  const request = publicGuardianSignupRequest({ id: 'request-id', name: 'Parent', email: 'p@example.test', username: 'parent', student_id: 'S 1', child_name: 'Child', grade_level: 'Grade 4', section: 'Rizal', relationship: 'Parent', status: 'approved', approved_patient_id: 'patient-1', linked_student_name: 'Roster Child', linked_student_id: 'S 2', linked_grade_level: 'Grade 5', linked_section: 'Mabini', password_hash: 'secret', metadata: { password: 'raw' } });
   assert.equal(request.studentId, 'S 1');
+  assert.deepEqual(request.linkedStudent, { id: 'patient-1', name: 'Roster Child', studentId: 'S 2', gradeLevel: 'Grade 5', section: 'Mabini' });
+  assert.equal(request.childName, 'Child');
   assert.equal('passwordHash' in request, false);
   assert.equal('password_hash' in request, false);
   assert.equal(JSON.stringify(request).includes('secret'), false);

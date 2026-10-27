@@ -63,7 +63,7 @@ import { clinicArrivalNotice, clinicVisitCareSummary, notificationDeliveryCounts
 import { listInAppNotifications, markInAppNotificationRead } from './domain/notifications.js';
 import { createOrReplayVisitRequest, findVisitRequest, publicVisitRecord, validVisitRequestId, visitRequestFingerprint } from './domain/visitRequests.js';
 import { activateInvitedAccount, changeAccountStatus, renewPendingInvitation } from './domain/account-access.js';
-import { guardianSignupAcceptedResponse, resolveGuardianStudentMatch, validateGuardianSignup, validGuardianSignupMetadata } from './domain/guardianSignup.js';
+import { guardianSignupAcceptedResponse, validateGuardianSignup, validGuardianSignupMetadata } from './domain/guardianSignup.js';
 import { buildAuditPageQuery, formatAuditPage, validateAuditPageQuery } from './domain/auditPagination.js';
 import { normalizeDashboardPreferences, validateDashboardPreferences } from './domain/dashboardPreferences.js';
 import { patientSummaryForRange, validateSummaryRange } from './domain/patientSummary.js';
@@ -286,6 +286,7 @@ export function createApp({
   queryFn = query,
   transactionFn = transaction,
   clinicDataTransactionFn = clinicDataTransaction,
+  consumeOtpFn = consumeOtp,
 } = {}) {
   const app = express();
   const storage = storageAdapter;
@@ -609,6 +610,9 @@ export function createApp({
       name: signup.name,
       username: signup.username,
       passwordHash,
+      childName: signup.childName,
+      gradeLevel: signup.gradeLevel,
+      section: signup.section,
       studentId: signup.studentId,
       relationship: signup.relationship,
     };
@@ -641,7 +645,7 @@ export function createApp({
     }
     let signupRequest;
     try {
-      signupRequest = await consumeOtp(challengeId, code, 'guardian_signup', {
+      signupRequest = await consumeOtpFn(challengeId, code, 'guardian_signup', {
         onConsume: async (challenge, client) => {
           const metadata = challenge.metadata || {};
           if (!validGuardianSignupMetadata(metadata) || !validEmail(challenge.destination)) {
@@ -668,24 +672,11 @@ export function createApp({
             [normalizeIdentifier(challenge.destination), normalizeIdentifier(metadata.username)],
           );
           if (accountConflict.rowCount || invitationConflict.rowCount || pendingConflict.rowCount) return null;
-          const matches = await client.query(
-            `SELECT id,patient_type,data->>'studentId' AS student_id FROM patients
-             WHERE patient_type='student' AND LOWER(${patientRosterIdentitySql(2)})=$1
-             ORDER BY id FOR UPDATE`,
-            [normalizeIdentifier(metadata.studentId), rosterIdTrimCharacters],
-          );
-          const studentMatch = resolveGuardianStudentMatch(matches.rows, metadata.studentId);
-          if (!studentMatch.valid) {
-            const error = new Error('The student ID could not be matched to exactly one student record. Check the ID with the school clinic and try again.');
-            error.status = 400;
-            error.code = 'STUDENT_ID_NOT_VERIFIED';
-            throw error;
-          }
           const id = crypto.randomUUID();
           await client.query(
-            `INSERT INTO guardian_signup_requests(id,name,email,username,password_hash,student_id,relationship)
-             VALUES($1,$2,$3,$4,$5,$6,$7)`,
-            [id, metadata.name, normalizeIdentifier(challenge.destination), normalizeIdentifier(metadata.username), metadata.passwordHash, metadata.studentId.trim(), metadata.relationship],
+            `INSERT INTO guardian_signup_requests(id,name,email,username,password_hash,student_id,relationship,child_name,grade_level,section)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+            [id, metadata.name, normalizeIdentifier(challenge.destination), normalizeIdentifier(metadata.username), metadata.passwordHash, metadata.studentId.trim(), metadata.relationship, metadata.childName || '', metadata.gradeLevel || '', metadata.section || ''],
           );
           await client.query('UPDATE otp_challenges SET metadata=\'{}\'::jsonb WHERE id=$1', [challenge.id]);
           await audit(req, 'GUARDIAN_SIGNUP_EMAIL_VERIFIED', {}, 'guardian_signup_request', id, client);
@@ -905,20 +896,25 @@ export function createApp({
     const { status, order, limit, page, search } = validation.value;
     const where = [];
     const values = [];
-    if (status !== 'all') { values.push(status); where.push(`status=$${values.length}`); }
+    if (status !== 'all') { values.push(status); where.push(`r.status=$${values.length}`); }
     if (search) {
       values.push(`%${search}%`);
-      where.push(`(name ILIKE $${values.length} OR email ILIKE $${values.length} OR username ILIKE $${values.length} OR student_id ILIKE $${values.length})`);
+      where.push(`(r.name ILIKE $${values.length} OR r.email ILIKE $${values.length} OR r.username ILIKE $${values.length} OR r.student_id ILIKE $${values.length} OR r.child_name ILIKE $${values.length} OR r.grade_level ILIKE $${values.length} OR r.section ILIKE $${values.length})`);
     }
     const filterSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const count = await query(`SELECT COUNT(*)::int AS total FROM guardian_signup_requests ${filterSql}`, values);
+    const count = await query(`SELECT COUNT(*)::int AS total FROM guardian_signup_requests r ${filterSql}`, values);
     const total = count.rows[0]?.total || 0;
     const direction = order === 'oldest' ? 'ASC' : 'DESC';
     const resultValues = [...values, limit, (page - 1) * limit];
     const requests = await query(
-      `SELECT id,name,email,username,student_id,relationship,status,decision_reason,decision_email_status,created_at,decided_at
-       FROM guardian_signup_requests ${filterSql}
-       ORDER BY created_at ${direction},id ${direction} LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      `SELECT r.id,r.name,r.email,r.username,r.student_id,r.relationship,r.child_name,r.grade_level,r.section,
+              r.status,r.decision_reason,r.decision_email_status,r.created_at,r.decided_at,r.approved_patient_id,
+              p.data->>'name' AS linked_student_name,p.data->>'studentId' AS linked_student_id,
+              p.data->>'gradeLevel' AS linked_grade_level,p.data->>'section' AS linked_section
+       FROM guardian_signup_requests r
+       LEFT JOIN patients p ON p.id=r.approved_patient_id AND p.patient_type='student'
+       ${filterSql}
+       ORDER BY r.created_at ${direction},r.id ${direction} LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       resultValues,
     );
     return res.json({ data: {
@@ -930,6 +926,8 @@ export function createApp({
   app.patch('/api/admin/guardian-signup-requests/:id/approve', requireRoles('system_administrator'), async (req, res) => {
     if (!validUuid(req.params.id)) return errorResponse(res, 400, 'INVALID_REQUEST_ID', 'A valid signup request id is required.');
     if (req.body?.verifiedRelationship !== true) return errorResponse(res, 400, 'RELATIONSHIP_VERIFICATION_REQUIRED', 'Confirm that you verified the relationship against school records.');
+    const patientId = typeof req.body?.patientId === 'string' ? req.body.patientId.trim() : '';
+    if (!patientId || patientId.length > 120 || /[\u0000-\u001f\u007f]/.test(patientId)) return errorResponse(res, 400, 'PATIENT_SELECTION_REQUIRED', 'Choose a current student roster record before approving this request.');
     let request;
     try {
       request = await transaction(async (client) => {
@@ -941,7 +939,6 @@ export function createApp({
           throw error;
         }
         const row = selected.rows[0];
-        if (row.status === 'approved') return { id: row.id, status: row.status, email: row.email, name: row.name };
         if (row.status !== 'pending_review' || !row.password_hash) {
           const error = new Error('This signup request is no longer awaiting review.');
           error.status = 409;
@@ -951,7 +948,7 @@ export function createApp({
         const locks = [
           `guardian-signup:email:${normalizeIdentifier(row.email)}`,
           `guardian-signup:username:${normalizeIdentifier(row.username)}`,
-          `guardian-signup:student:${normalizeIdentifier(row.student_id)}`,
+          `guardian-signup:student:${patientId}`,
         ].sort();
         for (const key of locks) await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [key]);
         const accounts = await client.query('SELECT id FROM users WHERE LOWER(email)=$1 OR LOWER(username)=$2 FOR UPDATE', [normalizeIdentifier(row.email), normalizeIdentifier(row.username)]);
@@ -962,33 +959,33 @@ export function createApp({
           error.code = 'ACCOUNT_CONFLICT';
           throw error;
         }
-        const students = await client.query(
-          `SELECT id,patient_type,data->>'studentId' AS student_id FROM patients
-           WHERE patient_type='student' AND LOWER(${patientRosterIdentitySql(2)})=$1 ORDER BY id FOR UPDATE`,
-          [normalizeIdentifier(row.student_id), rosterIdTrimCharacters],
+        const selectedStudent = await client.query(
+          `SELECT id,data->>'name' AS name,data->>'studentId' AS student_id,data->>'gradeLevel' AS grade_level,data->>'section' AS section
+           FROM patients WHERE id=$1 AND patient_type='student' FOR UPDATE`,
+          [patientId],
         );
-        const match = resolveGuardianStudentMatch(students.rows, row.student_id);
-        if (!match.valid) {
-          const error = new Error('The submitted student ID no longer matches exactly one student record. Reject this request with a reason so the applicant can correct it.');
+        if (!selectedStudent.rowCount) {
+          const error = new Error('The selected roster record is no longer an available student. Refresh the student list and choose a current record.');
           error.status = 409;
-          error.code = 'STUDENT_MATCH_REQUIRED';
+          error.code = 'STUDENT_SELECTION_INVALID';
           throw error;
         }
+        const linkedStudent = selectedStudent.rows[0];
         const userId = crypto.randomUUID();
         await client.query(
           `INSERT INTO users(id,username,email,password_hash,name,role,status,mfa_enabled)
            VALUES($1,$2,$3,$4,$5,'guardian','active',TRUE)`,
           [userId, normalizeIdentifier(row.username), normalizeIdentifier(row.email), row.password_hash, row.name],
         );
-        await client.query('INSERT INTO guardian_patient_links(guardian_user_id,patient_id,relationship) VALUES($1,$2,$3)', [userId, match.patient.id, row.relationship]);
+        await client.query('INSERT INTO guardian_patient_links(guardian_user_id,patient_id,relationship) VALUES($1,$2,$3)', [userId, linkedStudent.id, row.relationship]);
         await client.query(
           `UPDATE guardian_signup_requests
-           SET status='approved',password_hash=NULL,relationship_verified=TRUE,decision_by=$2,decided_at=NOW(),decision_reason='',decision_email_status='queued',decision_email_attempted_at=NULL,decision_email_error_code=NULL,updated_at=NOW()
+           SET status='approved',password_hash=NULL,relationship_verified=TRUE,approved_patient_id=$2,decision_by=$3,decided_at=NOW(),decision_reason='',decision_email_status='queued',decision_email_attempted_at=NULL,decision_email_error_code=NULL,updated_at=NOW()
            WHERE id=$1`,
-          [row.id, req.user.id],
+          [row.id, linkedStudent.id, req.user.id],
         );
-        await audit(req, 'GUARDIAN_SIGNUP_APPROVED', {}, 'guardian_signup_request', row.id, client);
-        return { id: row.id, status: 'approved', email: row.email, name: row.name, createdUserId: userId };
+        await audit(req, 'GUARDIAN_SIGNUP_APPROVED', { patientId: linkedStudent.id }, 'guardian_signup_request', row.id, client);
+        return { id: row.id, status: 'approved', email: row.email, name: row.name, createdUserId: userId, linkedStudent: { id: linkedStudent.id, name: linkedStudent.name || '', studentId: linkedStudent.student_id || '', gradeLevel: linkedStudent.grade_level || '', section: linkedStudent.section || '' } };
       });
     } catch (error) {
       if (error.code === '23505') return errorResponse(res, 409, 'ACCOUNT_CONFLICT', 'An account now uses this email or username. Resolve that account before approving this request.');
@@ -996,7 +993,7 @@ export function createApp({
       throw error;
     }
     const decisionEmailStatus = await sendGuardianSignupDecisionEmail(request.id, req.user.id);
-    return res.json({ data: { request: { id: request.id, status: request.status, decisionEmailStatus } } });
+    return res.json({ data: { request: { id: request.id, status: request.status, linkedStudent: request.linkedStudent, decisionEmailStatus } } });
   });
 
   app.patch('/api/admin/guardian-signup-requests/:id/reject', requireRoles('system_administrator'), async (req, res) => {

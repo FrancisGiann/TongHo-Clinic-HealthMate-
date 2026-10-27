@@ -1,3 +1,5 @@
+import { isStudentGradeLevel } from '../../shared/grades.js';
+
 const stringValue = (value) => String(value ?? '').trim();
 
 export function canRollbackImport(role, type) {
@@ -51,7 +53,7 @@ function normalizeRosterRow(type, row) {
   if (!identifier) errors.push(`${type === 'faculty' ? 'Faculty ID' : 'Student ID'} is required.`);
   if (!name) errors.push('Name is required.');
   if (type === 'students' && !record.gradeLevel) errors.push('Grade level is required.');
-  if (type === 'students' && record.gradeLevel && !['Kindergarten', ...Array.from({ length: 10 }, (_, index) => `Grade ${index + 1}`)].includes(record.gradeLevel)) errors.push('Grade level must be Kindergarten or Grade 1 through Grade 10.');
+  if (type === 'students' && record.gradeLevel && !isStudentGradeLevel(record.gradeLevel)) errors.push('Grade level must be Kindergarten or Grade 1 through Grade 10.');
   if (record.birthDate && !validDate(record.birthDate)) errors.push('Birth date must be a real date in YYYY-MM-DD format.');
   if (record.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(record.email)) errors.push('Email must be a valid email address.');
   if (type === 'faculty') record.studentId = record.facultyId;
