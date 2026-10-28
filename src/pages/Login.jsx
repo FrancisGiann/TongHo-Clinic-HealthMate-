@@ -108,7 +108,7 @@ export default function Login({ onLogin, authError = '' }) {
 
   const startGuardianSignup = () => {
     clearMessages();
-    setGuardianSignup({ name: '', email: '', username: '', password: '', confirmPassword: '', studentId: '', relationship: 'Parent' });
+    setGuardianSignup({ name: '', email: '', username: '', password: '', confirmPassword: '', childName: '', gradeLevel: '', section: '', studentId: '', relationship: 'Parent' });
     setGuardianSignupChallengeId('');
     setCode('');
     setGuardianSignupStep(1);
@@ -117,7 +117,7 @@ export default function Login({ onLogin, authError = '' }) {
 
   const exitGuardianSignup = () => {
     clearMessages();
-    setGuardianSignup({ name: '', email: '', username: '', password: '', confirmPassword: '', studentId: '', relationship: 'Parent' });
+    setGuardianSignup({ name: '', email: '', username: '', password: '', confirmPassword: '', childName: '', gradeLevel: '', section: '', studentId: '', relationship: 'Parent' });
     setGuardianSignupChallengeId('');
     setCode('');
     setGuardianSignupStep(1);
