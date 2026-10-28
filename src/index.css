@@ -6848,6 +6848,10 @@ fieldset.form-section { min-width: 0; border: 0; }
   background: var(--hm-blue);
   color: #fff;
 }
+.hm-login-layout.is-guardian-signup .hm-login-welcome {
+  align-self: start;
+  min-height: 626px;
+}
 .hm-login-welcome-seal {
   width: 106px;
   height: 106px;
