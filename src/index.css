@@ -6852,6 +6852,12 @@ fieldset.form-section { min-width: 0; border: 0; }
   align-self: start;
   min-height: 626px;
 }
+@media (min-width: 761px) and (min-height: 690px) {
+  .hm-login-layout.is-guardian-signup .hm-login-welcome {
+    position: sticky;
+    top: max(24px, calc((100vh - 626px) / 2));
+  }
+}
 .hm-login-welcome-seal {
   width: 106px;
   height: 106px;
@@ -6904,6 +6910,7 @@ fieldset.form-section { min-width: 0; border: 0; }
 .hm-login-card .password-pair-toggle,
 .hm-login-card .text-link-button { color: var(--hm-blue); }
 .hm-login-card .login-field input { border-color: #b8bfc8; background: #fff; color: var(--hm-ink); }
+.guardian-signup-form .login-field select { width: 100%; min-height: 52px; border-color: #b8bfc8; color: var(--hm-ink); }
 .hm-login-card .login-field input::placeholder { color: #625f6e; opacity: 1; }
 .hm-login-card .login-field input:focus { border-color: var(--hm-blue); box-shadow: none; }
 .hm-login-card .login-btn { background: var(--hm-blue); box-shadow: 0 7px 17px rgba(26, 60, 104, 0.17); }
