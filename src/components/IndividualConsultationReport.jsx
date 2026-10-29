@@ -1,8 +1,9 @@
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import StudentPicker from './StudentPicker';
 import { consultationSelection, changeConsultationStudent } from '../utils/consultationReport.js';
 
 export default function IndividualConsultationReport({ data, user }) {
+  const location = useLocation();
   const [search, setSearch] = useSearchParams();
   if (user?.role !== 'school_nurse') return null;
   const { students, student, visits, selected } = consultationSelection(data, user, search);
@@ -20,6 +21,6 @@ export default function IndividualConsultationReport({ data, user }) {
       <StudentPicker students={students} value={student?.id || ''} onChange={changeStudent} label="Student" searchPlaceholder="Search student by name or ID" description="Only student clinic records are available here." />
       <label>Consultation<select value={selected ? visitId : ''} onChange={(event) => changeVisit(event.target.value)} disabled={!student || !visits.length}><option value="">Choose a consultation</option>{visits.map((visit) => <option key={visit.id} value={visit.id}>{visit.date || 'Date unavailable'}{visit.time ? ` · ${visit.time}` : ''} — {visit.chiefComplaint || visit.type || 'Clinic visit'}</option>)}</select></label>
     </div>
-    {!student ? <p className="empty-state">Choose a student to see their consultations.</p> : !visits.length ? <p className="empty-state">No consultations recorded for this student.</p> : !selected ? <p className="field-hint">Choose one consultation. Visits from other students cannot be opened here.</p> : <><p className="field-hint">Only this visit is included. Private notes and unrelated medical history are excluded.</p><Link className="primary-btn" to={`/students/${encodeURIComponent(studentId)}/visits/${encodeURIComponent(visitId)}/print?from=reports`}>View / print consultation summary</Link></>}
+    {!student ? <p className="empty-state">Choose a student to see their consultations.</p> : !visits.length ? <p className="empty-state">No consultations recorded for this student.</p> : !selected ? <p className="field-hint">Choose one consultation. Visits from other students cannot be opened here.</p> : <><p className="field-hint">Only this visit is included. Private notes and unrelated medical history are excluded.</p><Link className="primary-btn" to={`/students/${encodeURIComponent(studentId)}/visits/${encodeURIComponent(visitId)}/print?from=reports`} state={{ backgroundLocation: location }}>View / print consultation summary</Link></>}
   </section>;
 }

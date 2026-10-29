@@ -53,6 +53,7 @@ const adminNavGroups = [
   ] },
   { label: "Administration", items: [
     { to: "/users", label: "Users", icon: Users },
+    { to: "/guardian-requests", label: "Registration requests", icon: ClipboardList },
     { to: "/cms", label: "Content management", icon: Images },
     { to: "/data-imports", label: "Data & Imports", icon: Database },
     { to: "/communications", label: "Communications", icon: Bell },

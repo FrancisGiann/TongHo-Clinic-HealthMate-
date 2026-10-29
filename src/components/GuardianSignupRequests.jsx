@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { readListState } from '../utils/listState';
 import { RotateCcw } from 'lucide-react';
 import ModalDialog from './ModalDialog';
 import VerifiedStudentForm from './VerifiedStudentForm';
@@ -8,7 +10,7 @@ import StudentPicker from './StudentPicker';
 
 const normalizedStudentId = (value) => String(value || '').trim().toLocaleLowerCase();
 
-export default function GuardianSignupRequests({ students = [] }) {
+export default function GuardianSignupRequests({ students = [], standalone = false }) {
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [addingStudent, setAddingStudent] = useState(false);
   const [studentSaving, setStudentSaving] = useState(false);
@@ -17,7 +19,25 @@ export default function GuardianSignupRequests({ students = [] }) {
   students = [...students.filter((student) => !savedStudents.some((saved) => saved.id === student.id)), ...savedStudents];
   const closeReview = () => { setSelectedRequest(null); setAddingStudent(false); setRejectingId(''); setRejectionReason(''); setError(''); };
   const openReview = (request) => { setAttestations((current) => ({ ...current, [request.id]: false })); setSelectedRequest(request); setAddingStudent(false); setMessage(''); setError(''); };
-  const [filters, setFilters] = useState({ q: '', status: 'pending_review', order: 'newest', page: 1, limit: 25 });
+  const [searchParams, setSearchParams] = useSearchParams();
+  const listState = readListState(searchParams);
+  const filters = {
+    q: listState.q.slice(0, 100),
+    status: ['pending_review', 'approved', 'rejected', 'all'].includes(searchParams.get('status')) ? searchParams.get('status') : 'pending_review',
+    order: searchParams.get('order') === 'oldest' ? 'oldest' : 'newest',
+    page: listState.page,
+    limit: listState.pageSize,
+  };
+  const setFilters = (update, options = {}) => {
+    const next = typeof update === 'function' ? update(filters) : update;
+    const params = new URLSearchParams(searchParams);
+    for (const [key, value] of Object.entries(next)) {
+      const param = key === 'limit' ? 'pageSize' : key;
+      if (value === '' || (key === 'page' && value === 1)) params.delete(param);
+      else params.set(param, String(value));
+    }
+    setSearchParams(params, options);
+  };
   const [result, setResult] = useState({ requests: [], page: 1, pageCount: 1, total: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -43,7 +63,7 @@ export default function GuardianSignupRequests({ students = [] }) {
     return () => { active = false; };
   }, [filters.status, filters.order, filters.page, filters.limit, filters.q, retry]);
 
-  const updateFilter = (updates) => setFilters((current) => ({ ...current, ...updates, page: 1 }));
+  const updateFilter = (updates) => setFilters((current) => ({ ...current, ...updates, page: 1 }), { replace: Object.hasOwn(updates, 'q') });
   const finish = async (requestId, action, body = {}) => {
     if (actionLock.current) return;
     actionLock.current = true;
@@ -62,7 +82,7 @@ export default function GuardianSignupRequests({ students = [] }) {
       setAttestations((current) => ({ ...current, [requestId]: false }));
       setRejectingId('');
       setRejectionReason('');
-      setFilters((current) => ({ ...current, page: 1 }));
+      setFilters((current) => ({ ...current, page: 1 }), { replace: true });
       setRetry((count) => count + 1);
     } catch (requestError) {
       setError(requestError.message || 'The request could not be updated. Try again.');
@@ -105,18 +125,20 @@ export default function GuardianSignupRequests({ students = [] }) {
   const renderReviewActions = (request) => request.status === 'pending_review' ? <div className="registration-review-actions">
     {renderStudentSelection(request)}
     <label className="check-label"><input type="checkbox" checked={Boolean(attestations[request.id])} onChange={(event) => setAttestations((current) => ({ ...current, [request.id]: event.target.checked }))} disabled={Boolean(busyId)} /> I verified this relationship against school records.</label>
-    <button type="button" className="primary-btn" onClick={() => finish(request.id, 'approve', { verifiedRelationship: true, patientId: studentSelections[request.id] })} disabled={Boolean(busyId) || !attestations[request.id] || !students.some((student) => student.patientType === 'student' && String(student.id) === String(studentSelections[request.id]))}>{busyId === request.id ? 'Saving…' : 'Approve'}</button>
     {rejectingId === request.id ? <form onSubmit={(event) => { event.preventDefault(); finish(request.id, 'reject', { reason: rejectionReason }); }}>
       <label>Reason for rejection<textarea value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} minLength={1} maxLength={500} required disabled={Boolean(busyId)} /></label>
-      <button type="submit" className="secondary-btn" disabled={Boolean(busyId) || !rejectionReason.trim()}>{busyId === request.id ? 'Saving…' : 'Confirm rejection'}</button>
-      <button type="button" className="table-action" onClick={() => { setRejectingId(''); setRejectionReason(''); }} disabled={Boolean(busyId)}>Keep pending</button>
-    </form> : <button type="button" className="table-action" onClick={() => setRejectingId(request.id)} disabled={Boolean(busyId)}>Reject</button>}
+      <div className="form-actions"><button type="button" className="secondary-btn" onClick={() => { setRejectingId(''); setRejectionReason(''); }} disabled={Boolean(busyId)}>Keep pending</button><button type="submit" className="primary-btn" disabled={Boolean(busyId) || !rejectionReason.trim()}>{busyId === request.id ? 'Saving…' : 'Confirm rejection'}</button></div>
+    </form> : <div className="form-actions">
+      <button type="button" className="secondary-btn" onClick={closeReview} disabled={Boolean(busyId)}>Close review</button>
+      <button type="button" className="secondary-btn" onClick={() => setRejectingId(request.id)} disabled={Boolean(busyId)}>Reject</button>
+      <button type="button" className="primary-btn" onClick={() => finish(request.id, 'approve', { verifiedRelationship: true, patientId: studentSelections[request.id] })} disabled={Boolean(busyId) || !attestations[request.id] || !students.some((student) => student.patientType === 'student' && String(student.id) === String(studentSelections[request.id]))}>{busyId === request.id ? 'Saving…' : 'Approve'}</button>
+    </div>}
   </div> : request.decisionEmailStatus === 'failed' ? <button type="button" className="table-action" onClick={() => finish(request.id, 'retry-notification')} disabled={Boolean(busyId)}>{busyId === request.id ? 'Retrying…' : 'Retry decision email'}</button> : <span>—</span>;
 
   return (
-    <section className="settings-subsection registration-review" aria-labelledby="guardian-signup-review-title">
+    <section className={standalone ? "registration-review guardian-requests-page-list" : "settings-subsection registration-review"} aria-labelledby="guardian-signup-review-title">
       <div className="settings-panel-heading">
-        <div><h4 id="guardian-signup-review-title">Guardian registration requests</h4><p>Review the submitted relationship against school records before approving an account.</p></div>
+        <div><h3 id="guardian-signup-review-title">{standalone ? "Registration queue" : "Guardian registration requests"}</h3><p>Review the submitted relationship against school records before approving an account.</p></div>
         <button type="button" className="secondary-btn" onClick={() => setRetry((count) => count + 1)} disabled={loading}><RotateCcw size={15} /> {loading ? 'Refreshing…' : 'Refresh'}</button>
       </div>
       <div className="registration-review-filters">
@@ -162,7 +184,7 @@ export default function GuardianSignupRequests({ students = [] }) {
           {error && <div className="error-banner" role="alert">{error}</div>}
           {message && <p className="success-message" role="status">{message}</p>}
           {renderReviewActions(selectedRequest)}
-          <div className="form-actions"><button type="button" className="secondary-btn" onClick={closeReview} disabled={Boolean(busyId)}>Close review</button></div>
+          {selectedRequest.status !== 'pending_review' && <div className="form-actions"><button type="button" className="secondary-btn" onClick={closeReview} disabled={Boolean(busyId)}>Close review</button></div>}
         </>}
       </ModalDialog>}
 

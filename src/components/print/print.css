@@ -43,3 +43,11 @@
 .summary-sheet td { padding: 0; border: 0; background: #fff; color: #111; white-space: normal; }
 .summary-sheet thead { display: table-header-group; }
 .summary-sheet tr { break-inside: auto; }
+
+/* The visible preview belongs beside its controls. The body portal remains for printing and exact page-fit measurement. */
+@media screen {
+  body > .document-print-root.print-document-mirror { position: fixed; top: 0; left: -200vw; visibility: hidden; pointer-events: none; margin: 0; }
+  .print-preview-viewport { width: 100%; overflow-x: auto; padding: 2px; margin-top: 16px; }
+  .print-preview-viewport > .document-print-root { margin: 0 auto; }
+}
+@media print { .print-preview-viewport { display: none !important; } }

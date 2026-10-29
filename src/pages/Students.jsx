@@ -1,18 +1,35 @@
-import { useEffect } from "react";
+import ModalDialog from '../components/ModalDialog';
+import StudentRegistration from './StudentRegistration';
+import FacultyRegistration from './FacultyRegistration';
+import { useEffect, useState } from "react";
 import {
   Download,
   Plus,
   Search,
   ShieldAlert,
 } from "lucide-react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { downloadCsv } from "../utils/csv";
 import { compareValues, manilaDateTimeKey, readListState, sortAndPaginate, updateListParams } from "../utils/listState.js";
 import ListPagination from "../components/ListPagination.jsx";
 
-export default function Students({ data, setData }) {
+export default function Students({ data, setData, commitData, reload, registrationType: routeRegistrationType }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [registrationBusy, setRegistrationBusy] = useState(false);
+  const [registrationMessage, setRegistrationMessage] = useState('');
+  const openRegistration = (kind) => {
+    setRegistrationMessage('');
+    const params = new URLSearchParams(location.search); params.set('register', kind);
+    navigate({ pathname: '/students', search: `?${params}` }, { state: { registrationOrigin: `${location.pathname}${location.search}` } });
+  };
+  const closeRegistration = () => {
+    if (location.state?.registrationOrigin && /^\/students(?:\?.*)?$/.test(location.state.registrationOrigin)) navigate(-1);
+    else { const params = new URLSearchParams(location.search); params.delete('register'); navigate({ pathname: '/students', search: params.toString() ? `?${params}` : '' }, { replace: true }); }
+  };
+  const registrationSaved = () => { setRegistrationMessage(`${registrationType === 'faculty' ? 'Faculty' : 'Student'} record saved.`); closeRegistration(); };
   const [searchParams, setSearchParams] = useSearchParams();
+  const registrationType = routeRegistrationType || (['student', 'faculty'].includes(searchParams.get('register')) ? searchParams.get('register') : null);
   const list = readListState(searchParams, { sort: 'name', order: 'asc', pageSize: 25 });
   const patientType = ['student', 'faculty'].includes(searchParams.get('filter')) ? searchParams.get('filter') : 'all';
   const grade = searchParams.get('grade') || '';
@@ -98,8 +115,9 @@ export default function Students({ data, setData }) {
           </h2>
           <p>Student and faculty clinic records in one place.</p>
         </div>
-        <div className="intro-actions"><button type="button" className="secondary-btn" onClick={exportStudents}><Download size={16} /> Export CSV</button><button type="button" className="secondary-btn" onClick={() => navigate('/faculty/new')}><Plus size={17} /> Register faculty</button><button type="button" className="primary-btn" onClick={() => navigate('/students/new')}><Plus size={17} /> Register student</button></div>
+        <div className="intro-actions"><button type="button" className="secondary-btn" onClick={exportStudents}><Download size={16} /> Export CSV</button><button type="button" className="secondary-btn" onClick={() => openRegistration('faculty')}><Plus size={17} /> Register faculty</button><button type="button" className="primary-btn" onClick={() => openRegistration('student')}><Plus size={17} /> Register student</button></div>
       </div>
+      {registrationMessage && <p className="success-message" role="status">{registrationMessage}</p>}
       <div className="patient-search-toolbar">
         <div className="search-box">
           <Search size={18} aria-hidden="true" />
@@ -170,12 +188,15 @@ export default function Students({ data, setData }) {
       {!patients.length && (
         <div className="no-results" role="status">
           {totalPatientRecords === 0 ? (
-            <><strong>No patient records yet.</strong><p>Register a student or faculty member to begin the clinic directory.</p><button type="button" className="primary-btn" onClick={() => navigate('/students/new')}><Plus size={16} /> Register student</button></>
+            <><strong>No patient records yet.</strong><p>Register a student or faculty member to begin the clinic directory.</p><button type="button" className="primary-btn" onClick={() => openRegistration('student')}><Plus size={16} /> Register student</button></>
           ) : (
             <><strong>No patient records match this view.</strong><p>Try another search term or record type.</p><button type="button" className="secondary-btn" onClick={() => updateListParams(searchParams, setSearchParams, { q: null, filter: null, grade: null, section: null }, { resetPage: true })}>Clear search and filters</button></>
           )}
         </div>
       )}
+      {registrationType && <ModalDialog open title={registrationType === 'faculty' ? 'Register faculty' : 'Register student'} eyebrow="Clinic directory" onClose={closeRegistration} busy={registrationBusy} className="admin-context-dialog patient-registration-dialog">
+        {registrationType === 'faculty' ? <FacultyRegistration data={data} reload={reload} embedded onClose={closeRegistration} onSaved={registrationSaved} onBusyChange={setRegistrationBusy} /> : <StudentRegistration data={data} commitData={commitData} embedded onClose={closeRegistration} onSaved={registrationSaved} onBusyChange={setRegistrationBusy} />}
+      </ModalDialog>}
     </div>
   );
 }

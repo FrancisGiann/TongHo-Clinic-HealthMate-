@@ -1,34 +1,45 @@
+import ModalDialog from '../components/ModalDialog';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { complaintLabels, initialPass, resolvePrintContext, summaryFields } from '../utils/printDocuments.js';
 import { PassDocument, SummaryDocument } from '../components/print/PrintDocuments.jsx';
 import '../components/print/print.css';
 import { consultationReportReturn } from '../utils/consultationReport.js';
 
 export default function VisitPrint({ data, user }) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const { studentId, visitId, passType } = useParams();
   const [search] = useSearchParams();
   const selectedVisit = visitId || search.get('visit');
   const context = resolvePrintContext(data, user, studentId, selectedVisit, passType);
   const fromReports = !passType && search.get('from') === 'reports' && user?.role === 'school_nurse';
+  if (user?.role === 'school_nurse') {
+    const close = () => {
+      if (location.state?.backgroundLocation) navigate(-1);
+      else navigate(fromReports ? consultationReportReturn(studentId, selectedVisit) : `/students/${encodeURIComponent(studentId)}`, { replace: true });
+    };
+    return <ModalDialog open title={passType ? (passType === 'clinic' ? 'Clinic Pass' : 'Student Gate Pass') : 'Consultation summary'} eyebrow={context?.student.name || 'Selected consultation'} onClose={close} className="admin-context-dialog consultation-summary-dialog">
+      {context ? <PrintWorkspace key={`${user.id}:${studentId}:${selectedVisit}:${passType || 'summary'}`} context={context} type={passType} onCloseDocument={close} /> : <><p role="alert">This consultation is unavailable. Select a valid student consultation.</p><div className="form-actions"><button type="button" className="secondary-btn" onClick={close}>Close</button></div></>}
+    </ModalDialog>;
+  }
   if (!context) return <section className="panel"><h2>Document unavailable</h2><p>A school nurse must select a valid student and consultation.</p><Link to={fromReports ? consultationReportReturn() : '/'}>{fromReports ? 'Back to Reports' : 'Back'}</Link></section>;
   return <PrintWorkspace key={`${user.id}:${studentId}:${selectedVisit || ''}:${passType || 'summary'}`} context={context} type={passType} fromReports={fromReports} />;
 }
-function PrintWorkspace({ context, type, fromReports }) {
+function PrintWorkspace({ context, type, onCloseDocument }) {
   const [draft, setDraft] = useState(() => initialPass(context));
   const [preview, setPreview] = useState(!type);
   const [fits, setFits] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const root = useRef(null);
-  const navigate = useNavigate();
-  const back = fromReports ? consultationReportReturn(context.student.id, context.visit.id) : `/students/${encodeURIComponent(context.student.id)}`;
   const update = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
   useEffect(() => {
-    const escape = (event) => { if (event.key === 'Escape') { if (type && preview) setPreview(false); else navigate(back); } };
+    if (!type) return undefined;
+    const escape = (event) => { if (event.key === 'Escape' && type && preview) { event.preventDefault(); setPreview(false); } };
     window.addEventListener('keydown', escape);
     return () => window.removeEventListener('keydown', escape);
-  }, [back, navigate, preview, type]);
+  }, [preview, type]);
   useLayoutEffect(() => {
     if (!preview) return;
     const measure = () => setFits(!type || [...root.current.querySelectorAll('.pass-copy')].every((element) => element.scrollHeight <= element.clientHeight + 1 && element.scrollWidth <= element.clientWidth + 1));
@@ -43,9 +54,9 @@ function PrintWorkspace({ context, type, fromReports }) {
     return () => document.body.classList.remove('document-print-active', 'document-print-blocked');
   }, [preview, fits]);
   const field = (key, label, inputType = 'text', maxLength = 160) => <label key={key}>{label}<input type={inputType} value={draft[key]} maxLength={maxLength} onChange={(event) => update(key, event.target.value)} /></label>;
-  return <section className="print-workspace">
-    <div className="page-intro"><div><h2>{type ? (type === 'clinic' ? 'Clinic Pass' : 'Student Gate Pass') : 'Consultation summary'}</h2><p>{type ? 'Fill and print. This form is not saved.' : 'Only the selected consultation is included.'}</p></div></div>
-    <div className="print-actions"><Link className="secondary-btn" to={back}>{fromReports ? 'Cancel / Back to Reports' : 'Cancel / Back to profile'}</Link>{preview && type && <button className="secondary-btn" onClick={() => setPreview(false)}>Back to form</button>}{preview && <button className="primary-btn" disabled={!fits} onClick={() => window.print()}>Print</button>}</div>
+  return <section className={type ? "print-workspace" : "summary-modal-workspace"}>
+    {type && <p className="field-hint">Fill and print. This temporary form is not saved.</p>}
+    {type && <div className="print-actions"><button type="button" className="secondary-btn" onClick={onCloseDocument}>Close</button>{preview && type && <button className="secondary-btn" onClick={() => setPreview(false)}>Back to form</button>}{preview && <button className="primary-btn" disabled={!fits} onClick={() => window.print()}>Print</button>}</div>}
     {!type && <p className="field-hint">Current grade, section and school year are omitted because they are not historical consultation snapshots. Unverified summary text and private notes are excluded.</p>}
     {type && !preview && <form className="panel pass-editor" onSubmit={(event) => { event.preventDefault(); setPreview(true); }}>
       <p>Check the year, grade and teacher: suggestions come from the current profile, not a historical snapshot. Time fields are optional and are never filled from consultation save time.</p>
@@ -54,6 +65,8 @@ function PrintWorkspace({ context, type, fromReports }) {
       </div><label className="check-label"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />I checked the suggested identity, date, year and grade for this form.</label><button className="primary-btn" disabled={!confirmed}>Preview two copies</button>
     </form>}
     {preview && <><p className="field-hint">Use A4 {type ? 'landscape' : 'portrait'}, 100% scale, with browser headers and footers off. Canceling print keeps this preview open.</p>{!fits && type && <p className="error-banner" role="alert">This form exceeds the two-copy page. Go back and shorten the temporary text before printing; nothing will be clipped or reduced.</p>}</>}
-    {preview && createPortal(<div ref={root} className={`document-print-root ${type ? 'pass-preview' : 'summary-preview'}`}><style>{`@media print { @page { size: A4 ${type ? 'landscape' : 'portrait'}; margin: 10mm; } }`}</style>{type ? <PassDocument draft={draft} type={type} /> : <SummaryDocument fields={summaryFields(context)} />}</div>, document.body)}
+    {preview && <div className="print-preview-viewport" role="region" aria-label="Document preview"><div className={`document-print-root ${type ? 'pass-preview' : 'summary-preview'}`}>{type ? <PassDocument draft={draft} type={type} /> : <SummaryDocument fields={summaryFields(context)} />}</div></div>}
+    {!type && <div className="form-actions summary-modal-footer"><button type="button" className="secondary-btn" onClick={onCloseDocument}>Close</button><button type="button" className="primary-btn" disabled={!fits} onClick={() => window.print()}>Print</button></div>}
+    {preview && createPortal(<div ref={root} className={`document-print-root print-document-mirror ${type ? 'pass-preview' : 'summary-preview'}`}><style>{`@media print { @page { size: A4 ${type ? 'landscape' : 'portrait'}; margin: 10mm; } }`}</style>{type ? <PassDocument draft={draft} type={type} /> : <SummaryDocument fields={summaryFields(context)} />}</div>, document.body)}
   </section>;
 }

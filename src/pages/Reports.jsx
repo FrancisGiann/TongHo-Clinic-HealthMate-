@@ -325,7 +325,7 @@ function ClinicReportDocument({ report = {}, start, end, schoolName }) {
   </article>;
 }
 
-function PatientSummaryDocument({ summary, patient, schoolName }) {
+export function PatientSummaryDocument({ summary, patient, schoolName }) {
   const model = patientSummaryPrintModel(summary, patient);
   const health = model.health;
   const identity = model.patient;

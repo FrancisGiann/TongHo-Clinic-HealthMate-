@@ -1,3 +1,5 @@
+import PatientSummaryDialog from '../components/PatientSummaryDialog';
+import ModalDialog from '../components/ModalDialog';
 import {
   ArrowLeft,
   Calendar,
@@ -9,7 +11,7 @@ import {
   Stethoscope,
   X,
 } from "lucide-react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useState, useRef, useEffect } from "react";
 import { saveData } from "../db/database";
 import { api } from "../utils/api";
@@ -17,9 +19,14 @@ import { api } from "../utils/api";
 export default function StudentProfile({ data, commitData, reload }) {
   const { studentId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const student = data.students.find((item) => String(item.id) === String(studentId));
+  const profileSaveLock = useRef(false);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(null);
+  const [showPatientSummary, setShowPatientSummary] = useState(false);
+  const [showContact, setShowContact] = useState(false);
+  const [editorPhotoOpen, setEditorPhotoOpen] = useState(false);
   const [imagePreview, setImagePreview] = useState(null);
   const [consentStatus, setConsentStatus] = useState(student?.consentStatus || 'unrecorded');
   const [consentDueDate, setConsentDueDate] = useState(student?.consentDueDate || '');
@@ -47,7 +54,8 @@ export default function StudentProfile({ data, commitData, reload }) {
   const isFaculty = student.patientType === 'faculty';
   const patientLabel = isFaculty ? 'faculty member' : 'student';
 
-  const openEditor = () => {
+  const openEditor = (showPhoto = false) => {
+    setEditorPhotoOpen(showPhoto);
     setRecordSaveError('');
     setForm({ ...student });
     setImagePreview(student.profileImage || null);
@@ -133,11 +141,13 @@ export default function StudentProfile({ data, commitData, reload }) {
   const save = async (event) => {
     event.preventDefault();
 
+    if (recordSaving || profileSaveLock.current) return;
     // Validate form
     if (!validateStudentForm(form)) {
       return;
     }
 
+    profileSaveLock.current = true;
     setRecordSaving(true);
     setRecordSaveError('');
     try {
@@ -154,6 +164,7 @@ export default function StudentProfile({ data, commitData, reload }) {
       console.error("Failed to save student record:", error);
       setRecordSaveError(error.message || "Failed to save changes. Please try again.");
     } finally {
+      profileSaveLock.current = false;
       setRecordSaving(false);
     }
   };
@@ -199,7 +210,7 @@ export default function StudentProfile({ data, commitData, reload }) {
           )}
           <button
             className="image-upload-btn"
-            onClick={openEditor}
+            onClick={() => openEditor(true)}
             title="Upload profile image"
             aria-label={`Upload ${isFaculty ? 'faculty' : 'student'} profile image`}
           >
@@ -215,10 +226,10 @@ export default function StudentProfile({ data, commitData, reload }) {
           </p>
         </div>
         <div className="profile-actions">
-          <Link className="secondary-btn" to={`/reports?tab=patient&patientId=${encodeURIComponent(student.id)}`}>Patient summary</Link>
-          {student.patientType === 'student' && <><Link className="secondary-btn" to={`/students/${encodeURIComponent(student.id)}/passes/clinic`}>Clinic Pass</Link><Link className="secondary-btn" to={`/students/${encodeURIComponent(student.id)}/passes/gate`}>Student Gate Pass</Link></>}
-          <button className="secondary-btn" onClick={openEditor}><Pencil size={16} /> Edit profile</button>
-          {(student.contactNumber || student.guardianPhone) && <button className="secondary-btn" onClick={() => window.location.href = `tel:${isFaculty ? student.contactNumber : student.guardianPhone}`}>
+          <button type="button" className="secondary-btn" onClick={() => setShowPatientSummary(true)}>Patient summary</button>
+          {student.patientType === 'student' && <><Link className="secondary-btn" to={`/students/${encodeURIComponent(student.id)}/passes/clinic`} state={{ backgroundLocation: location }}>Clinic Pass</Link><Link className="secondary-btn" to={`/students/${encodeURIComponent(student.id)}/passes/gate`} state={{ backgroundLocation: location }}>Student Gate Pass</Link></>}
+          <button className="secondary-btn" onClick={() => openEditor(false)}><Pencil size={16} /> Edit profile</button>
+          {(student.contactNumber || student.guardianPhone) && <button className="secondary-btn" onClick={() => setShowContact(true)}>
             <Phone size={16} /> {isFaculty ? 'Contact' : 'Guardian'}
           </button>}
           <Link to="/new-visit" state={{ selectedStudent: student }} className="primary-btn">
@@ -280,7 +291,7 @@ export default function StudentProfile({ data, commitData, reload }) {
                   </p>
                 </div>
                 <span className="status-chip success">{visit.disposition}</span>
-                {student.patientType === 'student' && <div><Link className="text-btn" to={`/students/${encodeURIComponent(student.id)}/visits/${encodeURIComponent(visit.id)}/print`}>Print visit summary</Link>{['clinic', 'gate'].map((type) => <Link key={type} className="text-btn" to={`/students/${encodeURIComponent(student.id)}/passes/${type}?visit=${encodeURIComponent(visit.id)}`}>{type === 'clinic' ? 'Clinic Pass' : 'Gate Pass'}</Link>)}</div>}
+                {student.patientType === 'student' && <div><Link className="text-btn" to={`/students/${encodeURIComponent(student.id)}/visits/${encodeURIComponent(visit.id)}/print`} state={{ backgroundLocation: location }}>Print visit summary</Link>{['clinic', 'gate'].map((type) => <Link key={type} className="text-btn" to={`/students/${encodeURIComponent(student.id)}/passes/${type}?visit=${encodeURIComponent(visit.id)}`} state={{ backgroundLocation: location }}>{type === 'clinic' ? 'Clinic Pass' : 'Gate Pass'}</Link>)}</div>}
               </div>
             ))
           ) : (
@@ -319,37 +330,18 @@ export default function StudentProfile({ data, commitData, reload }) {
           </form>
         </section>}
       </div>
+      {showPatientSummary && <PatientSummaryDialog key={student.id} patient={student} settings={data.settings} onClose={() => setShowPatientSummary(false)} />}
+      {showContact && <ModalDialog open title={`${isFaculty ? 'Contact' : 'Guardian contact'} · ${student.name}`} eyebrow="Patient contacts" onClose={() => setShowContact(false)} historyKey="patient-contact" className="admin-context-dialog">
+        <dl className="context-record-summary"><div><dt>Name</dt><dd>{isFaculty ? student.name : student.guardianName || 'Guardian name not recorded'}</dd></div><div><dt>Phone</dt><dd>{isFaculty ? student.contactNumber : student.guardianPhone}</dd></div></dl>
+        <div className="form-actions"><button type="button" className="secondary-btn" onClick={() => setShowContact(false)}>Close</button><a className="primary-btn" href={`tel:${isFaculty ? student.contactNumber : student.guardianPhone}`}><Phone size={16} /> Call {isFaculty ? 'contact' : 'guardian'}</a></div>
+      </ModalDialog>}
       {form && (
-        <div className="modal-backdrop" role="presentation" onClick={() => !recordSaving && setForm(null)}>
-          <form
-            className="modal-card student-edit-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="student-edit-title"
-            onSubmit={save}
-            onClick={(event) => event.stopPropagation()}
-            aria-busy={recordSaving}
-          >
-            <div className="modal-heading">
-              <div>
-                <p className="section-kicker">{isFaculty ? 'Faculty record' : 'Student record'}</p>
-                <h3 id="student-edit-title">Edit {isFaculty ? 'faculty' : 'student'}</h3>
-              </div>
-              <button
-                type="button"
-                className="icon-btn"
-                onClick={() => setForm(null)}
-                aria-label="Close editor"
-                disabled={recordSaving}
-              >
-                ×
-              </button>
-            </div>
-
+        <ModalDialog open title={`Edit profile · ${student.name}`} eyebrow={isFaculty ? 'Faculty record' : 'Student record'} onClose={() => setForm(null)} busy={recordSaving} historyKey="patient-edit" className="admin-context-dialog patient-edit-dialog">
+          <form className="context-dialog-form" onSubmit={save} aria-busy={recordSaving}>
             {/* Profile Image Section */}
             {recordSaveError && <div className="error-banner" role="alert">{recordSaveError}</div>}
             <fieldset className="form-fieldset" disabled={recordSaving}>
-            <div className="image-upload-section">
+            <details className="optional-form-group" open={editorPhotoOpen} onToggle={(event) => setEditorPhotoOpen(event.currentTarget.open)}><summary>Profile photo (optional)</summary><div className="image-upload-section">
               <label className="image-preview-label">Profile Image</label>
               <div className="image-preview-container">
                 {imagePreview ? (
@@ -388,7 +380,7 @@ export default function StudentProfile({ data, commitData, reload }) {
                 type="button"
                 className="secondary-btn"
                 onClick={() => fileInputRef.current?.click()}
-                style={{ width: '100%', marginBottom: '16px' }}
+                style={{ marginBottom: '16px' }}
               >
                 <Camera size={16} /> Choose Image
               </button>
@@ -397,7 +389,7 @@ export default function StudentProfile({ data, commitData, reload }) {
               </small>
             </div>
 
-            <div className="two-fields">
+            </details><div className="two-fields">
               <label>
                 {isFaculty ? 'Faculty ID *' : 'Student ID *'}
                 <input
@@ -437,16 +429,17 @@ export default function StudentProfile({ data, commitData, reload }) {
               </label>
             </div>}
 
+            <details className="optional-form-group"><summary>Personal, contact and health details</summary><div className="context-form-fields">
             {isFaculty && <div className="two-fields">
               <label>Email<input name="email" type="email" value={form.email || ''} onChange={update} maxLength={254} /></label>
               <label>Contact number<input name="contactNumber" type="tel" value={form.contactNumber || ''} onChange={update} maxLength={40} /></label>
             </div>}
 
             <div className="two-fields">
-              <label>
+              {!isFaculty && <label>
                 Adviser
                 <input name="adviser" value={form.adviser || ""} onChange={update} />
-              </label>
+              </label>}
               <label>
                 Birth date
                 <input
@@ -503,8 +496,8 @@ export default function StudentProfile({ data, commitData, reload }) {
               </label>
             </div>
 
-            <div className="form-actions">
-              <button type="button" className="secondary-btn" onClick={() => setForm(null)}>
+            </div></details><div className="form-actions">
+              <button type="button" className="secondary-btn" disabled={recordSaving} onClick={() => setForm(null)}>
                 Cancel
               </button>
               <button type="submit" className="primary-btn" disabled={recordSaving}>
@@ -513,7 +506,7 @@ export default function StudentProfile({ data, commitData, reload }) {
             </div>
             </fieldset>
           </form>
-        </div>
+        </ModalDialog>
       )}
     </div>
   );

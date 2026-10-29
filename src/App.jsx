@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { matchPath, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { consultationReportReturn } from './utils/consultationReport.js';
 import StartupScreen from './components/StartupScreen';
 import { useClinicData } from './hooks/useClinicData';
 import { CLINIC_DATA_SLOW_NOTICE_MS } from './utils/api';
@@ -11,12 +12,11 @@ const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Students = lazy(() => import('./pages/Students'));
 const StudentProfile = lazy(() => import('./pages/StudentProfile'));
 const VisitPrint = lazy(() => import('./pages/VisitPrint'));
-const StudentRegistration = lazy(() => import('./pages/StudentRegistration'));
-const FacultyRegistration = lazy(() => import('./pages/FacultyRegistration'));
 const NewVisit = lazy(() => import('./pages/NewVisit'));
 const Inventory = lazy(() => import('./pages/Inventory'));
 const Reports = lazy(() => import('./pages/Reports'));
 const Settings = lazy(() => import('./pages/Settings'));
+const GuardianRequests = lazy(() => import('./pages/GuardianRequests'));
 const Home = lazy(() => import('./pages/Home'));
 const Login = lazy(() => import('./pages/Login'));
 const PortalDashboard = lazy(() => import('./pages/PortalDashboard'));
@@ -120,7 +120,7 @@ export default function App() {
     error: clinic.error,
     dashboardData: clinic.dashboardData,
   });
-  if (!clinic.ready && !canShowDashboardBootstrap) {
+  if (!clinic.ready && !clinic.hasData && !canShowDashboardBootstrap) {
     return (
       <StartupScreen
         state={clinic.error ? 'error' : 'loading'}
@@ -136,7 +136,20 @@ export default function App() {
     );
   }
 
-  const pageData = clinic.ready ? data : clinic.dashboardData;
+  const pageData = clinic.hasData ? data : clinic.dashboardData;
+  const documentMatch = isNurse ? (matchPath('/students/:studentId/visits/:visitId/print', location.pathname) || matchPath('/students/:studentId/passes/:passType', location.pathname)) : null;
+  let documentBackground = null;
+  if (documentMatch) {
+    const profilePath = `/students/${encodeURIComponent(documentMatch.params.studentId)}`;
+    const provided = location.state?.backgroundLocation;
+    if (provided && [profilePath, '/reports'].includes(provided.pathname)) documentBackground = provided;
+    else {
+      const fromReports = new URLSearchParams(location.search).get('from') === 'reports';
+      const backUrl = fromReports ? consultationReportReturn(documentMatch.params.studentId, documentMatch.params.visitId) : profilePath;
+      const split = backUrl.indexOf('?');
+      documentBackground = { pathname: split < 0 ? backUrl : backUrl.slice(0, split), search: split < 0 ? '' : backUrl.slice(split), hash: '', state: null, key: 'document-background' };
+    }
+  }
   const layout = (
     <MainLayout
       settings={pageData.settings}
@@ -153,15 +166,15 @@ export default function App() {
     <>
       {(clinic.error || clinic.saving) && <div className={`connection-banner ${clinic.error ? 'error' : ''}`} role="status">{clinic.error || 'Saving changes…'}</div>}
       <Suspense fallback={<StartupScreen state="loading" user={user} dark={dark} />}>
-      <Routes>
+      <Routes location={documentBackground || location}>
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route element={layout}>
           {isNurse ? (
             <>
               <Route path="/" element={<Dashboard data={pageData} user={user} />} />
-              <Route path="/students" element={<Students data={pageData} setData={setData} />} />
-              <Route path="/students/new" element={<StudentRegistration data={pageData} commitData={clinic.commitData} />} />
-              <Route path="/faculty/new" element={<FacultyRegistration data={pageData} reload={clinic.reload} />} />
+              <Route path="/students" element={<Students data={pageData} setData={setData} commitData={clinic.commitData} reload={clinic.reload} />} />
+              <Route path="/students/new" element={<Students data={pageData} setData={setData} commitData={clinic.commitData} reload={clinic.reload} registrationType="student" />} />
+              <Route path="/faculty/new" element={<Students data={pageData} setData={setData} commitData={clinic.commitData} reload={clinic.reload} registrationType="faculty" />} />
               <Route path="/students/:studentId" element={<StudentProfile data={pageData} commitData={clinic.commitData} reload={clinic.reload} />} />
               <Route path="/health-record-review" element={<HealthRecordReview data={pageData} />} />
               <Route path="/students/:studentId/visits/:visitId/print" element={<VisitPrint data={pageData} user={user} />} />
@@ -180,6 +193,7 @@ export default function App() {
               <Route path="/" element={<Dashboard data={pageData} user={user} />} />
               <Route path="/reports" element={<Reports data={pageData} user={user} />} />
               <Route path="/incidents" element={<Navigate to="/" replace />} />
+              <Route path="/guardian-requests" element={<GuardianRequests data={pageData} />} />
               <Route path="/users" element={<Settings data={pageData} user={user} reload={clinic.reload} section="users" />} />
               <Route path="/data-imports" element={<Settings data={pageData} user={user} reload={clinic.refreshInBackground} section="data" />} />
               <Route path="/communications" element={<Settings data={pageData} user={user} reload={clinic.reload} section="notifications" />} />
@@ -209,6 +223,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
+      {documentBackground && <Routes location={location}><Route path="/students/:studentId/visits/:visitId/print" element={<VisitPrint data={pageData} user={user} />} /><Route path="/students/:studentId/passes/:passType" element={<VisitPrint data={pageData} user={user} />} /></Routes>}
       </Suspense>
     </>
   );

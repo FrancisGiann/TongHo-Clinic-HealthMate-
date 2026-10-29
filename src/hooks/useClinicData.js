@@ -321,7 +321,8 @@ export function useClinicData(user, { dashboardFirst = false } = {}) {
     return true;
   }, [applyData, sessionKey]);
 
-  const ready = Boolean(sessionKey && dataOwnerKey === sessionKey && !loading);
+  const hasData = Boolean(sessionKey && dataOwnerKey === sessionKey);
+  const ready = hasData && !loading;
   const ownedDashboardData = dashboardDataForIdentity(dashboardData, sessionKey);
-  return [data, setData, { loading, saving, error, reload, refreshInBackground, applyServerData, commitData, ready, dashboardData: ownedDashboardData }];
+  return [data, setData, { loading, saving, error, reload, refreshInBackground, applyServerData, commitData, ready, hasData, dashboardData: ownedDashboardData }];
 }

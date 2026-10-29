@@ -1,7 +1,7 @@
 import ModalDialog from '../components/ModalDialog';
 import useConfirmation from "../hooks/useConfirmation";
 import { useRef, useState, useEffect } from "react";
-import { useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { Check, Database, Download, Lock, RotateCcw, ShieldCheck, Upload, X, UserCog, Bell, FileBarChart, KeyRound } from "lucide-react";
 import { downloadCsv } from "../utils/csv";
 import { api } from "../utils/api";
@@ -9,7 +9,6 @@ import ImportPanel from "../components/ImportPanel";
 import RiskRuleBuilder, { RiskRuleDetails } from "../components/RiskRuleBuilder";
 import StudentPicker from "../components/StudentPicker";
 import ListPagination from "../components/ListPagination";
-import GuardianSignupRequests from "../components/GuardianSignupRequests.jsx";
 import { compareValues, readListState, sortAndPaginate, updateListParams } from "../utils/listState";
 import {
   getAuditLogs,
@@ -173,6 +172,7 @@ export default function Settings({ data, user, reload, section }) {
   const userListState = readListState(searchParams, { sort: 'name', order: 'asc', pageSize: 25 });
   const roleFilter = searchParams.get('role') || 'all';
   const statusFilter = searchParams.get('status') || 'all';
+  const userAdvancedFilterCount = [roleFilter !== 'all', statusFilter !== 'all', userListState.sort !== 'name', userListState.order !== 'asc'].filter(Boolean).length;
   const filteredUsers = users.filter((account) => {
     if (userFilter === 'active' && account.status !== 'active') return false;
     if (userFilter === 'invited' && account.status !== 'invited') return false;
@@ -205,6 +205,7 @@ export default function Settings({ data, user, reload, section }) {
     limit: [10, 25, 50].includes(Number(searchParams.get('auditLimit'))) ? Number(searchParams.get('auditLimit')) : 25,
     cursor: searchParams.get('cursor') || '',
   };
+  const auditAdvancedFilterCount = [Boolean(auditQuery.start), Boolean(auditQuery.end), auditQuery.order !== 'newest', auditQuery.limit !== 25].filter(Boolean).length;
   const updateAuditFilter = (updates) => {
     const next = new URLSearchParams(searchParams);
     for (const [key, value] of Object.entries(updates)) {
@@ -745,6 +746,7 @@ export default function Settings({ data, user, reload, section }) {
       {activeSection === 'users' && isAdmin && (
         <section className="panel settings-tab-panel">
           <div className="settings-panel-heading"><div><p className="section-kicker">Access control</p><h3>User management</h3></div><button className="primary-btn" onClick={() => { clearUserActionFeedback(); setShowUserForm(true); }}><UserCog size={15} /> Add new user</button></div>
+          <div className="registration-requests-shortcut"><div><strong>Guardian registration requests</strong><p className="field-hint">Review new guardian applications in the dedicated registration queue.</p></div><Link className="secondary-btn" to="/guardian-requests" state={{ returnTo: `${location.pathname}${location.search}` }}>Open registration requests</Link></div>
           <div className="settings-users-toolbar">
             <p className="tab-description">Invite staff or manage administrator-issued guardian invitations. Self-registered guardians remain pending until you verify their relationship against school records. Administrators record nurse PRC verification here.</p>
             <label>Show accounts
@@ -757,12 +759,19 @@ export default function Settings({ data, user, reload, section }) {
               </select>
             </label>
             <label className="settings-users-filter-field settings-users-search-field"><span>Search accounts</span><span className="search-box settings-users-search-box"><input type="search" aria-label="Search name, email, or username" value={userListState.q} placeholder="Name, email, or username" onChange={(event) => updateListParams(searchParams, setSearchParams, { q: event.target.value }, { resetPage: true })} /></span></label>
-            <label>Role<select value={roleFilter} onChange={(event) => updateListParams(searchParams, setSearchParams, { role: event.target.value === 'all' ? null : event.target.value }, { resetPage: true })}><option value="all">All roles</option><option value="system_administrator">Administrator</option><option value="school_nurse">Nurse</option><option value="guardian">Guardian</option><option value="student">Student account</option></select></label>
+            <details className="progressive-filters"><summary>More filters{userAdvancedFilterCount > 0 ? ` · ${userAdvancedFilterCount} active` : ''}</summary><div className="progressive-filter-grid">            <label>Role<select value={roleFilter} onChange={(event) => updateListParams(searchParams, setSearchParams, { role: event.target.value === 'all' ? null : event.target.value }, { resetPage: true })}><option value="all">All roles</option><option value="system_administrator">Administrator</option><option value="school_nurse">Nurse</option><option value="guardian">Guardian</option><option value="student">Student account</option></select></label>
             <label>Status<select value={statusFilter} onChange={(event) => updateListParams(searchParams, setSearchParams, { status: event.target.value === 'all' ? null : event.target.value }, { resetPage: true })}><option value="all">All statuses</option><option value="active">Active</option><option value="invited">Invited</option><option value="deactivated">Deactivated</option></select></label>
             <label>Sort by<select value={userSortGetters[userListState.sort] ? userListState.sort : 'name'} onChange={(event) => updateListParams(searchParams, setSearchParams, { sort: event.target.value }, { resetPage: true })}><option value="name">Name</option><option value="role">Role</option><option value="status">Status</option><option value="created">Created</option><option value="lastLogin">Last login</option></select></label>
-            <label>Order<select value={userListState.order} onChange={(event) => updateListParams(searchParams, setSearchParams, { order: event.target.value }, { resetPage: true })}><option value="asc">A to Z / oldest</option><option value="desc">Z to A / newest</option></select></label>
+            <label>Order<select value={userListState.order} onChange={(event) => updateListParams(searchParams, setSearchParams, { order: event.target.value }, { resetPage: true })}><option value="asc">A to Z / oldest</option><option value="desc">Z to A / newest</option></select></label></div></details>
+            {(userAdvancedFilterCount > 0 || userListState.q || userFilter !== 'all') && <div className="active-filter-summary" aria-label="Active account filters">
+              {roleFilter !== 'all' && <span>Role: {roleFilter === 'school_nurse' ? 'Nurse' : roleFilter === 'system_administrator' ? 'Administrator' : roleFilter}</span>}
+              {statusFilter !== 'all' && <span>Status: {statusFilter}</span>}
+              {userListState.sort !== 'name' && <span>Sort: {userListState.sort}</span>}
+              {userListState.order !== 'asc' && <span>Descending order</span>}
+              <button type="button" className="table-action" onClick={() => updateListParams(searchParams, setSearchParams, { q: null, filter: null, role: null, status: null, sort: null, order: null, page: null })}>Reset account filters</button>
+            </div>}
           </div>
-          {showUserForm && <ModalDialog open title="Invite user" eyebrow="Account access" historyKey="invite-user" onClose={() => setShowUserForm(false)} busy={inviteSaving} className="admin-context-dialog"><form className="context-dialog-form" onSubmit={handleCreateUser}>
+          {showUserForm && <ModalDialog open title="Invite user" eyebrow="Account access" historyKey="invite-user" onClose={() => setShowUserForm(false)} busy={inviteSaving} className="admin-context-dialog invite-user-dialog"><form className="context-dialog-form" onSubmit={handleCreateUser}>
             {userActionFeedback?.tone === 'error' && <div className="error-banner" role="alert">{userActionFeedback.message}</div>}
             <label>Name<input value={newUser.name} onChange={(event) => setNewUser({ ...newUser, name: event.target.value })} required disabled={inviteSaving} /></label>
             <label>Email<input type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} required disabled={inviteSaving} /></label>
@@ -781,8 +790,7 @@ export default function Settings({ data, user, reload, section }) {
               />
               <label>Relationship<input value={newUser.relationship} onChange={(event) => setNewUser({ ...newUser, relationship: event.target.value })} required disabled={inviteSaving} /></label>
             </>}
-            <button type="submit" className="primary-btn" disabled={inviteSaving || (newUser.role === 'Guardian' && !newUser.patientId)}>{inviteSaving ? 'Sending…' : 'Send invitation'}</button>
-          <div className="form-actions"><button type="button" className="secondary-btn" disabled={inviteSaving} onClick={() => setShowUserForm(false)}>Cancel</button></div></form></ModalDialog>}
+            <div className="form-actions"><button type="button" className="secondary-btn" disabled={inviteSaving} onClick={() => setShowUserForm(false)}>Cancel</button><button type="submit" className="primary-btn" disabled={inviteSaving || (newUser.role === 'Guardian' && !newUser.patientId)}>{inviteSaving ? 'Sending…' : 'Send invitation'}</button></div></form></ModalDialog>}
           {guardianLinkTarget && <ModalDialog open title={`Link student · ${guardianLinkTarget.name}`} eyebrow="Guardian access" historyKey="link-student" onClose={() => setGuardianLinkTarget(null)} busy={guardianLinkSaving} className="admin-context-dialog"><form className="context-dialog-form" onSubmit={saveGuardianLink}>
             {userActionFeedback?.tone === 'error' && <div className="error-banner" role="alert">{userActionFeedback.message}</div>}
             <div><h4>Link student to {guardianLinkTarget.name}</h4><p className="field-hint">Only student roster records can be linked. Suspended accounts require a separate activation after relinking.</p></div>
@@ -798,8 +806,7 @@ export default function Settings({ data, user, reload, section }) {
               disabled={guardianLinkSaving}
             />
             <label>Guardian relationship<input maxLength={80} value={guardianLinkForm.relationship} onChange={(event) => setGuardianLinkForm((current) => ({ ...current, relationship: event.target.value }))} required disabled={guardianLinkSaving} /></label>
-            <button type="submit" className="primary-btn" disabled={guardianLinkSaving || !guardianLinkForm.patientId}>{guardianLinkSaving ? 'Saving…' : 'Save guardian link'}</button>
-            <button type="button" className="secondary-btn" onClick={() => setGuardianLinkTarget(null)} disabled={guardianLinkSaving}>Cancel</button>
+            <div className="form-actions"><button type="button" className="secondary-btn" onClick={() => setGuardianLinkTarget(null)} disabled={guardianLinkSaving}>Cancel</button><button type="submit" className="primary-btn" disabled={guardianLinkSaving || !guardianLinkForm.patientId}>{guardianLinkSaving ? 'Saving…' : 'Save guardian link'}</button></div>
           </form></ModalDialog>}
           {userActionFeedback && <div className={userActionFeedback.tone === 'error' ? 'error-banner' : 'success-message'} role={userActionFeedback.tone === 'error' ? 'alert' : 'status'}>{userActionFeedback.tone === 'success' && <Check size={14} aria-hidden="true" />} {userActionFeedback.message}</div>}
           <p className="disabled-note nurse-license-admin-note">Only administrators can record a nurse’s PRC license, after independently verifying it against an authoritative source. This list shows the recording status without displaying the license number.</p>
@@ -808,11 +815,10 @@ export default function Settings({ data, user, reload, section }) {
             <div><h4>PRC license for {nurseLicenseTarget.name}</h4><p>Current status: {nurseLicenseTarget.prcLicenseVerified ? 'recorded by an administrator' : 'not recorded'}. The current number is not displayed.</p></div>
             <label>PRC license number<input type="text" disabled={licenseSaving} value={nurseLicenseNumber} maxLength={80} autoComplete="off" onChange={(event) => setNurseLicenseNumber(event.target.value)} placeholder="Enter a verified number, or leave blank to clear" /></label>
             {Boolean(nurseLicenseNumber.trim()) && <label className="check-label"><input type="checkbox" checked={licenseVerificationConfirmed} disabled={licenseSaving} onChange={(event) => setLicenseVerificationConfirmed(event.target.checked)} required /> I independently verified this license against an authoritative source.</label>}
-            <div className="form-actions"><button type="submit" className="primary-btn" disabled={licenseSaving || (Boolean(nurseLicenseNumber.trim()) && !licenseVerificationConfirmed) || (!nurseLicenseNumber.trim() && !nurseLicenseTarget.prcLicenseNumber)}>{licenseSaving ? 'Saving…' : nurseLicenseNumber.trim() ? 'Record verified license' : 'Clear license record'}</button><button type="button" className="secondary-btn" onClick={() => setNurseLicenseTarget(null)} disabled={licenseSaving}>Cancel</button></div>
+            <div className="form-actions"><button type="button" className="secondary-btn" onClick={() => setNurseLicenseTarget(null)} disabled={licenseSaving}>Cancel</button><button type="submit" className="primary-btn" disabled={licenseSaving || (Boolean(nurseLicenseNumber.trim()) && !licenseVerificationConfirmed) || (!nurseLicenseNumber.trim() && !nurseLicenseTarget.prcLicenseNumber)}>{licenseSaving ? 'Saving…' : nurseLicenseNumber.trim() ? 'Record verified license' : 'Clear license record'}</button></div>
           </form></ModalDialog>}
           <div className="admin-table-wrap"><table className="admin-table settings-users-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>PRC license</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{visibleUsers.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student (login removed)', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.role === 'school_nurse' ? <span className={`status-chip ${account.prcLicenseVerified ? 'success' : 'warn'}`}>{account.prcLicenseVerified ? 'Recorded by admin' : 'Not recorded'}</span> : '—'}</td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.role === 'student' ? 'Student sign-in is disabled' : <>{account.status === 'invited' ? <><button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button><button type="button" className="table-action" onClick={() => handleCancelInvitation(account)}>Cancel invitation</button></> : account.status === 'deactivated' && !account.invitationAccepted && account.username === `invited-${account.id.slice(0, 8)}` ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Send new invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}{account.role === 'guardian' && <button type="button" className="table-action" onClick={() => { clearUserActionFeedback(); setGuardianLinkTarget(account); setGuardianLinkForm({ patientId: '', relationship: 'Parent' }); }}>Link student</button>}{account.role === 'school_nurse' && <button type="button" className="table-action" onClick={() => { clearUserActionFeedback(); openNurseLicenseEditor(account); }}>{account.prcLicenseVerified ? 'Update or clear license' : 'Record verified license'}</button>}</>}</td></tr>)}</tbody></table>{visibleUsers.length === 0 && <p className="empty-state">{users.length ? 'No accounts match this filter.' : 'No system accounts are available yet.'}</p>}</div>
           <ListPagination page={userPage.page} pageCount={userPage.pageCount} pageSize={userPage.pageSize} total={userPage.total} onPageChange={(page) => updateListParams(searchParams, setSearchParams, { page })} onPageSizeChange={(pageSize) => updateListParams(searchParams, setSearchParams, { pageSize }, { resetPage: true })} />
-          <GuardianSignupRequests students={linkableStudents} />
         </section>
       )}
 
@@ -975,10 +981,17 @@ export default function Settings({ data, user, reload, section }) {
           <div className="audit-filter-toolbar">
             <label>Event<select value={auditQuery.event} onChange={(event) => updateAuditFilter({ event: event.target.value })}><option value="">All events</option>{Object.keys(auditEventMeta).sort().map((event) => <option value={event} key={event}>{auditEventMeta[event].label}</option>)}</select></label>
             <label>Actor<select value={auditQuery.actorId} onChange={(event) => updateAuditFilter({ actorId: event.target.value })}><option value="">All actors</option><option value="system">System</option>{users.map((account) => <option key={account.id} value={account.id}>{account.name} · {account.email}</option>)}</select></label>
-            <label>From<input type="date" value={auditQuery.start} max={auditQuery.end || undefined} onChange={(event) => updateAuditFilter({ auditStart: event.target.value })} /></label>
+            <details className="progressive-filters"><summary>More filters{auditAdvancedFilterCount > 0 ? ` · ${auditAdvancedFilterCount} active` : ''}</summary><div className="progressive-filter-grid">            <label>From<input type="date" value={auditQuery.start} max={auditQuery.end || undefined} onChange={(event) => updateAuditFilter({ auditStart: event.target.value })} /></label>
             <label>To<input type="date" value={auditQuery.end} min={auditQuery.start || undefined} onChange={(event) => updateAuditFilter({ auditEnd: event.target.value })} /></label>
             <label>Order<select value={auditQuery.order} onChange={(event) => updateAuditFilter({ auditOrder: event.target.value })}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
-            <label>Page size<select value={auditQuery.limit} onChange={(event) => updateAuditFilter({ auditLimit: event.target.value })}><option value="10">10</option><option value="25">25</option><option value="50">50</option></select></label>
+            <label>Page size<select value={auditQuery.limit} onChange={(event) => updateAuditFilter({ auditLimit: event.target.value })}><option value="10">10</option><option value="25">25</option><option value="50">50</option></select></label></div></details>
+            {(auditQuery.event || auditQuery.actorId || auditAdvancedFilterCount > 0) && <div className="active-filter-summary" aria-label="Active audit filters">
+              {auditQuery.event && <span>Event: {auditEventMeta[auditQuery.event]?.label || auditQuery.event}</span>}
+              {auditQuery.actorId && <span>Actor: {auditQuery.actorId === 'system' ? 'System' : users.find((account) => account.id === auditQuery.actorId)?.name || 'Selected account'}</span>}
+              {auditQuery.start && <span>From: {auditQuery.start}</span>}{auditQuery.end && <span>To: {auditQuery.end}</span>}
+              {auditQuery.order !== 'newest' && <span>Oldest first</span>}{auditQuery.limit !== 25 && <span>{auditQuery.limit} per page</span>}
+              <button type="button" className="table-action" onClick={() => updateAuditFilter({ event: null, actorId: null, auditStart: null, auditEnd: null, auditOrder: null, auditLimit: null })}>Reset audit filters</button>
+            </div>}
           </div>
           {auditLoading && <p className="field-hint" role="status">Loading audit history…</p>}
           {auditError && <div className="error-banner" role="alert">{auditError} <button type="button" className="secondary-btn" onClick={() => setAuditRetry((count) => count + 1)}>Retry</button></div>}
