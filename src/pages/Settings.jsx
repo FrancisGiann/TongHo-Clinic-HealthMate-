@@ -1,3 +1,4 @@
+import ModalDialog from '../components/ModalDialog';
 import useConfirmation from "../hooks/useConfirmation";
 import { useRef, useState, useEffect } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
@@ -141,6 +142,7 @@ export default function Settings({ data, user, reload, section }) {
   const [nurseLicenseNumber, setNurseLicenseNumber] = useState('');
   const [licenseVerificationConfirmed, setLicenseVerificationConfirmed] = useState(false);
   const [licenseSaving, setLicenseSaving] = useState(false);
+  const contextSaveLock = useRef(false);
   const linkableStudents = Array.isArray(data?.students)
     ? data.students.filter((student) => student.patientType === 'student')
     : [];
@@ -363,7 +365,8 @@ export default function Settings({ data, user, reload, section }) {
   };
   const updateNurseLicense = async (event) => {
     event.preventDefault();
-    if (!nurseLicenseTarget) return;
+    if (!nurseLicenseTarget || contextSaveLock.current) return;
+    contextSaveLock.current = true;
     const scope = feedbackScopeRef.current;
     clearUserActionFeedback();
     setLicenseSaving(true);
@@ -382,6 +385,7 @@ export default function Settings({ data, user, reload, section }) {
     } catch (error) {
       showScopedUserActionFeedback(scope, 'error', error.message);
     } finally {
+      contextSaveLock.current = false;
       setLicenseSaving(false);
     }
   };
@@ -545,13 +549,14 @@ export default function Settings({ data, user, reload, section }) {
   };
   const handleCreateUser = async (event) => {
     event.preventDefault();
-    if (inviteSaving) return;
+    if (inviteSaving || contextSaveLock.current) return;
     const scope = feedbackScopeRef.current;
     clearUserActionFeedback();
     if (newUser.role === 'Guardian' && !linkableStudents.some((student) => String(student.id) === String(newUser.patientId))) {
       showScopedUserActionFeedback(scope, 'error', 'Choose a student from the search results before sending this guardian invitation.');
       return;
     }
+    contextSaveLock.current = true;
     setInviteSaving(true);
     try {
       const result = await createManagedUser(newUser);
@@ -563,6 +568,7 @@ export default function Settings({ data, user, reload, section }) {
         await refreshUsers();
       }
     } finally {
+      contextSaveLock.current = false;
       setInviteSaving(false);
     }
   };
@@ -604,12 +610,13 @@ export default function Settings({ data, user, reload, section }) {
   };
   const saveGuardianLink = async (event) => {
     event.preventDefault();
-    if (guardianLinkSaving || !guardianLinkTarget || !guardianLinkForm.relationship.trim()) return;
+    if (contextSaveLock.current || guardianLinkSaving || !guardianLinkTarget || !guardianLinkForm.relationship.trim()) return;
     const scope = feedbackScopeRef.current;
     if (!linkableStudents.some((student) => String(student.id) === String(guardianLinkForm.patientId))) {
       showScopedUserActionFeedback(scope, 'error', 'Choose a student from the search results before saving this link.');
       return;
     }
+    contextSaveLock.current = true;
     setGuardianLinkSaving(true);
     clearUserActionFeedback();
     try {
@@ -619,7 +626,7 @@ export default function Settings({ data, user, reload, section }) {
       await refreshUsers();
     } catch (error) {
       showScopedUserActionFeedback(scope, 'error', error.message || 'The guardian link could not be saved.');
-    } finally { setGuardianLinkSaving(false); }
+    } finally { contextSaveLock.current = false; setGuardianLinkSaving(false); }
   };
   
   // If not authorized, show authentication modal
@@ -737,7 +744,7 @@ export default function Settings({ data, user, reload, section }) {
 
       {activeSection === 'users' && isAdmin && (
         <section className="panel settings-tab-panel">
-          <div className="settings-panel-heading"><div><p className="section-kicker">Access control</p><h3>User management</h3></div><button className="primary-btn" onClick={() => setShowUserForm(!showUserForm)}><UserCog size={15} /> Add new user</button></div>
+          <div className="settings-panel-heading"><div><p className="section-kicker">Access control</p><h3>User management</h3></div><button className="primary-btn" onClick={() => { clearUserActionFeedback(); setShowUserForm(true); }}><UserCog size={15} /> Add new user</button></div>
           <div className="settings-users-toolbar">
             <p className="tab-description">Invite staff or manage administrator-issued guardian invitations. Self-registered guardians remain pending until you verify their relationship against school records. Administrators record nurse PRC verification here.</p>
             <label>Show accounts
@@ -755,7 +762,8 @@ export default function Settings({ data, user, reload, section }) {
             <label>Sort by<select value={userSortGetters[userListState.sort] ? userListState.sort : 'name'} onChange={(event) => updateListParams(searchParams, setSearchParams, { sort: event.target.value }, { resetPage: true })}><option value="name">Name</option><option value="role">Role</option><option value="status">Status</option><option value="created">Created</option><option value="lastLogin">Last login</option></select></label>
             <label>Order<select value={userListState.order} onChange={(event) => updateListParams(searchParams, setSearchParams, { order: event.target.value }, { resetPage: true })}><option value="asc">A to Z / oldest</option><option value="desc">Z to A / newest</option></select></label>
           </div>
-          {showUserForm && <form className="inline-user-form" onSubmit={handleCreateUser}>
+          {showUserForm && <ModalDialog open title="Invite user" eyebrow="Account access" historyKey="invite-user" onClose={() => setShowUserForm(false)} busy={inviteSaving} className="admin-context-dialog"><form className="context-dialog-form" onSubmit={handleCreateUser}>
+            {userActionFeedback?.tone === 'error' && <div className="error-banner" role="alert">{userActionFeedback.message}</div>}
             <label>Name<input value={newUser.name} onChange={(event) => setNewUser({ ...newUser, name: event.target.value })} required disabled={inviteSaving} /></label>
             <label>Email<input type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} required disabled={inviteSaving} /></label>
             <label>Role<select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value, patientId: '' })} disabled={inviteSaving}><option>Admin</option><option>Nurse</option><option>Guardian</option></select></label>
@@ -774,8 +782,9 @@ export default function Settings({ data, user, reload, section }) {
               <label>Relationship<input value={newUser.relationship} onChange={(event) => setNewUser({ ...newUser, relationship: event.target.value })} required disabled={inviteSaving} /></label>
             </>}
             <button type="submit" className="primary-btn" disabled={inviteSaving || (newUser.role === 'Guardian' && !newUser.patientId)}>{inviteSaving ? 'Sending…' : 'Send invitation'}</button>
-          </form>}
-          {guardianLinkTarget && <form className="inline-user-form" onSubmit={saveGuardianLink}>
+          <div className="form-actions"><button type="button" className="secondary-btn" disabled={inviteSaving} onClick={() => setShowUserForm(false)}>Cancel</button></div></form></ModalDialog>}
+          {guardianLinkTarget && <ModalDialog open title={`Link student · ${guardianLinkTarget.name}`} eyebrow="Guardian access" historyKey="link-student" onClose={() => setGuardianLinkTarget(null)} busy={guardianLinkSaving} className="admin-context-dialog"><form className="context-dialog-form" onSubmit={saveGuardianLink}>
+            {userActionFeedback?.tone === 'error' && <div className="error-banner" role="alert">{userActionFeedback.message}</div>}
             <div><h4>Link student to {guardianLinkTarget.name}</h4><p className="field-hint">Only student roster records can be linked. Suspended accounts require a separate activation after relinking.</p></div>
             <StudentPicker
               students={linkableStudents}
@@ -791,16 +800,17 @@ export default function Settings({ data, user, reload, section }) {
             <label>Guardian relationship<input maxLength={80} value={guardianLinkForm.relationship} onChange={(event) => setGuardianLinkForm((current) => ({ ...current, relationship: event.target.value }))} required disabled={guardianLinkSaving} /></label>
             <button type="submit" className="primary-btn" disabled={guardianLinkSaving || !guardianLinkForm.patientId}>{guardianLinkSaving ? 'Saving…' : 'Save guardian link'}</button>
             <button type="button" className="secondary-btn" onClick={() => setGuardianLinkTarget(null)} disabled={guardianLinkSaving}>Cancel</button>
-          </form>}
+          </form></ModalDialog>}
           {userActionFeedback && <div className={userActionFeedback.tone === 'error' ? 'error-banner' : 'success-message'} role={userActionFeedback.tone === 'error' ? 'alert' : 'status'}>{userActionFeedback.tone === 'success' && <Check size={14} aria-hidden="true" />} {userActionFeedback.message}</div>}
           <p className="disabled-note nurse-license-admin-note">Only administrators can record a nurse’s PRC license, after independently verifying it against an authoritative source. This list shows the recording status without displaying the license number.</p>
-          {nurseLicenseTarget && <form className="nurse-license-editor" onSubmit={updateNurseLicense}>
+          {nurseLicenseTarget && <ModalDialog open title={`Verified PRC license · ${nurseLicenseTarget.name}`} eyebrow="Nurse verification" historyKey="nurse-license" onClose={() => setNurseLicenseTarget(null)} busy={licenseSaving} className="admin-context-dialog"><form className="context-dialog-form" onSubmit={updateNurseLicense}>
+            {userActionFeedback?.tone === 'error' && <div className="error-banner" role="alert">{userActionFeedback.message}</div>}
             <div><h4>PRC license for {nurseLicenseTarget.name}</h4><p>Current status: {nurseLicenseTarget.prcLicenseVerified ? 'recorded by an administrator' : 'not recorded'}. The current number is not displayed.</p></div>
-            <label>PRC license number<input type="text" value={nurseLicenseNumber} maxLength={80} autoComplete="off" onChange={(event) => setNurseLicenseNumber(event.target.value)} placeholder="Enter a verified number, or leave blank to clear" /></label>
-            {Boolean(nurseLicenseNumber.trim()) && <label className="check-label"><input type="checkbox" checked={licenseVerificationConfirmed} onChange={(event) => setLicenseVerificationConfirmed(event.target.checked)} required /> I independently verified this license against an authoritative source.</label>}
+            <label>PRC license number<input type="text" disabled={licenseSaving} value={nurseLicenseNumber} maxLength={80} autoComplete="off" onChange={(event) => setNurseLicenseNumber(event.target.value)} placeholder="Enter a verified number, or leave blank to clear" /></label>
+            {Boolean(nurseLicenseNumber.trim()) && <label className="check-label"><input type="checkbox" checked={licenseVerificationConfirmed} disabled={licenseSaving} onChange={(event) => setLicenseVerificationConfirmed(event.target.checked)} required /> I independently verified this license against an authoritative source.</label>}
             <div className="form-actions"><button type="submit" className="primary-btn" disabled={licenseSaving || (Boolean(nurseLicenseNumber.trim()) && !licenseVerificationConfirmed) || (!nurseLicenseNumber.trim() && !nurseLicenseTarget.prcLicenseNumber)}>{licenseSaving ? 'Saving…' : nurseLicenseNumber.trim() ? 'Record verified license' : 'Clear license record'}</button><button type="button" className="secondary-btn" onClick={() => setNurseLicenseTarget(null)} disabled={licenseSaving}>Cancel</button></div>
-          </form>}
-          <div className="admin-table-wrap"><table className="admin-table settings-users-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>PRC license</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{visibleUsers.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student (login removed)', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.role === 'school_nurse' ? <span className={`status-chip ${account.prcLicenseVerified ? 'success' : 'warn'}`}>{account.prcLicenseVerified ? 'Recorded by admin' : 'Not recorded'}</span> : '—'}</td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.role === 'student' ? 'Student sign-in is disabled' : <>{account.status === 'invited' ? <><button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button><button type="button" className="table-action" onClick={() => handleCancelInvitation(account)}>Cancel invitation</button></> : account.status === 'deactivated' && !account.invitationAccepted && account.username === `invited-${account.id.slice(0, 8)}` ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Send new invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}{account.role === 'guardian' && <button type="button" className="table-action" onClick={() => { setGuardianLinkTarget(account); setGuardianLinkForm({ patientId: '', relationship: 'Parent' }); }}>Link student</button>}{account.role === 'school_nurse' && <button type="button" className="table-action" onClick={() => openNurseLicenseEditor(account)}>{account.prcLicenseVerified ? 'Update or clear license' : 'Record verified license'}</button>}</>}</td></tr>)}</tbody></table>{visibleUsers.length === 0 && <p className="empty-state">{users.length ? 'No accounts match this filter.' : 'No system accounts are available yet.'}</p>}</div>
+          </form></ModalDialog>}
+          <div className="admin-table-wrap"><table className="admin-table settings-users-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>PRC license</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{visibleUsers.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student (login removed)', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.role === 'school_nurse' ? <span className={`status-chip ${account.prcLicenseVerified ? 'success' : 'warn'}`}>{account.prcLicenseVerified ? 'Recorded by admin' : 'Not recorded'}</span> : '—'}</td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.role === 'student' ? 'Student sign-in is disabled' : <>{account.status === 'invited' ? <><button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button><button type="button" className="table-action" onClick={() => handleCancelInvitation(account)}>Cancel invitation</button></> : account.status === 'deactivated' && !account.invitationAccepted && account.username === `invited-${account.id.slice(0, 8)}` ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Send new invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}{account.role === 'guardian' && <button type="button" className="table-action" onClick={() => { clearUserActionFeedback(); setGuardianLinkTarget(account); setGuardianLinkForm({ patientId: '', relationship: 'Parent' }); }}>Link student</button>}{account.role === 'school_nurse' && <button type="button" className="table-action" onClick={() => { clearUserActionFeedback(); openNurseLicenseEditor(account); }}>{account.prcLicenseVerified ? 'Update or clear license' : 'Record verified license'}</button>}</>}</td></tr>)}</tbody></table>{visibleUsers.length === 0 && <p className="empty-state">{users.length ? 'No accounts match this filter.' : 'No system accounts are available yet.'}</p>}</div>
           <ListPagination page={userPage.page} pageCount={userPage.pageCount} pageSize={userPage.pageSize} total={userPage.total} onPageChange={(page) => updateListParams(searchParams, setSearchParams, { page })} onPageSizeChange={(pageSize) => updateListParams(searchParams, setSearchParams, { pageSize }, { resetPage: true })} />
           <GuardianSignupRequests students={linkableStudents} />
         </section>

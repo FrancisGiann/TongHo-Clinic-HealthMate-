@@ -1,3 +1,5 @@
+import ModalDialog from '../components/ModalDialog';
+import AccountReviewDialog from '../components/AccountReviewDialog';
 import {
   ArrowUpRight,
   CalendarDays,
@@ -13,7 +15,7 @@ import {
   Stethoscope,
   Users,
 } from "lucide-react";
-import { Fragment, useState, useEffect } from "react";
+import { Fragment, useState, useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { getUsersForAdmin } from "../utils/auth";
 import { api } from "../utils/api";
@@ -40,6 +42,7 @@ export default function Dashboard({ data, user }) {
   const [customizing, setCustomizing] = useState(false);
   const [preferenceDraft, setPreferenceDraft] = useState(null);
   const [preferencesSaving, setPreferencesSaving] = useState(false);
+  const preferencesSaveLock = useRef(false);
   const [preferencesSaveError, setPreferencesSaveError] = useState('');
   const userFirstName = (user?.name || "Administrator").replace(/^Nurse\s+/i, "").split(" ")[0] || "Admin";
   const [adminUsers, setAdminUsers] = useState([]);
@@ -65,7 +68,8 @@ export default function Dashboard({ data, user }) {
     setCustomizing(true);
   };
   const savePreferences = async () => {
-    if (!preferenceDraft || preferencesSaving) return;
+    if (!preferenceDraft || preferencesSaving || preferencesSaveLock.current || preferencesLoading || preferencesError) return;
+    preferencesSaveLock.current = true;
     setPreferencesSaving(true);
     setPreferencesSaveError('');
     try {
@@ -77,6 +81,7 @@ export default function Dashboard({ data, user }) {
     } catch (error) {
       setPreferencesSaveError(error.message || 'Dashboard preferences could not be saved.');
     } finally {
+      preferencesSaveLock.current = false;
       setPreferencesSaving(false);
     }
   };
@@ -153,7 +158,7 @@ export default function Dashboard({ data, user }) {
       
       {isAdmin && <AdminDashboardWidgets
         users={adminUsers} pendingInvites={pendingInvites} loading={adminUsersLoading} error={adminUsersError}
-        preferences={preferences} navigate={navigate}
+        preferences={preferences} navigate={navigate} onReviewUpdated={() => setAdminUsersRetry((count) => count + 1)}
       />}
       <footer style={{ textAlign: 'center', fontSize: 'var(--type-compact)', color: 'var(--text-3)', padding: '2rem 0 1rem' }}>
         {data.settings.schoolYear} · <Heart size={12} aria-hidden="true" /> HealthMate+
@@ -162,7 +167,8 @@ export default function Dashboard({ data, user }) {
   );
 }
 
-function AdminDashboardWidgets({ users, pendingInvites, loading, error, preferences, navigate }) {
+function AdminDashboardWidgets({ users, pendingInvites, loading, error, preferences, navigate, onReviewUpdated }) {
+  const [reviewAccount, setReviewAccount] = useState(null);
   const metrics = {
     'admin.metric.total': <Stat to="/users" icon={Users} label="Total users" value={loading ? '…' : error ? '—' : users.length} change="System accounts" tone="teal" primary />,
     'admin.metric.active': <Stat to="/users?filter=active" icon={Users} label="Active users" value={loading ? '…' : error ? '—' : users.filter((account) => account.status === 'active').length} change="Active accounts" tone="teal" />,
@@ -186,9 +192,9 @@ function AdminDashboardWidgets({ users, pendingInvites, loading, error, preferen
       <Action icon={CalendarDays} label="Generate report" text="Open school health analytics" tone="amber" onClick={() => navigate('/reports')} />
       <Action icon={LockKeyhole} label="Audit history" text="Review recent access and admin events" tone="violet" onClick={() => navigate('/security')} />
     </div></section>,
-    'admin.pendingInvites': <section className="panel admin-widget-wide"><div className="panel-heading"><h3>Pending invitations</h3></div>
-      {loading ? <p role="status" className="field-hint">Loading invitations…</p> : error ? <p className="field-hint">Invitation status is unavailable. Retry above to refresh it.</p> : pendingInvites.length ? <div className="admin-invite-list">{pendingInvites.slice(0, 3).map((entry) => <div className="admin-invite-row" key={entry.username}><div><strong>{entry.name}</strong><br /><small>{entry.email}</small></div><button className="text-btn admin-invite-review" onClick={() => navigate('/users?filter=invited')}>Review</button></div>)}</div> : <p className="admin-invite-empty">No invitations are waiting for review.</p>}
-    </section>,
+    'admin.pendingInvites': <><section className="panel admin-widget-wide"><div className="panel-heading"><h3>Pending invitations</h3></div>
+      {loading ? <p role="status" className="field-hint">Loading invitations…</p> : error ? <p className="field-hint">Invitation status is unavailable. Retry above to refresh it.</p> : pendingInvites.length ? <div className="admin-invite-list">{pendingInvites.slice(0, 3).map((entry) => <div className="admin-invite-row" key={entry.username}><div><strong>{entry.name}</strong><br /><small>{entry.email}</small></div><button className="text-btn admin-invite-review" onClick={() => setReviewAccount(entry)}>Review</button></div>)}</div> : <p className="admin-invite-empty">No invitations are waiting for review.</p>}
+    </section>{reviewAccount && <AccountReviewDialog account={reviewAccount} onUpdated={onReviewUpdated} onClose={() => setReviewAccount(null)} />}</>,
   };
   return <div className="admin-dashboard-widget-grid" aria-label="Dashboard widgets">
     {preferences.widgets.filter((widget) => widget.visible).map(({ id }) => metrics[id]
@@ -209,16 +215,18 @@ function DashboardPreferencesControl({ role, preferences, draft, loading, error,
   const setVisible = (id, visible) => onChange({ ...draft, widgets: draft.widgets.map((widget) => widget.id === id ? { ...widget, visible } : widget) });
   const ordered = (draft?.widgets || preferences.widgets).map((widget) => ({ ...widget, label: registry.find(([id]) => id === widget.id)?.[1] || widget.id }));
   return <section className="dashboard-preferences-control" aria-label="Dashboard customization">
-    <div className="dashboard-preferences-trigger"><button type="button" className="secondary-btn" onClick={customizing ? onCancel : onOpen} disabled={loading}>{customizing ? 'Close customization' : 'Customize dashboard'}</button>{loading && <span className="field-hint" role="status">Loading saved layout…</span>}</div>
-    {error && <div className="error-banner" role="alert">{error} <button type="button" className="secondary-btn" onClick={onRetry}>Retry</button></div>}
-    {customizing && <div className="panel dashboard-preferences-editor"><div className="panel-heading"><div><h3>Dashboard cards and panels</h3><p className="field-hint">Choose what appears and move items to change their order.</p></div></div>
+    <div className="dashboard-preferences-trigger"><button type="button" className="secondary-btn" onClick={onOpen} disabled={loading}>Customize dashboard</button>{loading && <span className="field-hint" role="status">Loading saved layout…</span>}</div>
+    {error && !customizing && <div className="error-banner" role="alert">{error} <button type="button" className="secondary-btn" onClick={onRetry}>Retry</button></div>}
+    {customizing && <ModalDialog open title="Customize dashboard" eyebrow="Dashboard layout" onClose={onCancel} busy={saving} historyKey="dashboard-customize" className="admin-context-dialog dashboard-customize-dialog">
+      <p className="field-hint">Choose which cards and panels appear, and move them to change their order.</p>
+      {error && <div className="error-banner" role="alert">{error} <button type="button" className="secondary-btn" onClick={onRetry} disabled={loading}>{loading ? 'Loading…' : 'Retry'}</button></div>}
       <ol className="dashboard-preferences-list">{ordered.map((widget, index) => <li key={widget.id}>
-        <label className="checkbox-label"><input type="checkbox" checked={widget.visible} onChange={(event) => setVisible(widget.id, event.target.checked)} /><span>{widget.label}</span></label>
+        <label className="checkbox-label"><input type="checkbox" disabled={saving || loading} checked={widget.visible} onChange={(event) => setVisible(widget.id, event.target.checked)} /><span>{widget.label}</span></label>
         <div><button type="button" className="secondary-btn" aria-label={`Move ${widget.label} up`} onClick={() => move(index, -1)} disabled={index === 0 || saving}>Move up</button><button type="button" className="secondary-btn" aria-label={`Move ${widget.label} down`} onClick={() => move(index, 1)} disabled={index === ordered.length - 1 || saving}>Move down</button></div>
       </li>)}</ol>
       {saveError && <div className="error-banner" role="alert">{saveError}</div>}
-      <div className="dashboard-preferences-actions"><button type="button" className="secondary-btn" onClick={onReset} disabled={saving}>Reset defaults</button><button type="button" className="secondary-btn" onClick={onCancel} disabled={saving}>Cancel</button><button type="button" className="primary-btn" onClick={onSave} disabled={saving}>{saving ? 'Saving…' : 'Save layout'}</button></div>
-    </div>}
+      <div className="dashboard-preferences-actions"><button type="button" className="secondary-btn" onClick={onReset} disabled={saving}>Reset defaults</button><button type="button" className="secondary-btn" onClick={onCancel} disabled={saving}>Cancel</button><button type="button" className="primary-btn" onClick={onSave} disabled={saving || loading || Boolean(error)}>{saving ? 'Saving…' : 'Save layout'}</button></div>
+    </ModalDialog>}
   </section>;
 }
 

@@ -62,6 +62,7 @@ export default function StudentPicker({
       event.preventDefault();
       choose(matches[activeIndex]);
     } else if (event.key === 'Escape') {
+      if (open) { event.preventDefault(); event.stopPropagation(); }
       setOpen(false);
       setActiveIndex(-1);
     }

@@ -1,15 +1,22 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { RotateCcw } from 'lucide-react';
-import { Link, useLocation } from 'react-router-dom';
+import ModalDialog from './ModalDialog';
+import VerifiedStudentForm from './VerifiedStudentForm';
+import ListPagination from './ListPagination';
 import { api } from '../utils/api';
 import StudentPicker from './StudentPicker';
-
-const PAGE_SIZES = [10, 25, 50];
 
 const normalizedStudentId = (value) => String(value || '').trim().toLocaleLowerCase();
 
 export default function GuardianSignupRequests({ students = [] }) {
-  const location = useLocation();
+  const [selectedRequest, setSelectedRequest] = useState(null);
+  const [addingStudent, setAddingStudent] = useState(false);
+  const [studentSaving, setStudentSaving] = useState(false);
+  const [savedStudents, setSavedStudents] = useState([]);
+  const actionLock = useRef(false);
+  students = [...students.filter((student) => !savedStudents.some((saved) => saved.id === student.id)), ...savedStudents];
+  const closeReview = () => { setSelectedRequest(null); setAddingStudent(false); setRejectingId(''); setRejectionReason(''); setError(''); };
+  const openReview = (request) => { setAttestations((current) => ({ ...current, [request.id]: false })); setSelectedRequest(request); setAddingStudent(false); setMessage(''); setError(''); };
   const [filters, setFilters] = useState({ q: '', status: 'pending_review', order: 'newest', page: 1, limit: 25 });
   const [result, setResult] = useState({ requests: [], page: 1, pageCount: 1, total: 0 });
   const [loading, setLoading] = useState(true);
@@ -38,6 +45,8 @@ export default function GuardianSignupRequests({ students = [] }) {
 
   const updateFilter = (updates) => setFilters((current) => ({ ...current, ...updates, page: 1 }));
   const finish = async (requestId, action, body = {}) => {
+    if (actionLock.current) return;
+    actionLock.current = true;
     setBusyId(requestId);
     setError('');
     setMessage('');
@@ -49,6 +58,7 @@ export default function GuardianSignupRequests({ students = [] }) {
       setMessage(action === 'approve'
         ? `Request approved. Decision email ${emailStatus || 'queued'}.`
         : action === 'reject' ? `Request rejected. Decision email ${emailStatus || 'queued'}.` : `Notification ${emailStatus || 'queued'}.`);
+      setSelectedRequest(null);
       setAttestations((current) => ({ ...current, [requestId]: false }));
       setRejectingId('');
       setRejectionReason('');
@@ -57,6 +67,7 @@ export default function GuardianSignupRequests({ students = [] }) {
     } catch (requestError) {
       setError(requestError.message || 'The request could not be updated. Try again.');
     } finally {
+      actionLock.current = false;
       setBusyId('');
     }
   };
@@ -73,7 +84,7 @@ export default function GuardianSignupRequests({ students = [] }) {
     const suggestion = suggestedStudentFor(request);
     return <>
       {suggestion && <p className="field-hint">Possible ID match: <strong>{suggestion.name}</strong> · {suggestion.studentId} · {suggestion.gradeLevel || 'Grade not recorded'}{suggestion.section ? ` · ${suggestion.section}` : ''} <button type="button" className="table-action" onClick={() => { setStudentSelections((current) => ({ ...current, [request.id]: String(suggestion.id) })); setAttestations((current) => ({ ...current, [request.id]: false })); }} disabled={Boolean(busyId)}>Select this record</button></p>}
-      {!suggestion && <p className="field-hint">{request.studentId ? 'No unique ID match. Search the school roster by the child’s name and grade.' : 'No student ID was supplied. Search the school roster by the child’s name and grade.'}</p>}
+
       <StudentPicker
         students={students.filter((student) => student.patientType === 'student')}
         value={selectedId}
@@ -81,13 +92,13 @@ export default function GuardianSignupRequests({ students = [] }) {
         label="Choose school student record"
         itemLabel="student"
         searchPlaceholder="Search by student name or ID"
-        description="The ID suggestion is not selected automatically. Choose a roster record after checking school records."
+        description="Select a school record after checking the child’s identity and class placement."
         required
         disabled={Boolean(busyId)}
       />
-      {selectedStudent ? <div className="registration-selected-student"><strong>Chosen school record</strong><span>{selectedStudent.name} · {selectedStudent.studentId || 'Student ID unavailable'}</span><small>{selectedStudent.gradeLevel || 'Grade not recorded'}{selectedStudent.section ? ` · ${selectedStudent.section}` : ''}</small></div> : <p className="field-hint">Select a student record to enable approval.</p>}
-      <Link className="secondary-btn registration-add-student-link" to="/students/new" state={{ returnTo: `${location.pathname}${location.search}` }}>Add verified student record</Link>
-      <p className="field-hint">Staff must verify the official student ID, name, and grade before saving a roster record. Guardian claims never create student records.</p>
+      {selectedStudent ? <div className="registration-selected-student"><strong>Chosen school record</strong><span>{selectedStudent.name} · {selectedStudent.studentId || 'Student ID unavailable'}</span><small>{selectedStudent.gradeLevel || 'Grade not recorded'}{selectedStudent.section ? ` · ${selectedStudent.section}` : ''}</small></div> : null}
+      <button type="button" className="secondary-btn registration-add-student-link" onClick={() => setAddingStudent(true)} disabled={Boolean(busyId)}>Add verified student record</button>
+      <p className="field-hint">Add a roster record only after verifying official school records.</p>
     </>;
   };
 
@@ -112,7 +123,7 @@ export default function GuardianSignupRequests({ students = [] }) {
         <label>Search guardian requests<input type="search" maxLength={100} value={filters.q} placeholder="Name, email, username or student ID" onChange={(event) => updateFilter({ q: event.target.value })} /></label>
         <label>Status<select value={filters.status} onChange={(event) => updateFilter({ status: event.target.value })}><option value="pending_review">Awaiting review</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="all">All requests</option></select></label>
         <label>Order<select value={filters.order} onChange={(event) => updateFilter({ order: event.target.value })}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
-        <label>Page size<select value={filters.limit} onChange={(event) => updateFilter({ limit: Number(event.target.value) })}>{PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}</select></label>
+
       </div>
       {message && <p className="success-message" role="status">{message}</p>}
       {error && <div className="error-banner" role="alert">{error} <button type="button" className="secondary-btn" onClick={() => setRetry((count) => count + 1)}>Retry</button></div>}
@@ -126,7 +137,7 @@ export default function GuardianSignupRequests({ students = [] }) {
           <td><strong>{request.name}</strong><small>{request.email} · @{request.username}</small></td>
           <td><strong>{request.childName || 'Child name not recorded'}</strong><small>{request.gradeLevel || 'Grade not recorded'}{request.section ? ` · ${request.section}` : ''}</small><small>Student ID claim: {request.studentId || 'Not supplied'}</small><small>Relationship: {request.relationship}</small>{request.linkedStudent ? <div className="registration-selected-student"><strong>Linked school record</strong><span>{request.linkedStudent.name} · {request.linkedStudent.studentId || 'Student ID unavailable'}</span><small>{request.linkedStudent.gradeLevel || 'Grade not recorded'}{request.linkedStudent.section ? ` · ${request.linkedStudent.section}` : ''}</small></div> : request.linkedStudentStatus === 'not_recorded' && <small>Linked school record not recorded for this earlier approval.</small>}</td>
           <td><span className={`status-chip ${request.status === 'approved' ? 'success' : request.status === 'rejected' ? 'critical' : 'warn'}`}>{request.status === 'pending_review' ? 'Awaiting review' : request.status}</span><small>Decision email: {request.decisionEmailStatus}</small>{request.status === 'rejected' && request.decisionReason && <small>Reason: {request.decisionReason}</small>}</td>
-          <td>{renderReviewActions(request)}</td>
+          <td><button type="button" className="secondary-btn" disabled={loading} onClick={() => openReview(request)}>Review request</button></td>
         </tr>)}</tbody>
         </table></div>
         <div className="registration-request-cards" role="list" aria-label="Guardian registration requests">
@@ -136,11 +147,25 @@ export default function GuardianSignupRequests({ students = [] }) {
             <div className="registration-request-field"><span>Submitted child</span><div><strong>{request.childName || 'Child name not recorded'}</strong><small>{request.gradeLevel || 'Grade not recorded'}{request.section ? ` · ${request.section}` : ''}</small><small>Student ID claim: {request.studentId || 'Not supplied'}</small><small>Relationship: {request.relationship}</small></div></div>
             {request.linkedStudent ? <div className="registration-request-field"><span>Linked record</span><div><strong>{request.linkedStudent.name}</strong><small>{request.linkedStudent.studentId || 'Student ID unavailable'} · {request.linkedStudent.gradeLevel || 'Grade not recorded'}{request.linkedStudent.section ? ` · ${request.linkedStudent.section}` : ''}</small></div></div> : request.linkedStudentStatus === 'not_recorded' && <div className="registration-request-field"><span>Linked record</span><small>Not recorded for this earlier approval.</small></div>}
             <div className="registration-request-field"><span>Status</span><div><span className={`status-chip ${request.status === 'approved' ? 'success' : request.status === 'rejected' ? 'critical' : 'warn'}`}>{request.status === 'pending_review' ? 'Awaiting review' : request.status}</span><small>Decision email: {request.decisionEmailStatus}</small>{request.status === 'rejected' && request.decisionReason && <small>Reason: {request.decisionReason}</small>}</div></div>
-            <div className="registration-request-review"><strong>Review</strong>{renderReviewActions(request)}</div>
+            <div className="registration-request-review"><strong>Review</strong><button type="button" className="secondary-btn" disabled={loading} onClick={() => openReview(request)}>Review request</button></div>
           </article>)}
         </div>
       </>}
-      {result.total > 0 && <div className="list-pagination"><p>Page {result.page} of {result.pageCount} · {result.total} requests</p><div className="list-pagination-actions"><button type="button" className="secondary-btn" disabled={loading || result.page <= 1} onClick={() => setFilters((current) => ({ ...current, page: current.page - 1 }))}>Previous</button><button type="button" className="secondary-btn" disabled={loading || result.page >= result.pageCount} onClick={() => setFilters((current) => ({ ...current, page: current.page + 1 }))}>Next</button></div></div>}
+      <ListPagination page={result.page} pageCount={result.pageCount} pageSize={filters.limit} total={result.total} onPageChange={(page) => setFilters((current) => ({ ...current, page }))} onPageSizeChange={(limit) => updateFilter({ limit })} />
+      {selectedRequest && <ModalDialog open title={addingStudent ? 'Add verified student record' : `Review request · ${selectedRequest.name}`} eyebrow="Guardian registration" onClose={closeReview} busy={Boolean(busyId) || studentSaving} historyKey="guardian-review" className="admin-context-dialog" initialFocusSelector={addingStudent ? 'input' : undefined}>
+        {addingStudent ? <VerifiedStudentForm onBusyChange={setStudentSaving} onCancel={() => setAddingStudent(false)} onSaved={(student) => {
+          setSavedStudents((current) => [...current.filter((entry) => entry.id !== student.id), student]);
+          setAddingStudent(false);
+          setMessage(`Student record saved: ${student.name}. Select the verified record and confirm the relationship before approval.`);
+        }} /> : <>
+          <dl className="context-record-summary"><div><dt>Applicant</dt><dd>{selectedRequest.name}<small>{selectedRequest.email}</small></dd></div><div><dt>Submitted child</dt><dd>{selectedRequest.childName || 'Not recorded'}<small>{selectedRequest.gradeLevel || 'Grade not recorded'} · {selectedRequest.section || 'Section not recorded'}</small></dd></div><div><dt>Student ID claim</dt><dd>{selectedRequest.studentId || 'Not supplied'}</dd></div><div><dt>Relationship</dt><dd>{selectedRequest.relationship}</dd></div></dl>
+          {error && <div className="error-banner" role="alert">{error}</div>}
+          {message && <p className="success-message" role="status">{message}</p>}
+          {renderReviewActions(selectedRequest)}
+          <div className="form-actions"><button type="button" className="secondary-btn" onClick={closeReview} disabled={Boolean(busyId)}>Close review</button></div>
+        </>}
+      </ModalDialog>}
+
     </section>
   );
 }

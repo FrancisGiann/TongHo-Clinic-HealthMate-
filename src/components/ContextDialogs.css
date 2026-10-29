@@ -1,0 +1,49 @@
+/* Contextual admin work stays in one focused dialog, preserving the table. */
+.admin-context-dialog .context-dialog-form,
+.admin-context-dialog .registration-review-actions { display: grid; gap: 16px; }
+.admin-context-dialog .context-dialog-form label,
+.admin-context-dialog .registration-review-actions label { min-width: 0; }
+.admin-context-dialog .context-form-fields { display: grid; gap: 16px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.context-record-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 16px; margin: 0 0 20px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+.context-record-summary dt { color: var(--muted); font-size: var(--type-compact); margin-bottom: 4px; }
+.context-record-summary dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.context-record-summary small { display: block; font-weight: 400; margin-top: 4px; color: var(--muted); }
+.context-confirmation { padding: 16px; border: 1px solid var(--line); border-radius: 10px; }
+.registration-review .registration-review-filters { grid-template-columns: minmax(200px, 2fr) repeat(2, minmax(140px, 1fr)); }
+.registration-review .registration-request-table td { vertical-align: top; }
+.registration-review .registration-request-table th:last-child { width: 150px; }
+.list-pagination > .list-page-size { display: inline-flex; flex: 0 0 auto; width: auto; grid-template-columns: none; gap: 10px; margin: 0; white-space: nowrap; }
+.list-pagination > .list-page-size span { flex: 0 0 auto; }
+.list-pagination > .list-page-size select { flex: 0 0 76px; width: 76px; min-width: 76px; margin: 0; padding: 8px 12px; }
+@media (max-width: 640px) {
+  .admin-context-dialog { width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; padding: 20px 16px; }
+  .context-record-summary { grid-template-columns: minmax(0, 1fr); }
+  .registration-review .registration-review-filters { grid-template-columns: minmax(0, 1fr); }
+  .list-pagination { justify-content: flex-start; gap: 16px; }
+  .list-pagination > p { flex-basis: 100%; }
+  .list-pagination .list-pagination-actions { flex-wrap: wrap; gap: 8px; }
+}
+
+.admin-context-dialog .context-dialog-form label { margin: 0; gap: 6px; }
+.admin-context-dialog .context-dialog-form label :is(input, select) { margin-top: 0; }
+.admin-context-dialog label.check-label { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; font-weight: 400; margin: 0; }
+.admin-context-dialog label.check-label input { flex: 0 0 18px; width: 18px; height: 18px; margin: 2px 0 0; padding: 0; }
+.admin-context-dialog .context-dialog-form h4 { margin: 0 0 6px; }
+.admin-context-dialog .context-dialog-form p { margin: 0; }
+.admin-context-dialog .context-dialog-form .form-actions { margin-top: 4px; }
+.registration-review .registration-request-table .secondary-btn { white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .admin-context-dialog { animation: none; } }
+
+.admin-context-dialog .registration-review-actions { gap: 12px; }
+.admin-context-dialog .registration-review-actions > p { margin: 0; }
+.admin-context-dialog .student-picker > label { margin: 0 0 8px; }
+.admin-context-dialog .student-picker > p { margin: 8px 0 0; }
+.admin-context-dialog .context-form-fields .two-fields { gap: 16px; }
+.admin-context-dialog .modal-heading { position: sticky; top: -24px; z-index: 2; padding: 8px 0; background: var(--white); }
+.dark .admin-context-dialog .modal-heading { background: #192c45; }
+@media (max-width: 640px) { .admin-context-dialog .modal-heading { top: -20px; } }
+
+.dashboard-customize-dialog .dashboard-preferences-list li > label { flex-direction: row; }
+.dashboard-customize-dialog .dashboard-preferences-actions { position: sticky; bottom: -24px; padding: 16px 0 8px; background: var(--white); }
+.dark .dashboard-customize-dialog .dashboard-preferences-actions { background: #192c45; }
+@media (max-width: 640px) { .dashboard-customize-dialog .dashboard-preferences-actions { bottom: -20px; } }
