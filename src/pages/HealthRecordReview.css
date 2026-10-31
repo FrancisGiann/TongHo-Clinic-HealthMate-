@@ -1,0 +1,53 @@
+.health-review-tabs { display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+.health-review-tabs button { min-height: 44px; padding: 10px 15px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-weight: 600; cursor: pointer; }
+.health-review-tabs button:hover { background: var(--surface-soft, #f1f5f9); color: var(--ink); }
+.health-review-tabs button.active { color: var(--teal-dark); border-color: var(--line); background: var(--white); }
+.health-review-tabs button:focus-visible, .paper-student-results button:focus-visible { outline: 2px solid var(--teal-dark); outline-offset: 2px; }
+.health-review-search { display: grid; gap: 6px; }
+.health-review-search > label { color: var(--ink); font-weight: 600; }
+.health-review-search > div { display: flex; gap: 10px; align-items: center; }
+.health-review-search input { flex: 1; min-width: 0; margin: 0; }
+.health-record-review-page .review-submission { padding: 0; border-radius: 8px; }
+.health-record-review-page .review-record-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px; cursor: pointer; color: var(--ink); }
+.review-record-summary > span:first-child { display: grid; flex: 1; min-width: 180px; gap: 4px; }
+.review-record-summary > span:first-child > span { color: var(--muted); font-size: var(--type-compact); }
+.review-record-summary > span:last-child { color: var(--teal-dark); font-size: var(--type-compact); font-weight: 600; }
+.review-record-body { padding: 16px; border-top: 1px solid var(--line); }
+.review-record-body > label { display: grid; gap: 6px; margin: 16px 0; }
+.health-record-review-page .review-record-body dd, .health-record-review-page .review-history-item, .review-record-summary { overflow-wrap: anywhere; }
+.health-record-review-page .review-record-body .panel-heading { flex-wrap: wrap; }
+.paper-student-picker { display: grid; gap: 10px; }
+.paper-student-picker > input { margin: 0; }
+.paper-student-picker > button { justify-self: start; }
+.paper-student-results { display: grid; margin: 0; padding: 0; list-style: none; max-height: 360px; overflow-y: auto; }
+.paper-student-results li + li { border-top: 1px solid var(--line); }
+.paper-student-results button { display: grid; gap: 4px; text-align: left; width: 100%; padding: 12px; border: 0; background: transparent; color: var(--ink); font: inherit; cursor: pointer; overflow-wrap: anywhere; }
+.paper-student-results button:hover { background: var(--surface-soft, #f1f5f9); }
+.paper-student-results span, .paper-selected-student span { color: var(--muted); font-size: var(--type-compact); }
+.paper-selected-student { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
+.paper-selected-student > div { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.paper-section-tabs { margin: 20px 0; }
+.health-record-review-page .form-panel form > .form-section { margin-top: 16px; }
+.health-record-review-page .review-answer-groups section { padding: 0; border: 0; }
+.dark .health-review-tabs button.active { background: #1e2329; color: #9bbae3; }
+.dark .review-record-summary > span:last-child { color: #9bbae3; }
+@media (max-width: 600px) {
+  .health-review-tabs { display: grid; grid-template-columns: 1fr; }
+  .health-review-tabs button { text-align: left; }
+  .health-review-search > div { flex-wrap: wrap; }
+  .health-review-search input { flex-basis: calc(100% - 30px); }
+  .health-record-review-page .form-actions { flex-wrap: wrap; }
+  .health-record-review-page .form-actions button { white-space: normal; height: auto; min-height: 44px; }
+  .paper-selected-student { align-items: start; flex-wrap: wrap; }
+  .review-record-summary > span:first-child { flex-basis: 100%; }
+}
+
+.health-review-search input, .paper-student-picker > input { box-sizing: border-box; min-height: 44px; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--white); color: var(--ink); font: inherit; }
+.health-review-search input::placeholder, .paper-student-picker > input::placeholder { color: var(--muted); opacity: 1; }
+.health-review-search input:focus-visible, .paper-student-picker > input:focus-visible { outline: 2px solid var(--teal-dark); outline-offset: 2px; }
+.dark .health-review-search input, .dark .paper-student-picker > input { background: #1e2329; }
+
+.health-record-review-page .checkbox-group { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: transparent; gap: 14px; }
+.health-record-review-page .checkbox-label { min-width: 0; overflow-wrap: anywhere; }
+.dark .health-record-review-page .primary-btn { color: #132d4c; }
+@media (max-width: 600px) { .health-record-review-page .checkbox-group { grid-template-columns: minmax(0, 1fr); } }

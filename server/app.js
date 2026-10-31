@@ -1598,6 +1598,7 @@ export function createApp({
 
   app.get('/api/nurse/health-record-submissions', requireRoles('school_nurse'), async (req, res) => {
     const history = req.query.history === 'true';
+    const studentSearch = String(req.query.q || '').trim().slice(0, 200);
     const parsedOffset = Number.parseInt(String(req.query.offset || '0'), 10);
     const offset = Number.isInteger(parsedOffset) && parsedOffset > 0 ? Math.min(parsedOffset, 100000) : 0;
     const pageSize = 100;
@@ -1608,10 +1609,11 @@ export function createApp({
               u.name AS guardian_name
        FROM health_record_submissions s JOIN patients p ON p.id=s.patient_id
        LEFT JOIN users u ON u.id=s.guardian_user_id
-       WHERE ($1::boolean AND s.status IN ('accepted','superseded'))
-          OR (NOT $1::boolean AND s.status IN ('pending_review','changes_requested'))
+       WHERE (($1::boolean AND s.status IN ('accepted','superseded'))
+          OR (NOT $1::boolean AND s.status IN ('pending_review','changes_requested')))
+         AND ($4 = '' OR strpos(lower(concat_ws(' ', p.data->>'name', p.data->>'studentId')), lower($4)) > 0)
        ORDER BY s.created_at DESC,s.id DESC LIMIT $2 OFFSET $3`,
-      [history, pageSize + 1, offset],
+      [history, pageSize + 1, offset, studentSearch],
     );
     const hasMore = result.rows.length > pageSize;
     return res.json({ data: { submissions: result.rows.slice(0, pageSize), nextOffset: hasMore ? offset + pageSize : null } });

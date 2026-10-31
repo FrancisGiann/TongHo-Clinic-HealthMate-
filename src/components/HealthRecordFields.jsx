@@ -36,14 +36,14 @@ const presentIllnesses = [
 const homeMedicines = [['pain', 'Pain reliever', 'painName'], ['fever', 'Fever medicine', 'feverName'], ['allergies', 'Allergy medicine', 'allergiesName'], ['stomachache', 'Stomach medicine', 'stomachacheName']];
 const documents = [['psychiatricEvaluation', 'Psychiatric evaluation'], ['diagnosticAssessment', 'Diagnostic assessment'], ['medicationRecords', 'Medication records']];
 
-export default function HealthRecordFields({ value, onChange, disabled = false }) {
+export default function HealthRecordFields({ value, onChange, disabled = false, section }) {
   const form = { ...emptyHealthRecord(), ...(value || {}) };
   const setField = (key, next) => onChange({ ...form, [key]: next });
   const setFields = (updates) => onChange({ ...form, ...updates });
   const setNested = (key, field, next) => onChange({ ...form, [key]: { ...form[key], [field]: next } });
   return (
     <>
-      <section className="form-section">
+      {(section === undefined || section === 0) && <section className="form-section">
         <h3 className="section-title">Student and family details</h3>
         <div className="three-fields">
           <label>Date of birth<input type="date" value={form.birthDate} onChange={(event) => setField('birthDate', event.target.value)} disabled={disabled} /></label>
@@ -59,9 +59,9 @@ export default function HealthRecordFields({ value, onChange, disabled = false }
           <label>Relationship<select value={form.guardianRelation} onChange={(event) => setField('guardianRelation', event.target.value)} disabled={disabled}><option>Parent</option><option>Grandparent</option><option>Aunt/Uncle</option><option>Legal guardian</option><option>Other</option></select></label>
           <label>Contact number<input type="tel" maxLength={40} value={form.guardianPhone} onChange={(event) => setField('guardianPhone', event.target.value)} disabled={disabled} /></label>
         </div>
-      </section>
+      </section>}
 
-      <section className="form-section">
+      {(section === undefined || section === 1) && <section className="form-section">
         <h3 className="section-title">Health information</h3>
         <div className="two-fields">
           <label>Blood type <span className="field-hint">Optional</span><select value={form.bloodType} onChange={(event) => setField('bloodType', event.target.value)} disabled={disabled}><option value="">Not known / not provided</option>{['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-'].map((item) => <option key={item}>{item}</option>)}</select></label>
@@ -76,9 +76,9 @@ export default function HealthRecordFields({ value, onChange, disabled = false }
         {form.presentIllness.skinDisorder === true && <label>Skin disorder, specify<input maxLength={200} value={form.presentIllness.skinDisorderDetails || ''} onChange={(event) => setNested('presentIllness', 'skinDisorderDetails', event.target.value)} disabled={disabled} /></label>}
         {form.presentIllness.eyeDisorder === true && <label>Eye disorder, specify<input maxLength={200} value={form.presentIllness.eyeDisorderDetails || ''} onChange={(event) => setNested('presentIllness', 'eyeDisorderDetails', event.target.value)} disabled={disabled} /></label>}
         <label>Other current conditions<input maxLength={1000} value={form.presentIllness.otherPresentIllness || ''} onChange={(event) => setNested('presentIllness', 'otherPresentIllness', event.target.value)} disabled={disabled} /></label>
-      </section>
+      </section>}
 
-      <section className="form-section">
+      {(section === undefined || section === 2) && <section className="form-section">
         <h3 className="section-title">Care history</h3>
         <label>Hospitalized in the past year<BinarySelect value={form.hospitalizationHistory} onChange={(next) => setField('hospitalizationHistory', next)} disabled={disabled} /></label>
         {form.hospitalizationHistory && <label>Reason and dates<textarea maxLength={1000} rows={2} value={form.hospitalizationDetails} onChange={(event) => setField('hospitalizationDetails', event.target.value)} disabled={disabled} /></label>}
@@ -93,7 +93,7 @@ export default function HealthRecordFields({ value, onChange, disabled = false }
         <label>Health concern to share<BinarySelect value={form.hasConcerns} onChange={(next) => setField('hasConcerns', next)} disabled={disabled} /></label>
         {form.hasConcerns && <label>Concern details<textarea maxLength={2000} rows={3} value={form.concernsDetails} onChange={(event) => setField('concernsDetails', event.target.value)} disabled={disabled} /></label>}
         <ChoiceGroup title="Documents I submitted" items={documents} value={form.documentsSubmitted} setValue={(field, next) => setNested('documentsSubmitted', field, next)} disabled={disabled} />
-      </section>
+      </section>}
     </>
   );
 }
