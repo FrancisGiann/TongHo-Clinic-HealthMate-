@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   activateAccount,
   authenticateUser,
+  clearPasswordReset,
   requestPasswordReset,
   requestGuardianSignup,
   resetPassword,
@@ -37,6 +38,12 @@ export default function Login({ onLogin, authError = '' }) {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
+  const [resetStep, setResetStep] = useState(1);
+  const [resetResendUntil, setResetResendUntil] = useState(0);
+  const [resetResendSeconds, setResetResendSeconds] = useState(0);
+  const resetInputRef = useRef(null);
+  const resetBusyRef = useRef(false);
+  const resetVersionRef = useRef(0);
   const guardianSignupFormRef = useRef(null);
   const guardianSignupHeadingRef = useRef(null);
   const signupErrorRef = useRef(null);
@@ -76,13 +83,65 @@ export default function Login({ onLogin, authError = '' }) {
     navigate(returnTo, { replace: true });
   };
 
-  const requestReset = async () => {
+  const clearReset = () => {
+    resetVersionRef.current += 1;
+    clearPasswordReset();
+    setResetStep(1);
+    setCode('');
+    setNewPassword('');
+    setConfirmPassword('');
+  };
+
+  useEffect(() => () => {
+    resetVersionRef.current += 1;
+    clearPasswordReset();
+  }, []);
+
+  useEffect(() => {
+    if (mode === 'forgot') resetInputRef.current?.focus();
+  }, [mode, resetStep]);
+
+  useEffect(() => {
+    if (mode === 'forgot' && error) signupErrorRef.current?.focus();
+  }, [mode, error]);
+
+  useEffect(() => {
+    if (!resetResendUntil) return undefined;
+    const update = () => {
+      const seconds = Math.max(0, Math.ceil((resetResendUntil - Date.now()) / 1000));
+      setResetResendSeconds(seconds);
+      if (seconds === 0) window.clearInterval(timer);
+    };
+    const timer = window.setInterval(update, 1000);
+    update();
+    return () => window.clearInterval(timer);
+  }, [resetResendUntil]);
+
+  const requestReset = async (event) => {
+    event?.preventDefault();
+    if (resetBusyRef.current || loading || Date.now() < resetResendUntil) return;
     clearMessages();
+    if (!identifier.trim()) return setError('Enter your email or username.');
+    const version = resetVersionRef.current;
+    resetBusyRef.current = true;
     setLoading(true);
-    const result = await requestPasswordReset(identifier);
+    const result = await requestPasswordReset(identifier.trim());
+    if (version !== resetVersionRef.current) return;
+    resetBusyRef.current = false;
     setLoading(false);
-    if (!result.success) return setError(result.error);
-    setSuccess(result.message);
+    if (!result.success) {
+      if (result.code === 'OTP_COOLDOWN') setResetResendUntil(Date.now() + 60_000);
+      setError(result.error);
+      return;
+    }
+    setIdentifier(identifier.trim());
+    setCode('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setResetResendUntil(Date.now() + 60_000);
+    setSuccess(result.message || 'If the account exists, a reset code was sent.');
+    setResetStep(2);
+    resetInputRef.current?.focus();
   };
 
   useEffect(() => {
@@ -211,16 +270,23 @@ export default function Login({ onLogin, authError = '' }) {
 
   const confirmReset = async (event) => {
     event.preventDefault();
+    if (resetBusyRef.current || loading || resetStep !== 2) return;
     clearMessages();
     if (newPassword !== confirmPassword) return setError('Passwords do not match.');
     const strength = validatePasswordStrength(newPassword);
     if (!strength.valid) return setError(strength.error);
+    const version = resetVersionRef.current;
+    resetBusyRef.current = true;
     setLoading(true);
     const result = await resetPassword(identifier, code, newPassword);
+    if (version !== resetVersionRef.current) return;
+    resetBusyRef.current = false;
     setLoading(false);
     if (!result.success) return setError(result.error);
+    clearReset();
+    setPassword('');
     setSuccess(result.message);
-    setTimeout(() => setMode('signin'), 1200);
+    setMode('signin');
   };
 
   const activate = async (event) => {
@@ -244,6 +310,7 @@ export default function Login({ onLogin, authError = '' }) {
 
   const back = () => {
     clearMessages();
+    if (mode === 'forgot') clearReset();
     setCode('');
     setNewPassword('');
     setConfirmPassword('');
@@ -285,7 +352,7 @@ export default function Login({ onLogin, authError = '' }) {
             <PasswordField label="Password" value={password} onChange={setPassword} autoComplete="current-password" />
             <div className="login-options-row">
               <label className="remember-me"><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} /> Keep me signed in on this browser for up to 12 hours</label>
-              <button type="button" className="text-link-button" onClick={() => { clearMessages(); setMode('forgot'); }}>Forgot password?</button>
+              <button type="button" className="text-link-button" onClick={() => { clearMessages(); clearReset(); setMode('forgot'); }} disabled={loading}>Forgot password?</button>
             </div>
             <button type="submit" className="login-btn" disabled={loading}>{loading ? 'Signing in…' : <><Shield size={16} /> Sign in securely</>}</button>
             <p className="login-help">Staff accounts are issued by the clinic administrator.</p>
@@ -374,23 +441,33 @@ export default function Login({ onLogin, authError = '' }) {
         )}
 
         {mode === 'forgot' && (
-          <form onSubmit={confirmReset} className="login-form">
-            <Intro title="Reset your password" text="Request a code, then choose a new secure password." />
-            <Field icon={Mail} label="Email / Username" inputId="reset-identifier">
-              <input id="reset-identifier" value={identifier} onChange={(event) => setIdentifier(event.target.value)} autoComplete="username" required />
-            </Field>
-            <button type="button" className="signup-link" onClick={requestReset} disabled={loading}><KeyRound size={16} /> Send reset code</button>
-            <Field icon={KeyRound} label="Reset code" inputId="reset-code">
-              <input id="reset-code" inputMode="numeric" pattern="\d{6}" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ''))} required />
-            </Field>
-            <PasswordPair
-              password={newPassword}
-              confirmPassword={confirmPassword}
-              onPasswordChange={setNewPassword}
-              onConfirmPasswordChange={setConfirmPassword}
-            />
-            <button type="submit" className="login-btn" disabled={loading}>{loading ? 'Resetting…' : 'Reset password'}</button>
-            <BackButton onClick={back} />
+          <form onSubmit={resetStep === 1 ? requestReset : confirmReset} className="login-form" aria-busy={loading}>
+            <Intro title="Reset your password" text={resetStep === 1 ? 'Enter your registered email or username to request a reset code.' : 'Enter your reset code and choose a new secure password.'} />
+            {resetStep === 1 ? (
+              <>
+                <Field icon={Mail} label="Email / Username" inputId="reset-identifier">
+                  <input ref={resetInputRef} id="reset-identifier" maxLength={254} value={identifier} onChange={(event) => { setIdentifier(event.target.value); clearMessages(); }} autoComplete="username" required disabled={loading} />
+                </Field>
+                <button type="submit" className="login-btn" disabled={loading || resetResendSeconds > 0}>{loading ? 'Requesting code…' : resetResendSeconds > 0 ? `Send reset code in ${resetResendSeconds}s` : 'Send reset code'}</button>
+              </>
+            ) : (
+              <>
+                <p className="field-hint" style={{ color: 'var(--hm-muted)' }}>Reset requested for <strong style={{ overflowWrap: 'anywhere' }}>{identifier}</strong>. If a code arrives, enter it below.</p>
+                <Field icon={KeyRound} label="Reset code" inputId="reset-code">
+                  <input ref={resetInputRef} id="reset-code" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ''))} required />
+                </Field>
+                <PasswordPair
+                  password={newPassword}
+                  confirmPassword={confirmPassword}
+                  onPasswordChange={setNewPassword}
+                  onConfirmPasswordChange={setConfirmPassword}
+                />
+                <button type="submit" className="login-btn" disabled={loading || code.length !== 6}>{loading ? 'Resetting…' : 'Reset password'}</button>
+                <button type="button" className="signup-link" onClick={requestReset} disabled={loading || resetResendSeconds > 0}>{resetResendSeconds > 0 ? `Resend code in ${resetResendSeconds}s` : 'Resend code'}</button>
+                <button type="button" className="signup-link" onClick={() => { clearMessages(); clearReset(); }} disabled={loading}>Change email / username</button>
+              </>
+            )}
+            <button type="button" className="back-to-signin" onClick={back} disabled={loading}><ArrowLeft size={16} /> Back to sign in</button>
           </form>
         )}
 

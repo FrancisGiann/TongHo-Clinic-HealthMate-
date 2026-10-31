@@ -1,6 +1,12 @@
-import { api } from './api';
+import { api } from './api.js';
 
 let resetChallengeId = null;
+let resetRequestVersion = 0;
+
+export function clearPasswordReset() {
+  resetChallengeId = null;
+  resetRequestVersion += 1;
+}
 
 function failure(error) {
   return {
@@ -52,8 +58,10 @@ export async function logoutUser() {
 }
 
 export async function requestPasswordReset(identifier) {
+  const requestVersion = ++resetRequestVersion;
   try {
     const result = await api.post('/api/auth/password-reset/request', { identifier });
+    if (requestVersion !== resetRequestVersion) return { success: false, error: 'Request a new password reset code first.' };
     resetChallengeId = result.challengeId;
     return { success: true, ...result };
   } catch (error) {
@@ -63,9 +71,11 @@ export async function requestPasswordReset(identifier) {
 
 export async function resetPassword(_identifier, code, password) {
   if (!resetChallengeId) return { success: false, error: 'Request a new password reset code first.' };
+  const challengeId = resetChallengeId;
+  const requestVersion = resetRequestVersion;
   try {
-    const result = await api.post('/api/auth/password-reset/confirm', { challengeId: resetChallengeId, code, password });
-    resetChallengeId = null;
+    const result = await api.post('/api/auth/password-reset/confirm', { challengeId, code, password });
+    if (requestVersion === resetRequestVersion) resetChallengeId = null;
     return { success: true, ...result };
   } catch (error) {
     return failure(error);
