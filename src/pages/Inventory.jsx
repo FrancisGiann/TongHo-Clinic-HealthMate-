@@ -15,6 +15,7 @@ import { api } from "../utils/api";
 import ModalDialog from "../components/ModalDialog";
 import { compareValues, readListState, sortAndPaginate, updateListParams } from "../utils/listState.js";
 import ListPagination from "../components/ListPagination.jsx";
+import "./Inventory.css";
 
 const categories = ["Analgesics", "First Aid", "Supplies", "Respiratory", "Antibiotics", "Vitamins", "Emergency"];
 const units = ["tablets", "pieces", "packs", "sachets", "inhalers", "bottles", "boxes", "ml"];
@@ -290,15 +291,19 @@ export default function Inventory({ data, applyServerData, reload, saving = fals
             <h3>Medications & supplies</h3>
           </div>
           <div className="toolbar-inline">
-            <div className="search-box compact">
-              <Search size={16} aria-hidden="true" />
-              <input
-                value={list.q}
-                onChange={(e) => setListValue('q', e.target.value)}
-                placeholder="Search inventory..."
-                aria-label="Search inventory items"
-              />
-            </div>
+            <label className="directory-filter inventory-search-filter">
+              Search
+              <span className="search-box compact inventory-search-control">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  type="search"
+                  value={list.q}
+                  onChange={(e) => setListValue('q', e.target.value)}
+                  placeholder="Search inventory..."
+                  aria-label="Search inventory items"
+                />
+              </span>
+            </label>
             <label className="directory-filter">Sort by<select value={list.sort} onChange={(event) => setListValue('sort', event.target.value)}><option value="name">Name</option><option value="quantity">Quantity</option><option value="expiry">Expiry date</option></select></label>
             <label className="directory-filter">Order<select value={list.order} onChange={(event) => setListValue('order', event.target.value)}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
           </div>
