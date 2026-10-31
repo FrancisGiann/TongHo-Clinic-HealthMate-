@@ -8,6 +8,7 @@ import ListPagination from '../components/ListPagination.jsx';
 import StudentPicker from '../components/StudentPicker';
 import ModalDialog from '../components/ModalDialog';
 import AppointmentAvailability from '../components/AppointmentAvailability.jsx';
+import './Appointments.css';
 
 function manilaDateTimeNow() {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {

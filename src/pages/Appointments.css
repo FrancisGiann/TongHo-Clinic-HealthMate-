@@ -1,0 +1,63 @@
+/* Keep picker labels and native fields on the same form rhythm. */
+.appointment-form {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.appointment-form.appointment-dialog-form {
+  box-shadow: none;
+}
+
+.appointment-form .two-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+  margin-bottom: 0;
+}
+
+.appointment-form label {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+}
+
+.appointment-form label :is(input, select, textarea) {
+  min-width: 0;
+  margin-top: 0;
+}
+
+.appointment-form .student-picker {
+  align-content: start;
+  gap: 8px;
+}
+
+.appointment-form .student-picker .search-box,
+.appointment-form label > :is(input, select) {
+  height: 48px;
+  min-width: 0;
+}
+
+.appointment-form .search-box input {
+  min-width: 0;
+}
+
+.appointment-form .search-box > svg {
+  flex-shrink: 0;
+}
+
+.appointment-form .student-picker-options :is(strong, span) {
+  overflow-wrap: anywhere;
+}
+
+.appointment-form .slot-guidance:empty {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .appointment-form .two-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+}
