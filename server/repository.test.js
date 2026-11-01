@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { advanceClinicDataVersion, hydrateAuthoritativeRecord, loadClinicData, loadNurseDashboardData, saveClinicData, saveClinicDataInTransaction, studentRecordForUser, syncCollection, syncPatients, validateClinicDataPayload, validateRosterSnapshot, validateVersionAfterAdvance } from './repository.js';
+import { advanceClinicDataVersion, hydrateAuthoritativeRecord, loadClinicData, loadNurseDashboardData, loadPatientClinicReportData, loadPatientDirectory, loadPatientDirectoryExport, loadPatientPicker, saveClinicData, saveClinicDataInTransaction, studentRecordForUser, syncCollection, syncPatients, validateClinicDataPayload, validateRosterSnapshot, validateVersionAfterAdvance } from './repository.js';
 
 function clinicReadResult(overrides = {}) {
   return { rows: [{
@@ -468,4 +468,90 @@ test('nurse dashboard summary returns bounded rows and preserves appointment cou
     { id: 'student-1', name: 'Ari Santos' },
     { id: 'student-2', name: 'Bea Cruz' },
   ]);
+});
+
+test('patient directory clamps pages, reads current-page visits, and uses one read-only snapshot', async () => {
+  const calls = [];
+  const queryFn = async (sql, params) => {
+    calls.push({ sql, params });
+    if (/^SET TRANSACTION/.test(sql)) return { rows: [] };
+    if (/FROM visits/.test(sql)) return { rows: [] };
+    return { rows: [{
+      filtered_total: 26, page_no: 2, page_count: 2, roster_total: 99, schema_version: 12,
+      settings: { schoolName: 'Synthetic clinic' },
+      patients: [{ id: 'student-26', patient_type: 'student', data: { name: 'Student 26', gradeLevel: 'Grade 2' }, latestVisit: null }],
+      grades: ['Kindergarten', 'Grade 1', 'Kinder 1'], sections: ['A'],
+    }] };
+  };
+  let transactionInvocations = 0;
+  const page = await loadPatientDirectory({ page: '9', pageSize: '25' }, {
+    queryFn,
+    transactionFn: async (work) => {
+      transactionInvocations += 1;
+      return work({ query: queryFn });
+    },
+  });
+  assert.equal(transactionInvocations, 1);
+  assert.equal(calls.length, 3, 'One SET, one directory query, and one narrow visit query are issued in the same transaction.');
+  assert.match(calls[0].sql, /^SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY/);
+  assert.deepEqual(calls[1].params, [null, null, null, '', 25, 9]);
+  assert.match(calls[2].sql, /FROM visits/);
+  assert.deepEqual(calls[2].params, [['student-26']]);
+  assert.equal(page.page, 2);
+  assert.equal(page.pageCount, 2);
+  assert.equal(page.total, 26);
+  assert.equal(page.patients[0].id, 'student-26');
+});
+
+test('patient export projects only the current CSV fields and includes the created_at sort column', async () => {
+  let sqlSeen = '';
+  const exported = await loadPatientDirectoryExport({ queryFn: async (sql) => {
+    sqlSeen = sql;
+    return { rows: [{ students: [{ id: 's1', patient_type: 'student', data: { name: 'Synthetic', studentId: 'ID-1' } }], visits: [{ patientId: 's1', studentId: 'ID-1', chiefComplaint: 'Cough' }] }] };
+  } });
+  assert.match(sqlSeen, /SELECT id,patient_type,data,created_at FROM patients/);
+  assert.match(sqlSeen, /ORDER BY p\.created_at/);
+  assert.match(sqlSeen, /FROM visits v JOIN patients_in_scope p ON p\.id=v\.patient_id/);
+  assert.match(sqlSeen, /COALESCE\(NULLIF\(v\.data->>'studentId',''\),v\.data->>'patientId',''\)/);
+  assert.doesNotMatch(sqlSeen, /requestFingerprint|guardianHealthRecord|profileImage/);
+  assert.equal(exported.students[0].name, 'Synthetic');
+  assert.equal(exported.visits[0].studentId, 'ID-1');
+});
+
+test('patient picker returns a bounded public projection and escapes literal LIKE wildcards', async () => {
+  let queryArgs;
+  const options = await loadPatientPicker({ q: 'A%_\\B', type: 'student', patientId: 'selected-id' }, {
+    queryFn: async (...args) => {
+      queryArgs = args;
+      return { rows: [{ id: 'selected-id', patient_type: 'student', data: { name: 'Selected', studentId: 'S-1' } }] };
+    },
+  });
+  assert.deepEqual(queryArgs[1], ['student', 'selected-id', 'A\\%\\_\\\\B']);
+  assert.match(queryArgs[0], /LIMIT 30/);
+  assert.match(queryArgs[0], /ESCAPE E'\\\\'/);
+  assert.deepEqual(options, [{ id: 'selected-id', patientType: 'student', name: 'Selected', studentId: 'S-1' }]);
+});
+
+test('clinic report bootstrap bounds event reads and fetches only linked patient grade/type projections', async () => {
+  const calls = [];
+  const queryFn = async (sql, params = []) => {
+    calls.push({ sql, params });
+    if (/FROM visits/.test(sql)) return { rows: [{ data: { patientId: 'patient-1', date: '2026-10-15', chiefComplaint: 'Headache' } }] };
+    if (/FROM patients/.test(sql)) return { rows: [{ id: 'patient-1', patient_type: 'faculty', data: { gradeLevel: null } }] };
+    if (/FROM appointments/.test(sql)) return { rows: [{ data: { date: '2026-10-15' } }] };
+    if (/FROM dispense_logs/.test(sql)) return { rows: [{ data: { date: '2026-10-15', quantity: 2, itemType: 'supply' } }] };
+    if (/FROM clinic_settings/.test(sql)) return { rows: [{ settings: { schoolName: 'Synthetic clinic' } }] };
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+  const reportData = await loadPatientClinicReportData('2026-10-15', '2026-10-15', { queryFn });
+  assert.equal(calls.length, 5);
+  assert.deepEqual(calls[0].params, ['2026-10-14', '2026-10-16']);
+  assert.deepEqual(calls[1].params, [['patient-1']]);
+  assert.match(calls[0].sql, /left\(COALESCE\(NULLIF\(data->>'date'/);
+  assert.match(calls[0].sql, /'riskAssessment',jsonb_build_object\('category'/);
+  assert.doesNotMatch(calls[0].sql, /requestFingerprint/);
+  assert.deepEqual(reportData.students, [{ id: 'patient-1', patientType: 'faculty', gradeLevel: null }]);
+  assert.equal(reportData.settings.schoolName, 'Synthetic clinic');
+  assert.equal(reportData.visits[0].chiefComplaint, 'Headache');
+  assert.equal(reportData.dispenseLogs[0].quantity, 2);
 });

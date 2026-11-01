@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { saveData } from '../db/database';
 import { api } from '../utils/api';
-import { dashboardDataForIdentity } from '../utils/dashboardBootstrap.js';
 import { enqueueClinicCommit } from '../utils/clinicCommitQueue.js';
+import { mayReusePendingScopeData, patientDirectorySearch, resolveClinicDataScope } from '../utils/clinicDataScope.js';
 
 const emptyClinicData = () => ({
   schemaVersion: 1,
@@ -20,7 +20,7 @@ const stalePendingEditMessage = 'This edit was discarded because clinic data was
 const reloadBeforeSavingMessage = 'A save completed after the refresh. Newer local edits are still shown but unsaved. Note or copy them before reloading clinic data; their saves are paused to protect server data.';
 const lateSaveRefreshMessage = 'A save completed after the refresh. The latest clinic data is loaded; review it and reapply any unsent edits.';
 
-export function useClinicData(user, { dashboardFirst = false } = {}) {
+export function useClinicData(user, { pathname = '/', search = '' } = {}) {
   const identity = user ? `${String(user.id || user.username || '')}:${user.role}` : null;
   const identityRef = useRef({ identity: null, generation: 0, sessionKey: null });
   if (identityRef.current.identity !== identity) {
@@ -32,9 +32,17 @@ export function useClinicData(user, { dashboardFirst = false } = {}) {
     };
   }
   const sessionKey = identityRef.current.sessionKey;
+  const resolvedScope = resolveClinicDataScope(user?.role, pathname, search);
+  const scopeKind = resolvedScope.kind;
+  const scopeGroupKey = sessionKey ? `${sessionKey}:${resolvedScope.group}` : null;
+  const scopeRequestKey = sessionKey ? `${scopeGroupKey}:${resolvedScope.requestKey}` : null;
+  const fullScope = scopeKind === 'full';
+  const scopeRef = useRef({ ownerKey: null, requestKey: null });
+  scopeRef.current = { ownerKey: scopeGroupKey, requestKey: scopeRequestKey };
+
   const [data, setDataState] = useState(emptyClinicData);
   const [dataOwnerKey, setDataOwnerKey] = useState(null);
-  const [dashboardData, setDashboardData] = useState(null);
+  const [scopeDataEntry, setScopeDataEntry] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -50,26 +58,25 @@ export function useClinicData(user, { dashboardFirst = false } = {}) {
   const saveQueue = useRef(Promise.resolve());
 
   const applyData = useCallback((value, ownerKey) => {
-    if (!ownerKey || identityRef.current.sessionKey !== ownerKey) return dataRef.current;
+    if (!ownerKey || scopeRef.current.ownerKey !== ownerKey || identityRef.current.sessionKey !== sessionKey) return dataRef.current;
     const normalized = saveData(value);
     dataRef.current = normalized;
     dataOwnerRef.current = ownerKey;
     versionRef.current = normalized.schemaVersion || versionRef.current;
     setDataState(normalized);
     setDataOwnerKey(ownerKey);
-    setDashboardData(null);
     return normalized;
-  }, []);
+  }, [sessionKey]);
 
   const refreshAfterStaleWrite = useCallback(async (ownerKey) => {
-    if (!ownerKey || identityRef.current.sessionKey !== ownerKey) return;
+    if (!ownerKey || scopeRef.current.ownerKey !== ownerKey || identityRef.current.sessionKey !== sessionKey) return;
     const refreshEpoch = refreshEpochRef.current;
     const refreshedSequence = refreshedSequenceRef.current;
     const loadSequence = ++loadSequenceRef.current;
     requiresReloadRef.current = true;
     try {
       const refreshed = await api.get('/api/data');
-      if (identityRef.current.sessionKey !== ownerKey || loadSequence !== loadSequenceRef.current || refreshEpoch !== refreshEpochRef.current) return;
+      if (scopeRef.current.ownerKey !== ownerKey || identityRef.current.sessionKey !== sessionKey || loadSequence !== loadSequenceRef.current || refreshEpoch !== refreshEpochRef.current) return;
       if (sequenceRef.current !== refreshedSequence) {
         setError(reloadBeforeSavingMessage);
         return;
@@ -81,37 +88,73 @@ export function useClinicData(user, { dashboardFirst = false } = {}) {
       requiresReloadRef.current = false;
       setError(lateSaveRefreshMessage);
     } catch (requestError) {
-      if (identityRef.current.sessionKey === ownerKey) setError(`A pending save finished after refresh, but the latest clinic data could not be loaded. ${requestError.message}`);
+      if (identityRef.current.sessionKey === sessionKey && scopeRef.current.ownerKey === ownerKey) setError(`A pending save finished after refresh, but the latest clinic data could not be loaded. ${requestError.message}`);
     }
-  }, [applyData]);
+  }, [applyData, scopeGroupKey, sessionKey]);
 
   const reload = useCallback(async () => {
-    if (!user || !sessionKey || identityRef.current.sessionKey !== sessionKey) return;
+    if (!user || !sessionKey || identityRef.current.sessionKey !== sessionKey || scopeRef.current.ownerKey !== scopeGroupKey) return;
     const loadSequence = ++loadSequenceRef.current;
+    const requestKey = scopeRequestKey;
     setLoading(true);
     setError('');
     try {
-      const refreshed = await api.get('/api/data');
-      if (identityRef.current.sessionKey !== sessionKey || loadSequence !== loadSequenceRef.current) return;
+      let refreshed;
+      let scopedPayload = null;
+      if (scopeKind === 'dashboard') {
+        scopedPayload = await api.get('/api/nurse/dashboard');
+        refreshed = { ...emptyClinicData(), ...scopedPayload };
+      } else if (scopeKind === 'directory') {
+        const params = patientDirectorySearch(resolvedScope.search);
+        scopedPayload = await api.get(`/api/patients${params ? `?${params}` : ''}`);
+        refreshed = {
+          ...emptyClinicData(),
+          schemaVersion: scopedPayload.schemaVersion,
+          settings: scopedPayload.settings || {},
+          students: scopedPayload.patients || [],
+        };
+      } else if (scopeKind === 'patient') {
+        scopedPayload = await api.get(`/api/patients/${encodeURIComponent(resolvedScope.patientId)}`);
+        refreshed = {
+          ...emptyClinicData(),
+          schemaVersion: scopedPayload.schemaVersion,
+          settings: scopedPayload.settings || {},
+          students: scopedPayload.patient ? [scopedPayload.patient] : [],
+          visits: scopedPayload.visits || [],
+        };
+      } else if (scopeKind === 'report') {
+        scopedPayload = await api.get('/api/clinic/bootstrap');
+        refreshed = { ...emptyClinicData(), ...scopedPayload };
+      } else {
+        refreshed = await api.get('/api/data');
+      }
+      if (identityRef.current.sessionKey !== sessionKey
+        || scopeRef.current.ownerKey !== scopeGroupKey
+        || scopeRef.current.requestKey !== requestKey
+        || loadSequence !== loadSequenceRef.current) return;
       const hadPendingWrites = pendingWritesRef.current > 0 || requiresReloadRef.current;
       refreshEpochRef.current += 1;
       sequenceRef.current += 1;
       requiresReloadRef.current = false;
-      applyData(refreshed, sessionKey);
+      applyData(refreshed, scopeGroupKey);
+      if (scopeKind === 'directory' || scopeKind === 'patient' || scopeKind === 'report') {
+        setScopeDataEntry({ ownerKey: scopeGroupKey, requestKey, data: scopedPayload });
+      } else {
+        setScopeDataEntry(null);
+      }
       refreshedSequenceRef.current = sequenceRef.current;
       if (hadPendingWrites) setError(refreshedWhilePendingMessage);
     } catch (requestError) {
-      if (identityRef.current.sessionKey === sessionKey && loadSequence === loadSequenceRef.current) setError(requestError.message);
+      if (identityRef.current.sessionKey === sessionKey && scopeRef.current.ownerKey === scopeGroupKey && loadSequence === loadSequenceRef.current) setError(requestError.message);
     } finally {
-      if (identityRef.current.sessionKey === sessionKey && loadSequence === loadSequenceRef.current) setLoading(false);
+      if (identityRef.current.sessionKey === sessionKey && scopeRef.current.ownerKey === scopeGroupKey && scopeRef.current.requestKey === requestKey && loadSequence === loadSequenceRef.current) setLoading(false);
     }
-  }, [applyData, sessionKey, user]);
+  }, [applyData, resolvedScope.patientId, resolvedScope.search, scopeGroupKey, scopeKind, scopeRequestKey, sessionKey, user]);
 
   const refreshInBackground = useCallback(async () => {
-    if (!user || !sessionKey || identityRef.current.sessionKey !== sessionKey) return false;
-
+    if (!user || !sessionKey || !fullScope || scopeRef.current.ownerKey !== scopeGroupKey || identityRef.current.sessionKey !== sessionKey) return false;
     await saveQueue.current;
-    if (identityRef.current.sessionKey !== sessionKey || pendingWritesRef.current > 0 || requiresReloadRef.current) return false;
+    if (scopeRef.current.ownerKey !== scopeGroupKey || identityRef.current.sessionKey !== sessionKey || pendingWritesRef.current > 0 || requiresReloadRef.current) return false;
 
     const loadSequence = ++loadSequenceRef.current;
     const refreshEpoch = refreshEpochRef.current;
@@ -119,24 +162,20 @@ export function useClinicData(user, { dashboardFirst = false } = {}) {
     setError('');
     try {
       const refreshed = await api.get('/api/data');
-      if (identityRef.current.sessionKey !== sessionKey || loadSequence !== loadSequenceRef.current) return false;
-      if (refreshEpochRef.current !== refreshEpoch || sequenceRef.current !== sequence || pendingWritesRef.current > 0 || requiresReloadRef.current) {
-        return false;
-      }
+      if (scopeRef.current.ownerKey !== scopeGroupKey || identityRef.current.sessionKey !== sessionKey || loadSequence !== loadSequenceRef.current) return false;
+      if (refreshEpochRef.current !== refreshEpoch || sequenceRef.current !== sequence || pendingWritesRef.current > 0 || requiresReloadRef.current) return false;
 
       refreshEpochRef.current += 1;
       sequenceRef.current += 1;
-      applyData(refreshed, sessionKey);
+      applyData(refreshed, scopeGroupKey);
       refreshedSequenceRef.current = sequenceRef.current;
       requiresReloadRef.current = false;
       return true;
     } catch (requestError) {
-      if (identityRef.current.sessionKey === sessionKey && loadSequence === loadSequenceRef.current) {
-        setError(requestError.message);
-      }
+      if (identityRef.current.sessionKey === sessionKey && scopeRef.current.ownerKey === scopeGroupKey && loadSequence === loadSequenceRef.current) setError(requestError.message);
       throw requestError;
     }
-  }, [applyData, sessionKey, user]);
+  }, [applyData, fullScope, scopeGroupKey, sessionKey, user]);
 
   useEffect(() => {
     refreshEpochRef.current += 1;
@@ -148,41 +187,32 @@ export function useClinicData(user, { dashboardFirst = false } = {}) {
     versionRef.current = 1;
     setDataOwnerKey(null);
     dataOwnerRef.current = null;
-    setDashboardData(null);
+    setScopeDataEntry(null);
     const emptyData = emptyClinicData();
     setDataState(emptyData);
     dataRef.current = emptyData;
     setSaving(false);
     setError('');
     setLoading(Boolean(user));
-    if (!user || !sessionKey) {
-      setLoading(false);
-      return undefined;
-    }
+    if (!user || !sessionKey) setLoading(false);
+  }, [sessionKey]);
 
-    let cancelled = false;
-    if (dashboardFirst && user.role === 'school_nurse') {
-      api.get('/api/nurse/dashboard')
-        .then((summary) => {
-          if (!cancelled && identityRef.current.sessionKey === sessionKey && dataOwnerRef.current !== sessionKey) {
-            setDashboardData({ ownerKey: sessionKey, data: summary });
-          }
-        })
-        .catch(() => {});
-    }
-    const loadForIdentity = async () => {
+  useEffect(() => {
+    if (!user || !sessionKey) return undefined;
+    let active = true;
+    const loadForScope = async () => {
       await saveQueue.current;
-      if (!cancelled && identityRef.current.sessionKey === sessionKey) await reload();
+      if (active && identityRef.current.sessionKey === sessionKey && scopeRef.current.ownerKey === scopeGroupKey) await reload();
     };
-    loadForIdentity();
-    return () => { cancelled = true; };
-  }, [dashboardFirst, reload, sessionKey, user]);
+    loadForScope();
+    return () => { active = false; };
+  }, [reload, scopeGroupKey, scopeRequestKey, sessionKey, user]);
 
   const setData = useCallback((nextData) => {
-    if (!sessionKey || identityRef.current.sessionKey !== sessionKey) return dataRef.current;
+    if (!fullScope || !sessionKey || identityRef.current.sessionKey !== sessionKey || scopeRef.current.ownerKey !== scopeGroupKey) return dataRef.current;
     const previous = dataRef.current;
     const resolved = typeof nextData === 'function' ? nextData(previous) : nextData;
-    const optimistic = applyData(resolved, sessionKey);
+    const optimistic = applyData(resolved, scopeGroupKey);
     const sequence = ++sequenceRef.current;
     if (user?.role !== 'school_nurse') return optimistic;
 
@@ -192,7 +222,7 @@ export function useClinicData(user, { dashboardFirst = false } = {}) {
     setSaving(true);
     saveQueue.current = saveQueue.current
       .then(async () => {
-        if (identityRef.current.sessionKey !== sessionKey) return;
+        if (identityRef.current.sessionKey !== sessionKey || scopeRef.current.ownerKey !== scopeGroupKey) return;
         if (requiresReloadRef.current) {
           const reloadError = new Error(reloadBeforeSavingMessage);
           reloadError.code = 'RELOAD_REQUIRED';
@@ -205,13 +235,13 @@ export function useClinicData(user, { dashboardFirst = false } = {}) {
         }
         requestDispatched = true;
         const saved = await api.put('/api/data', { data: optimistic, version: versionRef.current });
-        if (identityRef.current.sessionKey !== sessionKey) return;
+        if (identityRef.current.sessionKey !== sessionKey || scopeRef.current.ownerKey !== scopeGroupKey) return;
         if (refreshEpoch !== refreshEpochRef.current) {
-          await refreshAfterStaleWrite(sessionKey);
+          await refreshAfterStaleWrite(scopeGroupKey);
           return;
         }
         versionRef.current = saved.schemaVersion;
-        if (sequence === sequenceRef.current) applyData(saved, sessionKey);
+        if (sequence === sequenceRef.current) applyData(saved, scopeGroupKey);
         else {
           dataRef.current = { ...dataRef.current, schemaVersion: saved.schemaVersion };
           setDataState(dataRef.current);
@@ -223,9 +253,9 @@ export function useClinicData(user, { dashboardFirst = false } = {}) {
           setError(reloadBeforeSavingMessage);
           return;
         }
-        if (identityRef.current.sessionKey !== sessionKey) return;
+        if (identityRef.current.sessionKey !== sessionKey || scopeRef.current.ownerKey !== scopeGroupKey) return;
         if (refreshEpoch !== refreshEpochRef.current) {
-          if (requestDispatched) await refreshAfterStaleWrite(sessionKey);
+          if (requestDispatched) await refreshAfterStaleWrite(scopeGroupKey);
           else setError(stalePendingEditMessage);
           return;
         }
@@ -241,11 +271,11 @@ export function useClinicData(user, { dashboardFirst = false } = {}) {
         setSaving(pendingWritesRef.current > 0);
       });
     return optimistic;
-  }, [applyData, refreshAfterStaleWrite, reload, sessionKey, user?.role]);
+  }, [applyData, fullScope, refreshAfterStaleWrite, reload, scopeGroupKey, sessionKey, user?.role]);
 
   const commitData = useCallback(async (nextData) => {
-    if (!sessionKey || identityRef.current.sessionKey !== sessionKey || user?.role !== 'school_nurse') {
-      throw new Error('This account cannot save clinic changes.');
+    if (!fullScope || !sessionKey || identityRef.current.sessionKey !== sessionKey || user?.role !== 'school_nurse' || scopeRef.current.ownerKey !== scopeGroupKey) {
+      throw new Error('A complete clinic snapshot is required to save clinic changes.');
     }
     const enqueuedRefreshEpoch = refreshEpochRef.current;
     pendingWritesRef.current += 1;
@@ -254,7 +284,7 @@ export function useClinicData(user, { dashboardFirst = false } = {}) {
       let requestDispatched = false;
       let requestRefreshEpoch = enqueuedRefreshEpoch;
       try {
-        if (identityRef.current.sessionKey !== sessionKey) throw new Error('Your session changed before the clinic changes could be saved.');
+        if (identityRef.current.sessionKey !== sessionKey || scopeRef.current.ownerKey !== scopeGroupKey) throw new Error('Your clinic view changed before the changes could be saved.');
         if (requiresReloadRef.current) {
           const reloadError = new Error(reloadBeforeSavingMessage);
           reloadError.code = 'RELOAD_REQUIRED';
@@ -266,19 +296,19 @@ export function useClinicData(user, { dashboardFirst = false } = {}) {
           throw staleError;
         }
         const resolved = typeof nextData === 'function' ? nextData(dataRef.current) : nextData;
-        const savePayload = applyData(resolved, sessionKey);
+        const savePayload = applyData(resolved, scopeGroupKey);
         const sequence = ++sequenceRef.current;
         requestRefreshEpoch = refreshEpochRef.current;
         requestDispatched = true;
         const saved = await api.put('/api/data', { data: savePayload, version: versionRef.current });
-        if (identityRef.current.sessionKey !== sessionKey) throw new Error('Your session changed before the clinic changes could be confirmed.');
+        if (identityRef.current.sessionKey !== sessionKey || scopeRef.current.ownerKey !== scopeGroupKey) throw new Error('Your clinic view changed before the clinic changes could be confirmed.');
         if (requestRefreshEpoch !== refreshEpochRef.current) {
           const staleError = new Error(stalePendingEditMessage);
           staleError.code = 'STALE_PENDING_EDIT';
           throw staleError;
         }
         versionRef.current = saved.schemaVersion;
-        if (sequence === sequenceRef.current) applyData(saved, sessionKey);
+        if (sequence === sequenceRef.current) applyData(saved, scopeGroupKey);
         else {
           dataRef.current = { ...dataRef.current, schemaVersion: saved.schemaVersion };
           setDataState(dataRef.current);
@@ -286,9 +316,9 @@ export function useClinicData(user, { dashboardFirst = false } = {}) {
         setError('');
         return saved;
       } catch (requestError) {
-        if (identityRef.current.sessionKey !== sessionKey) throw requestError;
+        if (identityRef.current.sessionKey !== sessionKey || scopeRef.current.ownerKey !== scopeGroupKey) throw requestError;
         if (requestRefreshEpoch !== refreshEpochRef.current) {
-          if (requestDispatched) await refreshAfterStaleWrite(sessionKey);
+          if (requestDispatched) await refreshAfterStaleWrite(scopeGroupKey);
           else setError(stalePendingEditMessage);
         } else if (requestError.code === 'RELOAD_REQUIRED') {
           setError(reloadBeforeSavingMessage);
@@ -306,23 +336,28 @@ export function useClinicData(user, { dashboardFirst = false } = {}) {
     });
 
     return request;
-  }, [applyData, refreshAfterStaleWrite, reload, sessionKey, user?.role]);
+  }, [applyData, fullScope, refreshAfterStaleWrite, reload, scopeGroupKey, sessionKey, user?.role]);
 
   const applyServerData = useCallback((patch) => {
-    if (!sessionKey || identityRef.current.sessionKey !== sessionKey || pendingWritesRef.current > 0) return false;
+    if (!fullScope || !sessionKey || identityRef.current.sessionKey !== sessionKey || scopeRef.current.ownerKey !== scopeGroupKey || pendingWritesRef.current > 0) return false;
     const next = { ...dataRef.current, ...patch };
     refreshEpochRef.current += 1;
     sequenceRef.current += 1;
     versionRef.current = next.schemaVersion || versionRef.current;
     requiresReloadRef.current = false;
-    applyData(next, sessionKey);
+    applyData(next, scopeGroupKey);
     refreshedSequenceRef.current = sequenceRef.current;
     setError('');
     return true;
-  }, [applyData, sessionKey]);
+  }, [applyData, fullScope, scopeGroupKey, sessionKey]);
 
-  const hasData = Boolean(sessionKey && dataOwnerKey === sessionKey);
+  const hasData = Boolean(sessionKey && dataOwnerKey === scopeGroupKey);
   const ready = hasData && !loading;
-  const ownedDashboardData = dashboardDataForIdentity(dashboardData, sessionKey);
-  return [data, setData, { loading, saving, error, reload, refreshInBackground, applyServerData, commitData, ready, hasData, dashboardData: ownedDashboardData }];
+  const scopeDataReady = scopeDataEntry?.ownerKey === scopeGroupKey && scopeDataEntry?.requestKey === scopeRequestKey;
+  const sameOwnerDirectoryPending = mayReusePendingScopeData(scopeKind, scopeDataEntry?.ownerKey, scopeGroupKey);
+  const scopedData = scopeDataReady || sameOwnerDirectoryPending ? scopeDataEntry.data : null;
+  const scopeLoading = loading || (scopeKind === 'directory' && !scopeDataReady);
+  return [data, setData, { loading, saving, error, reload, refreshInBackground, applyServerData, commitData, ready, hasData, scopeKind, scopeData: scopedData, scopeDataReady, scopeLoading }];
 }
+
+export default useClinicData;

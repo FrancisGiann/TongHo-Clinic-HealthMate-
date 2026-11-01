@@ -15,11 +15,13 @@ export default function StudentPicker({
   itemLabel = 'patient',
   searchPlaceholder = 'Search by patient name or ID',
   description = '',
+  onSearch,
 }) {
   const id = useId();
   const listId = `${id}-options`;
   const descriptionId = `${id}-description`;
   const selected = students.find((student) => String(student.id) === String(value));
+  const selectedLabel = selected ? selectedStudentLabel(selected) : '';
   const itemPlural = `${itemLabel}s`;
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -37,10 +39,17 @@ export default function StudentPicker({
     }
   }, [selected?.id, selected?.name, selected?.studentId, selected?.facultyId]);
 
+  useEffect(() => {
+    if (typeof onSearch !== 'function') return undefined;
+    const searchTerm = selectedLabel && query === selectedLabel ? '' : query;
+    const timer = window.setTimeout(() => onSearch(searchTerm), 200);
+    return () => window.clearTimeout(timer);
+  }, [onSearch, query, selectedLabel]);
+
   const matches = useMemo(() => {
-    const filterQuery = selected && query === selectedStudentLabel(selected) ? '' : query;
+    const filterQuery = selectedLabel && query === selectedLabel ? '' : query;
     return findStudentMatches(students, filterQuery);
-  }, [query, selected, students]);
+  }, [query, selectedLabel, students]);
 
   const choose = (student) => {
     onChange?.(String(student.id));

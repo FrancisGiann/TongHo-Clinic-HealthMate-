@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from 'react-dom';
 import { useSearchParams } from "react-router-dom";
 import { BarChart3, Download, FileText, PieChart, Save } from "lucide-react";
 import { api } from "../utils/api";
 import { formatManilaDateTime, manilaCalendarDate, shiftCalendarDate } from "../utils/dateTime";
 import { clinicReportPrintModel, formatHealthField, patientSummaryPrintModel } from '../utils/reportPrint.js';
+import { shouldLoadReportsPatientPicker } from '../utils/reportPickerScope.js';
 import StudentPicker from '../components/StudentPicker';
 import IndividualConsultationReport from '../components/IndividualConsultationReport';
 import '../components/print/print.css';
@@ -36,12 +37,66 @@ export default function Reports({ data = {}, user }) {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState('');
   const [summaryRetry, setSummaryRetry] = useState(0);
-  const summaryPatient = useMemo(() => (data.students || []).find((record) => String(record.id) === String(patientId)), [data.students, patientId]);
+  const [patientOptions, setPatientOptions] = useState([]);
+  const [patientSearchError, setPatientSearchError] = useState('');
+  const [consultationDetail, setConsultationDetail] = useState(null);
+  const [consultationLoading, setConsultationLoading] = useState(false);
+  const pickerSequenceRef = useRef(0);
+  const summaryPatient = useMemo(() => patientOptions.find((record) => String(record.id) === String(patientId)), [patientOptions, patientId]);
   const printReady = reportTab === 'clinic' ? reportReady : Boolean(patientSummary) && !summaryLoading;
 
   useEffect(() => {
     setPatientId(searchParams.get('patientId') || '');
   }, [searchParams]);
+  const searchPatients = useCallback(async (search) => {
+    if (!shouldLoadReportsPatientPicker(user?.role, reportTab)) {
+      setPatientOptions([]);
+      setPatientSearchError('');
+      return;
+    }
+    const sequence = ++pickerSequenceRef.current;
+    const params = new URLSearchParams();
+    if (search) params.set('q', search);
+    if (reportTab === 'consultation') params.set('type', 'student');
+    if (patientId) params.set('patientId', patientId);
+    setPatientSearchError('');
+    try {
+      const result = await api.get(`/api/patients/picker?${params}`);
+      if (sequence === pickerSequenceRef.current) setPatientOptions(result.patients || []);
+    } catch (error) {
+      if (sequence === pickerSequenceRef.current) setPatientSearchError(error.message || 'Patient search could not be loaded.');
+    }
+  }, [patientId, reportTab, user?.role]);
+  useEffect(() => {
+    if (!shouldLoadReportsPatientPicker(user?.role, reportTab)) {
+      pickerSequenceRef.current += 1;
+      setPatientOptions([]);
+      setPatientSearchError('');
+      return undefined;
+    }
+    searchPatients('');
+    return () => { pickerSequenceRef.current += 1; };
+  }, [reportTab, searchPatients, user?.role]);
+  useEffect(() => {
+    if (reportTab !== 'consultation' || !patientId) {
+      setConsultationDetail(null);
+      setConsultationLoading(false);
+      return undefined;
+    }
+    let active = true;
+    setConsultationDetail(null);
+    setConsultationLoading(true);
+    api.get(`/api/patients/${encodeURIComponent(patientId)}`)
+      .then((result) => {
+        if (!active) return;
+        setConsultationDetail(result);
+        const patient = result.patient;
+        if (patient) setPatientOptions((current) => [patient, ...current.filter((record) => String(record.id) !== String(patient.id))]);
+      })
+      .catch((error) => { if (active) setPatientSearchError(error.message || 'Patient consultations could not be loaded.'); })
+      .finally(() => { if (active) setConsultationLoading(false); });
+    return () => { active = false; };
+  }, [reportTab, patientId]);
   useEffect(() => {
     let active = true;
     setReportError('');
@@ -161,12 +216,13 @@ export default function Reports({ data = {}, user }) {
   return (
     <div className="form-page reports-page">
       {user?.role === 'school_nurse' && <div className="report-tabs" role="tablist" aria-label="Report type"><button type="button" role="tab" aria-selected={reportTab === 'clinic'} className={reportTab === 'clinic' ? 'active' : ''} onClick={() => changeTab('clinic')}>Clinic report</button><button type="button" role="tab" aria-selected={reportTab === 'patient'} className={reportTab === 'patient' ? 'active' : ''} onClick={() => changeTab('patient')}>Patient summary</button><button type="button" role="tab" aria-selected={reportTab === 'consultation'} className={reportTab === 'consultation' ? 'active' : ''} onClick={() => changeTab('consultation')}>Individual consultation</button></div>}
-      {reportTab === 'consultation' ? <IndividualConsultationReport data={data} user={user} /> : reportTab === 'patient' ? <PatientSummaryPanel
-        patients={data.students || []} patientId={patientId} patient={summaryPatient}
+      {reportTab === 'consultation' ? <IndividualConsultationReport data={consultationDetail?.patient?.id === patientId ? { ...data, students: [consultationDetail.patient], visits: consultationDetail.visits || [] } : { ...data, students: patientOptions, visits: [] }} user={user} onSearchPatients={searchPatients} searchError={patientSearchError} loading={consultationLoading} /> : reportTab === 'patient' ? <PatientSummaryPanel
+        patients={patientOptions} patientId={patientId} patient={summaryPatient}
         start={summaryStart} end={summaryEnd} setStart={setSummaryStart} setEnd={setSummaryEnd}
         summary={patientSummary} loading={summaryLoading} error={summaryError}
         retry={() => setSummaryRetry((value) => value + 1)} onSelectPatient={selectPatient}
         onPrint={exportReport} printPreview={printPreview} closePreview={() => setPrintPreview(false)}
+        onSearchPatients={searchPatients} searchError={patientSearchError}
       /> : <>
       <div className="page-intro">
         <div>
@@ -289,17 +345,18 @@ export default function Reports({ data = {}, user }) {
   );
 }
 
-function PatientSummaryPanel({ patients, patientId, patient, start, end, setStart, setEnd, summary, loading, error, retry, onSelectPatient, onPrint }) {
+function PatientSummaryPanel({ patients, patientId, patient, start, end, setStart, setEnd, summary, loading, error, retry, onSelectPatient, onPrint, onSearchPatients, searchError }) {
   const health = summary?.currentHealth || {};
   return <>
     <div className="page-intro"><div><p className="section-kicker">Nurse-only report</p><h2>Patient summary</h2><p>Current approved health overview and visits in the selected period.</p></div><button type="button" className="secondary-btn" onClick={onPrint} disabled={!summary || loading}><FileText size={16} /> Print summary</button></div>
     <section className="panel inline-entry-form">
-      <div className="report-filter-grid"><StudentPicker students={patients} value={patientId} onChange={onSelectPatient} label="Student or faculty member" itemLabel="patient" searchPlaceholder="Search by name or ID" description="Select a clinic patient record." />
+      <div className="report-filter-grid"><StudentPicker students={patients} value={patientId} onChange={onSelectPatient} onSearch={onSearchPatients} label="Student or faculty member" itemLabel="patient" searchPlaceholder="Search by name or ID" description="Select a clinic patient record." />
         <label>Start date<input type="date" value={start} max={end} onChange={(event) => setStart(event.target.value)} /></label>
         <label>End date<input type="date" value={end} min={start} onChange={(event) => setEnd(event.target.value)} /></label>
       </div>
       {loading && <p className="field-hint" role="status">Loading selected patient summary…</p>}
       {error && <div className="error-banner" role="alert">{error} <button type="button" className="secondary-btn" onClick={retry}>Retry</button></div>}
+      {searchError && <div className="error-banner" role="alert">{searchError}</div>}
       {!patientId && <p className="empty-state">Choose a student or faculty member to view their summary.</p>}
     </section>
     {summary && <>

@@ -106,6 +106,13 @@ test('nurse dashboard bootstrap is restricted to school nurses', () => {
 test('summary, dashboard preference, and audit routes enforce their server role boundaries', () => {
   const app = createApp();
   const expectations = [
+    ['/api/clinic/bootstrap', 'get', ['school_nurse']],
+    ['/api/patients/export', 'get', ['school_nurse']],
+    ['/api/patients', 'get', ['school_nurse']],
+    ['/api/patients/picker', 'get', ['school_nurse']],
+    ['/api/patients/:id', 'get', ['school_nurse']],
+    ['/api/patients', 'post', ['school_nurse']],
+    ['/api/patients/:id', 'put', ['school_nurse']],
     ['/api/reports/patients/:patientId/summary', 'get', ['school_nurse']],
     ['/api/me/dashboard-preferences', 'get', ['school_nurse', 'system_administrator']],
     ['/api/me/dashboard-preferences', 'put', ['school_nurse', 'system_administrator']],
@@ -123,6 +130,98 @@ test('summary, dashboard preference, and audit routes enforce their server role 
       assert.deepEqual({ statusCode, nextCalled }, allowed.includes(role) ? { statusCode: 200, nextCalled: true } : { statusCode: 403, nextCalled: false }, `${role} access to ${method.toUpperCase()} ${path}`);
     }
   }
+});
+
+test('nurse report reads use bounded date queries in a read-only repeatable-read transaction', async () => {
+  const calls = [];
+  let transactionStarted = false;
+  const queryFn = async (sql, params = []) => {
+    calls.push({ sql: sql.replace(/\s+/g, ' ').trim(), params });
+    if (/FROM visits/.test(sql)) return { rows: [{ data: { patientId: 'patient-1', date: '2026-10-15', chiefComplaint: 'Headache', type: 'Illness' } }] };
+    if (/FROM patients/.test(sql)) return { rows: [{ id: 'patient-1', patient_type: 'student', data: { gradeLevel: 'Grade 1' } }] };
+    if (/FROM appointments/.test(sql)) return { rows: [] };
+    if (/FROM dispense_logs/.test(sql)) return { rows: [] };
+    if (/FROM clinic_settings/.test(sql)) return { rows: [{ settings: { schoolName: 'Synthetic clinic' } }] };
+    throw new Error(`Unexpected report query: ${sql}`);
+  };
+  const app = createApp({
+    queryFn,
+    transactionFn: async (work) => {
+      transactionStarted = true;
+      const result = await work({ query: async (sql, params) => {
+        if (/SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY/.test(sql)) return { rows: [], rowCount: 0 };
+        return queryFn(sql, params);
+      } });
+      return result;
+    },
+  });
+  const route = app.router.stack.find((layer) => layer.route?.path === '/api/reports' && layer.route.methods.get);
+  const handler = route.route.stack.at(-1).handle;
+  const response = { statusCode: 200, body: null, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+  await handler({ query: { start: '2026-10-15', end: '2026-10-15' }, user: { role: 'school_nurse' } }, response);
+  assert.equal(transactionStarted, true);
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.data.totals.visits, 1);
+  assert.equal(calls.length, 5);
+  assert.deepEqual(calls[0].params, ['2026-10-14', '2026-10-16']);
+  assert.match(calls[0].sql, /riskAssessment/);
+  assert.match(calls[2].sql, /FROM appointments WHERE/);
+  assert.equal(response.body.data.grades['Grade 1'], 1);
+});
+
+test('targeted profile updates validate malformed payloads before opening a transaction', async () => {
+  let transactionCalls = 0;
+  const app = createApp({ clinicDataTransactionFn: async () => { transactionCalls += 1; } });
+  const handler = app.router.stack.find((layer) => layer.route?.path === '/api/patients/:id' && layer.route.methods.put).route.stack.at(-1).handle;
+  const invoke = async (patient) => {
+    const response = { statusCode: 200, body: null, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+    await handler({ params: { id: 'patient-1' }, body: { patient, schemaVersion: 4 }, user: { id: 'nurse-1', role: 'school_nurse' }, headers: {}, ip: '127.0.0.1' }, response);
+    return response;
+  };
+  const objectValue = await invoke({ id: 'patient-1', contactNumber: { number: '123' } });
+  assert.equal(objectValue.statusCode, 400);
+  assert.equal(objectValue.body.error.code, 'VALIDATION_ERROR');
+  assert.ok(objectValue.body.error.fields.contactNumber);
+  const mismatchedId = await invoke({ id: 'patient-2', name: 'Ari Santos' });
+  assert.equal(mismatchedId.statusCode, 400);
+  assert.ok(mismatchedId.body.error.fields.id);
+  assert.equal(transactionCalls, 0);
+});
+
+test('targeted profile writes preserve accepted guardian answers, consent, and unrelated patient fields', async () => {
+  const patientId = 'synthetic-patient-1';
+  const canonicalAnswers = { allergies: 'Peanuts', conditions: 'Asthma', allergiesStatus: 'reported' };
+  const original = {
+    name: 'Before Name', studentId: 'S-001', gradeLevel: 'Grade 1', section: 'A', adviser: 'Nurse',
+    allergies: canonicalAnswers.allergies, conditions: canonicalAnswers.conditions,
+    guardianHealthRecord: canonicalAnswers, consentStatus: 'accepted', consentDueDate: '2026-12-01',
+    retainedClinicFlag: 'preserve-me',
+  };
+  let persisted;
+  const app = createApp({ clinicDataTransactionFn: async (work) => work({
+    async query(sql, params = []) {
+      if (/SELECT version FROM clinic_settings/.test(sql)) return { rows: [{ version: 5 }], rowCount: 1 };
+      if (/SELECT patient_type,data FROM patients WHERE id=\$1 FOR UPDATE/.test(sql)) return { rows: [{ patient_type: 'student', data: original }], rowCount: 1 };
+      if (/SELECT id,patient_type,data FROM patients/.test(sql)) return { rows: [{ id: patientId, patient_type: 'student', data: original }], rowCount: 1 };
+      if (/UPDATE patients SET data/.test(sql)) { persisted = JSON.parse(params[0]); return { rows: [], rowCount: 1 }; }
+      return { rows: [], rowCount: 1 };
+    },
+  }) });
+  const handler = app.router.stack.find((layer) => layer.route?.path === '/api/patients/:id' && layer.route.methods.put).route.stack.at(-1).handle;
+  const response = { statusCode: 200, body: null, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+  await handler({
+    params: { id: patientId },
+    body: { schemaVersion: 4, patient: { id: patientId, name: 'After Name', allergies: 'unauthorized replacement', consentStatus: 'rejected', retainedClinicFlag: 'drop-me' } },
+    user: { id: 'nurse-1', role: 'school_nurse' }, headers: {}, ip: '127.0.0.1',
+  }, response);
+  assert.equal(response.statusCode, 200);
+  assert.equal(persisted.name, 'After Name');
+  assert.equal(persisted.allergies, canonicalAnswers.allergies);
+  assert.equal(persisted.conditions, canonicalAnswers.conditions);
+  assert.deepEqual(persisted.guardianHealthRecord, canonicalAnswers);
+  assert.equal(persisted.consentStatus, 'accepted');
+  assert.equal(persisted.consentDueDate, '2026-12-01');
+  assert.equal(persisted.retainedClinicFlag, 'preserve-me');
 });
 
 test('guardian signup request and verify stay public while guardian invitations stay administrator-only', () => {

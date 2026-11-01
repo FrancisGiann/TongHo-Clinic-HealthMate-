@@ -3,6 +3,8 @@ import { query, transaction } from './db.js';
 import { normalizeRosterIdentifier, patientRosterIdentitySql, rosterIdTrimCharacters } from './domain/roster.js';
 import { publicVisitRecord } from './domain/visitRequests.js';
 import { isStudentGradeLevel } from '../shared/grades.js';
+import { buildPatientDirectoryQuery, validatePatientDirectoryQuery } from './domain/patientDirectory.js';
+import { compareValues, manilaDateTimeKey, sortAndPaginate } from '../src/utils/listState.js';
 
 const collectionMap = {
   visits: { table: 'visits', patient: true },
@@ -282,6 +284,263 @@ export async function loadClinicData(user, { includeClinical = false, queryFn = 
       : key === 'visits' ? publicVisitRecord(row.data) : row.data);
   }
   return data;
+}
+
+async function latestVisitsForPatients(patientIds, queryFn) {
+  if (!patientIds.length) return new Map();
+  const result = await queryFn(`
+    SELECT data->'studentId' AS student_id,data->'patientId' AS patient_id,
+      data->'date' AS visit_date,data->'createdAt' AS data_created_at,data->'time' AS visit_time
+    FROM visits
+    WHERE COALESCE(NULLIF(data->>'studentId',''),data->>'patientId','')=ANY($1::text[])
+    ORDER BY created_at
+  `, [patientIds]);
+  const latest = new Map();
+  for (const row of result.rows) {
+    const keyValue = row.student_id || row.patient_id || '';
+    const patientId = String(keyValue);
+    const timestamp = manilaDateTimeKey(row.visit_date || row.data_created_at || '', row.visit_time || '');
+    if (timestamp === null) continue;
+    const current = latest.get(patientId);
+    if (!current || timestamp > current.timestamp) {
+      latest.set(patientId, {
+        timestamp,
+        visit: { date: row.visit_date, time: row.visit_time, createdAt: row.data_created_at },
+      });
+    }
+  }
+  return latest;
+}
+
+export async function loadPatientDirectory(queryInput, { queryFn = query, transactionFn } = {}) {
+  const load = async (readQuery) => {
+  const validation = validatePatientDirectoryQuery(queryInput);
+  if (!validation.valid) {
+    const error = new Error(validation.message);
+    error.status = 400;
+    error.code = 'INVALID_DIRECTORY_QUERY';
+    throw error;
+  }
+  const { value } = validation;
+  const { sql, params, clientLatestVisitSort } = buildPatientDirectoryQuery(value);
+  const result = await readQuery(sql, params);
+  const row = result.rows[0] || {};
+  const total = Number(row.filtered_total) || 0;
+  const pageCount = Math.max(1, clientLatestVisitSort ? Math.ceil(total / value.pageSize) : (Number(row.page_count) || Math.ceil(total / value.pageSize)));
+  const candidates = (row.patients || []).map((entry) => ({
+    ...studentRecordForUser({ ...(entry.data || {}), id: entry.id, patientType: entry.patient_type }, { role: 'school_nurse' }),
+    latestVisit: null,
+  }));
+  const candidateIds = candidates.map((patient) => String(patient.id));
+  const latestVisits = await latestVisitsForPatients(candidateIds, readQuery);
+  for (const patient of candidates) patient.latestVisit = latestVisits.get(String(patient.id))?.visit || null;
+  const sortedLatestPage = clientLatestVisitSort
+    ? sortAndPaginate(candidates, (first, second, order) => compareValues(
+      latestVisits.get(String(first.id))?.timestamp,
+      latestVisits.get(String(second.id))?.timestamp,
+      order,
+    ), value)
+    : null;
+  const patients = sortedLatestPage?.items || candidates;
+  return {
+    patients,
+    page: sortedLatestPage?.page || Math.max(1, Math.min(value.page, Number(row.page_no) || 1)),
+    pageSize: value.pageSize,
+    pageCount: sortedLatestPage?.pageCount || pageCount,
+    total,
+    rosterTotal: Number(row.roster_total) || 0,
+    grades: row.grades || [],
+    sections: row.sections || [],
+    schemaVersion: Number(row.schema_version) || 1,
+    settings: row.settings || {},
+  };
+  };
+  if (!transactionFn) return load(queryFn);
+  return transactionFn(async (client) => {
+    await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+    return load(client.query.bind(client));
+  });
+}
+
+export async function loadPatientDirectoryExport({ queryFn = query } = {}) {
+  const result = await queryFn(`
+    WITH patients_in_scope AS (
+      SELECT id,patient_type,data,created_at FROM patients
+    )
+    SELECT
+      COALESCE((SELECT jsonb_agg(jsonb_build_object(
+        'id',p.id,'patient_type',p.patient_type,
+        'data',jsonb_strip_nulls(jsonb_build_object(
+          'studentId',p.data->'studentId','facultyId',p.data->'facultyId','name',p.data->'name',
+          'gradeLevel',p.data->'gradeLevel','section',p.data->'section','adviser',p.data->'adviser',
+          'department',p.data->'department','position',p.data->'position','birthDate',p.data->'birthDate',
+          'gender',p.data->'gender','guardianName',p.data->'guardianName','guardianPhone',p.data->'guardianPhone',
+          'guardianRelation',p.data->'guardianRelation','allergies',p.data->'allergies',
+          'conditions',p.data->'conditions','medications',p.data->'medications','bloodType',p.data->'bloodType'
+        ))
+      ) ORDER BY p.created_at) FROM patients_in_scope p),'[]'::jsonb) AS students,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object(
+        'patientId',v.patient_id,
+        'studentId',COALESCE(NULLIF(v.data->>'studentId',''),v.data->>'patientId',''),
+        'time',v.data->'time','type',v.data->'type','chiefComplaint',v.data->'chiefComplaint',
+        'treatment',v.data->'treatment','disposition',v.data->'disposition',
+        'followUp',v.data->'followUp','nurseName',v.data->'nurseName'
+      ) ORDER BY v.created_at) FROM visits v JOIN patients_in_scope p ON p.id=v.patient_id),'[]'::jsonb) AS visits
+  `);
+  const row = result.rows[0] || {};
+  return {
+    students: (row.students || []).map((entry) => ({ ...(entry.data || {}), id: entry.id, patientType: entry.patient_type })),
+    visits: row.visits || [],
+  };
+}
+
+export async function loadPatientPicker(queryInput = {}, { queryFn = query } = {}) {
+  const search = String(queryInput.q || '').trim();
+  const patientId = String(queryInput.patientId || '').trim();
+  const type = ['student', 'faculty'].includes(String(queryInput.type || '')) ? String(queryInput.type) : null;
+  if (search.length > 200 || patientId.length > 120) {
+    const error = new Error('Patient search text is too long.');
+    error.status = 400;
+    error.code = 'INVALID_PATIENT_SEARCH';
+    throw error;
+  }
+  const escapedSearch = search.replace(/[\\%_]/g, '\\$&');
+  const result = await queryFn(`
+    WITH candidates AS (
+      SELECT id,patient_type,data,
+        CASE WHEN id=$2 THEN 0 ELSE 1 END AS selected_rank
+      FROM patients
+      WHERE ($1::text IS NULL OR patient_type=$1)
+        AND ($3::text='' OR lower(concat_ws(' ',data->>'name',data->>'studentId',data->>'facultyId',data->>'gradeLevel',data->>'section',data->>'department',data->>'position'))
+          LIKE ('%' || lower($3) || '%') ESCAPE E'\\\\')
+         OR ($2::text<>'' AND id=$2 AND ($1::text IS NULL OR patient_type=$1))
+    )
+    SELECT id,patient_type,
+      jsonb_strip_nulls(jsonb_build_object(
+        'name',data->'name','studentId',data->'studentId','facultyId',data->'facultyId',
+        'gradeLevel',data->'gradeLevel','section',data->'section',
+        'department',data->'department','position',data->'position'
+      )) AS data,
+      selected_rank
+    FROM candidates
+    ORDER BY selected_rank, data->>'name' COLLATE patient_name_natural_ci ASC NULLS LAST,
+      id COLLATE patient_name_natural_ci ASC
+    LIMIT 30
+  `, [type, patientId, escapedSearch]);
+  return result.rows.map((row) => ({
+    ...(row.data || {}),
+    id: row.id,
+    patientType: row.patient_type,
+  }));
+}
+
+function addUtcDays(day, count) {
+  const value = new Date(`${day}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + count);
+  return value.toISOString().slice(0, 10);
+}
+
+function reportCandidateDateSql(expression) {
+  return `(
+    left(${expression},10) BETWEEN $1 AND $2
+    OR (${expression} IS NOT NULL AND ${expression} !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}')
+  )`;
+}
+
+export async function loadPatientClinicReportData(start, end, { queryFn = query, transactionFn } = {}) {
+  const read = async (readQuery) => {
+  const lowerBound = addUtcDays(start, -1);
+  const upperBound = addUtcDays(end, 1);
+  const visitDate = "COALESCE(NULLIF(data->>'date',''),NULLIF(data->>'createdAt',''))";
+  const visitsResult = await readQuery(
+    `SELECT jsonb_build_object(
+       'studentId',data->'studentId','patientId',data->'patientId','date',data->'date',
+       'createdAt',data->'createdAt','time',data->'time','chiefComplaint',data->'chiefComplaint',
+       'type',data->'type','treatment',data->'treatment','riskCategory',data->'riskCategory',
+       'riskAssessment',jsonb_build_object('category',data->'riskAssessment'->'category'),
+       'followUp',data->'followUp'
+     ) AS data FROM visits WHERE ${reportCandidateDateSql(visitDate)} ORDER BY created_at`,
+    [lowerBound, upperBound],
+  );
+  const visits = visitsResult.rows.map((row) => row.data || {});
+  const patientIds = [...new Set(visits.map((visit) => String(visit.studentId || visit.patientId || '')).filter(Boolean))];
+  let students = [];
+  if (patientIds.length) {
+    const patientResult = await readQuery(
+      `SELECT id,patient_type,jsonb_build_object('gradeLevel',data->'gradeLevel') AS data
+       FROM patients WHERE id=ANY($1::text[])`,
+      [patientIds],
+    );
+    students = patientResult.rows.map((row) => ({
+      ...(row.data || {}), id: row.id, patientType: row.patient_type,
+    }));
+  }
+  const appointmentDate = "COALESCE(NULLIF(data->>'date',''),NULLIF(starts_at::text,''))";
+  const appointmentsResult = await readQuery(
+    `SELECT jsonb_build_object('date',data->'date','startsAt',CASE WHEN starts_at IS NULL THEN data->'startsAt' ELSE to_jsonb(starts_at) END) AS data
+     FROM appointments WHERE ${reportCandidateDateSql(appointmentDate)}
+       OR (data->>'date' IS NULL AND starts_at >= ($1::date::timestamp AT TIME ZONE 'UTC') - INTERVAL '1 day'
+         AND starts_at < (($2::date + 1)::timestamp AT TIME ZONE 'UTC') + INTERVAL '1 day')
+     ORDER BY created_at`,
+    [lowerBound, upperBound],
+  );
+  const dispenseDate = "COALESCE(NULLIF(data->>'date',''),NULLIF(data->>'createdAt',''))";
+  const dispenseResult = await readQuery(
+    `SELECT jsonb_build_object(
+       'date',data->'date','createdAt',data->'createdAt','itemName',data->'itemName',
+       'inventoryItemName',data->'inventoryItemName','medicineName',data->'medicineName',
+       'itemType',data->'itemType','quantity',data->'quantity'
+     ) AS data FROM dispense_logs WHERE ${reportCandidateDateSql(dispenseDate)} ORDER BY created_at`,
+    [lowerBound, upperBound],
+  );
+  const settingsResult = await readQuery(
+    `SELECT jsonb_build_object('schoolName',data->'schoolName','schoolYear',data->'schoolYear','nurseName',data->'nurseName') AS settings
+     FROM clinic_settings WHERE id=1`,
+  );
+  return {
+    settings: settingsResult.rows[0]?.settings || {},
+    students,
+    visits,
+    appointments: appointmentsResult.rows.map((row) => row.data || {}),
+    dispenseLogs: dispenseResult.rows.map((row) => row.data || {}),
+  };
+  };
+  if (!transactionFn) return read(queryFn);
+  return transactionFn(async (client) => {
+    await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+    return read(client.query.bind(client));
+  });
+}
+
+export async function loadPatientDetail(patientId, { queryFn = query } = {}) {
+  const patientResult = await queryFn(`
+    SELECT p.id,p.patient_type,p.data,
+      COALESCE((SELECT version FROM clinic_settings WHERE id=1),1) AS schema_version,
+      COALESCE((SELECT jsonb_build_object(
+        'schoolName',data->'schoolName','schoolYear',data->'schoolYear','nurseName',data->'nurseName'
+      ) FROM clinic_settings WHERE id=1),'{}'::jsonb) AS settings
+    FROM patients p WHERE p.id=$1
+  `, [String(patientId)]);
+  if (!patientResult.rowCount) return null;
+  const row = patientResult.rows[0];
+  const visitsResult = await queryFn('SELECT data FROM visits WHERE patient_id=$1 ORDER BY created_at ASC', [String(patientId)]);
+  return {
+    patient: studentRecordForUser({ ...(row.data || {}), id: row.id, patientType: row.patient_type }, { role: 'school_nurse' }),
+    visits: visitsResult.rows.map((visit) => publicVisitRecord(visit.data)),
+    settings: row.settings || {},
+    schemaVersion: Number(row.schema_version) || 1,
+  };
+}
+
+export async function loadPatientReportBootstrap({ queryFn = query } = {}) {
+  const result = await queryFn(`
+    SELECT COALESCE(version,1) AS schema_version,
+      COALESCE(jsonb_build_object(
+        'schoolName',data->'schoolName','schoolYear',data->'schoolYear','nurseName',data->'nurseName'
+      ),'{}'::jsonb) AS settings
+    FROM clinic_settings WHERE id=1
+  `);
+  return { schemaVersion: Number(result.rows[0]?.schema_version) || 1, settings: result.rows[0]?.settings || {} };
 }
 
 function appointmentTimestamp(appointment) {

@@ -8,7 +8,7 @@ const initialForm = {
   birthDate: '', gender: '', bloodType: '', allergies: '', conditions: '', medications: '',
 };
 
-export default function FacultyRegistration({ data, reload, embedded = false, onClose, onSaved, onBusyChange }) {
+export default function FacultyRegistration({ schemaVersion, reload, embedded = false, onClose, onSaved, onBusyChange }) {
   const navigate = useNavigate();
   const [form, setForm] = useState(initialForm);
   const [error, setError] = useState('');
@@ -27,9 +27,6 @@ export default function FacultyRegistration({ data, reload, embedded = false, on
     const facultyId = form.facultyId.trim();
     const name = form.name.trim();
     if (!facultyId || !name) return setError('Faculty ID and full name are required.');
-    if (data.students.some((record) => String(record.studentId || record.facultyId || '').trim().toLowerCase() === facultyId.toLowerCase())) {
-      return setError('That ID is already used by a student or faculty record.');
-    }
     if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return setError('Enter a valid email address.');
     saveLock.current = true;
     setSaving(true);
@@ -43,7 +40,7 @@ export default function FacultyRegistration({ data, reload, embedded = false, on
         patientType: 'faculty',
         email: form.email.trim().toLowerCase(),
       };
-      await api.post('/api/patients/faculty', record);
+      await api.post('/api/patients/faculty', { ...record, schemaVersion });
       await reload?.();
       setSaved(true);
       if (onSaved) onSaved();

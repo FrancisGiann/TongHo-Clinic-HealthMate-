@@ -1,10 +1,10 @@
 import { useRef, useState } from 'react';
 import { ArrowLeft, UserPlus } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { addRecord } from '../db/database';
+import { api } from '../utils/api';
 import { STUDENT_GRADE_LEVELS } from '../../shared/grades.js';
 
-export default function StudentRegistration({ data, commitData, embedded = false, onClose, onSaved, onBusyChange }) {
+export default function StudentRegistration({ schemaVersion, reload, embedded = false, onClose, onSaved, onBusyChange }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [form, setForm] = useState({ studentId: '', name: '', gradeLevel: 'Kindergarten', section: '', adviser: '' });
@@ -20,15 +20,13 @@ export default function StudentRegistration({ data, commitData, embedded = false
     const studentId = form.studentId.trim();
     const name = form.name.trim();
     if (!studentId || !name || !form.gradeLevel) { setError('Student ID, name, and grade level are required.'); return; }
-    if (data.students?.some((student) => String(student.studentId || '').trim().toLowerCase() === studentId.toLowerCase())) {
-      setError('A student with this ID is already on the roster.'); return;
-    }
     saveLock.current = true;
     setSaving(true);
     onBusyChange?.(true);
     try {
       const rosterRecord = { studentId, name, gradeLevel: form.gradeLevel, section: form.section.trim(), adviser: form.adviser.trim(), patientType: 'student' };
-      await commitData((current) => addRecord(current, 'students', rosterRecord));
+      await api.post('/api/patients', { patient: rosterRecord, schemaVersion });
+      await reload?.();
       if (onSaved) { onSaved(); return; }
       const returnTo = location.state?.returnTo;
       navigate(typeof returnTo === 'string' && /^\/users(?:\?.*)?$/.test(returnTo) ? returnTo : '/students');

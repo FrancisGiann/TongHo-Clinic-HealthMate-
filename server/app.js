@@ -50,7 +50,7 @@ import { clinicCalendarDate, validateVisitPayload, visitRiskInput } from './doma
 import { appointmentRowsOverlappingPeriod, appointmentSettings, clinicDateTime, generateAppointmentSlots, isAppointmentTransitionAllowed, isValidAppointmentDate, normalizeAppointmentStatus, rankAppointmentSlots, sortedManilaDayLockKeys, unavailablePeriodsForSlot, validateUnavailablePeriod } from './domain/scheduling.js';
 import { clinicalWriteRoles, reportReadRoles } from './domain/authorization.js';
 import { broadcastBatchId, validateBroadcastPayload, validateConsentUpdate } from './domain/communications.js';
-import { clinicDataTransaction, linkUserToPatient, listUsers, loadClinicData, loadNurseDashboardData, saveClinicData, validateVersionAfterAdvance } from './repository.js';
+import { clinicDataTransaction, linkUserToPatient, listUsers, loadClinicData, loadNurseDashboardData, loadPatientClinicReportData, loadPatientDetail, loadPatientDirectory, loadPatientDirectoryExport, loadPatientPicker, loadPatientReportBootstrap, saveClinicData, validateRosterSnapshot, validateVersionAfterAdvance } from './repository.js';
 import { runClinicReminderSweep } from './reminders.js';
 import { canRollbackImport, normalizeImportRows, selectedImportRows } from './domain/imports.js';
 import { patientRosterIdentitySql, rosterIdTrimCharacters } from './domain/roster.js';
@@ -67,6 +67,7 @@ import { guardianSignupAcceptedResponse, validateGuardianSignup, validGuardianSi
 import { buildAuditPageQuery, formatAuditPage, validateAuditPageQuery } from './domain/auditPagination.js';
 import { normalizeDashboardPreferences, validateDashboardPreferences } from './domain/dashboardPreferences.js';
 import { patientSummaryForRange, validateSummaryRange } from './domain/patientSummary.js';
+import { validatePatientProfilePayload } from './domain/patientProfileValidation.js';
 import { guardianSignupDecisionEmail, publicGuardianSignupRequest, validateGuardianSignupDecisionReason, validateGuardianSignupPageQuery } from './domain/guardianSignupApproval.js';
 import { validateBrandingSlot, validateRasterImageBase64 } from './domain/imageValidation.js';
 import { INCIDENT_PHOTO_NOTICE_VERSION, incidentPhotoReadable, incidentPhotosEnabled, projectIncident, validateIncidentPayload, validateIncidentPhotoDecision } from './domain/incidents.js';
@@ -1165,6 +1166,139 @@ export function createApp({
     return res.json({ data: await loadNurseDashboardData() });
   });
 
+  app.get('/api/clinic/bootstrap', requireRoles('school_nurse'), async (_req, res) => {
+    return res.json({ data: await loadPatientReportBootstrap({ queryFn: query }) });
+  });
+
+  app.get('/api/patients/export', requireRoles('school_nurse'), async (_req, res) => {
+    return res.json({ data: await loadPatientDirectoryExport({ queryFn: query }) });
+  });
+
+  app.get('/api/patients', requireRoles('school_nurse'), async (req, res) => {
+    try {
+      return res.json({ data: await loadPatientDirectory(req.query, { queryFn: query, transactionFn: transaction }) });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'INVALID_DIRECTORY_QUERY', error.message);
+      throw error;
+    }
+  });
+
+  app.get('/api/patients/picker', requireRoles('school_nurse'), async (req, res) => {
+    try {
+      return res.json({ data: { patients: await loadPatientPicker(req.query, { queryFn: query }) } });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'INVALID_PATIENT_SEARCH', error.message);
+      throw error;
+    }
+  });
+
+  app.post('/api/patients', requireRoles('school_nurse'), async (req, res) => {
+    const batch = normalizeImportRows('students', [req.body?.patient || {}]);
+    const row = batch.normalizedRows?.[0];
+    if (!row || row.errors.length) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Review the student roster fields.', { fields: row?.errors || [batch.message] });
+    const id = crypto.randomUUID();
+    const record = { ...row.record, id };
+    try {
+      const saved = await clinicDataTransaction(async (client) => {
+        const schemaVersion = await validateVersionAfterAdvance(client, req.body?.schemaVersion);
+        const preview = await inspectImportRows('students', [record], client);
+        if (preview.normalizedRows?.[0]?.duplicate) {
+          const error = new Error('A patient record already uses this student ID.');
+          error.status = 409;
+          error.code = 'DUPLICATE_RECORD';
+          throw error;
+        }
+        await client.query('INSERT INTO patients(id,patient_type,data) VALUES($1,\'student\',$2::jsonb)', [id, JSON.stringify(record)]);
+        await audit(req, 'STUDENT_PATIENT_CREATED', {}, 'patient', id, client);
+        return { patient: record, schemaVersion };
+      });
+      return res.status(201).json({ data: saved });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'PATIENT_CREATE_FAILED', error.message);
+      throw error;
+    }
+  });
+
+  app.get('/api/patients/:id', requireRoles('school_nurse'), async (req, res) => {
+    const patientId = String(req.params.id || '').trim();
+    if (!patientId || patientId.length > 120) return errorResponse(res, 400, 'VALIDATION_ERROR', 'A valid patient id is required.');
+    const detail = await loadPatientDetail(patientId, { queryFn: query });
+    if (!detail) return errorResponse(res, 404, 'PATIENT_NOT_FOUND', 'The selected patient was not found.');
+    return res.json({ data: detail });
+  });
+
+  app.put('/api/patients/:id', requireRoles('school_nurse'), async (req, res) => {
+    const patientId = String(req.params.id || '').trim();
+    if (!patientId || patientId.length > 120) {
+      return errorResponse(res, 400, 'VALIDATION_ERROR', 'A patient record and valid patient id are required.');
+    }
+    const patientValidation = validatePatientProfilePayload(patientId, req.body?.patient);
+    if (!patientValidation.valid) return errorResponse(res, 400, 'VALIDATION_ERROR', patientValidation.message, patientValidation.fields);
+    const patientInput = patientValidation.value;
+    const editableFields = [
+      'studentId', 'facultyId', 'name', 'gradeLevel', 'section', 'adviser', 'department', 'position',
+      'email', 'contactNumber', 'birthDate', 'gender', 'guardianName', 'guardianPhone',
+      'allergies', 'conditions', 'profileImage',
+    ];
+    try {
+      const saved = await clinicDataTransaction(async (client) => {
+        const schemaVersion = await validateVersionAfterAdvance(client, req.body.schemaVersion);
+        const locked = await client.query('SELECT patient_type,data FROM patients WHERE id=$1 FOR UPDATE', [patientId]);
+        if (!locked.rowCount) {
+          const error = new Error('The selected patient was not found.');
+          error.status = 404;
+          error.code = 'PATIENT_NOT_FOUND';
+          throw error;
+        }
+        const current = locked.rows[0].data && typeof locked.rows[0].data === 'object' && !Array.isArray(locked.rows[0].data)
+          ? locked.rows[0].data : {};
+        const next = { ...current, id: patientId, patientType: locked.rows[0].patient_type };
+        for (const field of editableFields) {
+          if (field === 'profileImage' || !Object.hasOwn(patientInput, field)) continue;
+          next[field] = patientInput[field];
+        }
+        if (Object.hasOwn(patientInput, 'profileImage')) {
+          const requestedImage = patientInput.profileImage;
+          if (requestedImage === null || requestedImage === current.profileImage) {
+            next.profileImage = requestedImage;
+          } else {
+            const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/i.exec(requestedImage);
+            if (!match) {
+              const error = new Error('Choose a PNG, JPEG, or WebP profile image.');
+              error.status = 400;
+              error.code = 'INVALID_IMAGE';
+              throw error;
+            }
+            try {
+              const image = validateRasterImageBase64(match[2], { maxBytes: 2 * 1024 * 1024 });
+              next.profileImage = `data:${image.contentType};base64,${image.bytes.toString('base64')}`;
+            } catch {
+              const error = new Error('The profile image exceeds the supported format or size limit.');
+              error.status = 400;
+              error.code = 'INVALID_IMAGE';
+              throw error;
+            }
+          }
+        }
+        const guardianAnswers = current.guardianHealthRecord && typeof current.guardianHealthRecord === 'object'
+          && !Array.isArray(current.guardianHealthRecord) ? current.guardianHealthRecord : null;
+        if (guardianAnswers) Object.assign(next, guardianAnswers, { guardianHealthRecord: guardianAnswers });
+        if (current.consentStatus !== undefined) next.consentStatus = current.consentStatus;
+        else delete next.consentStatus;
+        if (current.consentDueDate !== undefined) next.consentDueDate = current.consentDueDate;
+        else delete next.consentDueDate;
+        await validateRosterSnapshot(client, [next]);
+        await client.query('UPDATE patients SET data=$1::jsonb,updated_at=NOW() WHERE id=$2', [JSON.stringify(next), patientId]);
+        await audit(req, 'PATIENT_PROFILE_UPDATED', { fields: editableFields.filter((field) => Object.hasOwn(patientInput, field)) }, 'patient', patientId, client);
+        return { patient: next, schemaVersion };
+      });
+      return res.json({ data: saved });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'PATIENT_UPDATE_FAILED', error.message);
+      throw error;
+    }
+  });
+
   app.patch('/api/admin/settings/clinic', requireRoles('system_administrator'), async (req, res) => {
     const fields = {
       schoolName: 160,
@@ -1772,12 +1906,10 @@ export function createApp({
     const id = crypto.randomUUID();
     const record = { ...row.record, id };
     try {
-      await clinicDataTransaction(async (client) => {
-        const duplicate = await client.query(
-          `SELECT id FROM patients WHERE LOWER(${patientRosterIdentitySql(2)})=LOWER(BTRIM($1,$2)) LIMIT 1`,
-          [record.facultyId, rosterIdTrimCharacters],
-        );
-        if (duplicate.rowCount) {
+      const saved = await clinicDataTransaction(async (client) => {
+        const schemaVersion = await validateVersionAfterAdvance(client, req.body?.schemaVersion);
+        const preview = await inspectImportRows('faculty', [record], client);
+        if (preview.normalizedRows?.[0]?.duplicate) {
           const error = new Error('A patient record already uses this faculty ID.');
           error.status = 409;
           error.code = 'DUPLICATE_RECORD';
@@ -1785,12 +1917,13 @@ export function createApp({
         }
         await client.query('INSERT INTO patients(id,patient_type,data) VALUES($1,\'faculty\',$2::jsonb)', [id, JSON.stringify(record)]);
         await audit(req, 'FACULTY_PATIENT_CREATED', {}, 'patient', id, client);
+        return { patient: record, schemaVersion };
       });
+      return res.status(201).json({ data: saved });
     } catch (error) {
       if (error.status) return errorResponse(res, error.status, error.code, error.message);
       throw error;
     }
-    return res.status(201).json({ data: { patient: record } });
   });
 
   app.post('/api/risk/assess', requireRoles(...clinicalWriteRoles), async (req, res) => {
@@ -2270,7 +2403,10 @@ export function createApp({
     const end = String(req.query.end || new Date().toISOString().slice(0, 10));
     const start = String(req.query.start || end);
     if (!isValidAppointmentDate(start) || !isValidAppointmentDate(end) || start > end || (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) > 366 * 86400000) return errorResponse(res, 400, 'INVALID_PERIOD', 'Provide a valid report date range of one year or less.');
-    return res.json({ data: visibleReport(buildClinicReport(await loadClinicData(req.user, { includeClinical: true }), start, end), req.user) });
+    const reportData = req.user.role === 'school_nurse'
+      ? await loadPatientClinicReportData(start, end, { queryFn: query, transactionFn: transaction })
+      : await loadClinicData(req.user, { includeClinical: true });
+    return res.json({ data: visibleReport(buildClinicReport(reportData, start, end), req.user) });
   });
 
   app.get('/api/reports/patients/:patientId/summary', requireRoles('school_nurse'), async (req, res) => {

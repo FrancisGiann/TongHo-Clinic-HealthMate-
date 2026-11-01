@@ -4,7 +4,6 @@ import { consultationReportReturn } from './utils/consultationReport.js';
 import StartupScreen from './components/StartupScreen';
 import { useClinicData } from './hooks/useClinicData';
 import { CLINIC_DATA_SLOW_NOTICE_MS } from './utils/api';
-import { canShowNurseDashboardBootstrap, isDashboardBootstrapEntryPath } from './utils/dashboardBootstrap.js';
 import { getCurrentUser, logoutUser } from './utils/auth';
 
 const MainLayout = lazy(() => import('./layouts/MainLayout'));
@@ -38,8 +37,7 @@ export default function App() {
   const [clinicLoadSlow, setClinicLoadSlow] = useState(false);
   const logoutInFlightRef = useRef(false);
   const location = useLocation();
-  const dashboardFirstRef = useRef(isDashboardBootstrapEntryPath(location.pathname));
-  const [data, setData, clinic] = useClinicData(user, { dashboardFirst: dashboardFirstRef.current });
+  const [data, setData, clinic] = useClinicData(user, { pathname: location.pathname, search: location.search });
 
   useEffect(() => {
     setClinicLoadSlow(false);
@@ -113,14 +111,7 @@ export default function App() {
   }
   const isNurse = user.role === 'school_nurse';
   const isAdmin = user.role === 'system_administrator';
-  const canShowDashboardBootstrap = canShowNurseDashboardBootstrap({
-    role: user.role,
-    pathname: location.pathname,
-    loading: clinic.loading,
-    error: clinic.error,
-    dashboardData: clinic.dashboardData,
-  });
-  if (!clinic.ready && !clinic.hasData && !canShowDashboardBootstrap) {
+  if (!clinic.ready && !clinic.hasData) {
     return (
       <StartupScreen
         state={clinic.error ? 'error' : 'loading'}
@@ -136,7 +127,7 @@ export default function App() {
     );
   }
 
-  const pageData = clinic.hasData ? data : clinic.dashboardData;
+  const pageData = clinic.hasData ? data : null;
   const documentMatch = isNurse ? (matchPath('/students/:studentId/visits/:visitId/print', location.pathname) || matchPath('/students/:studentId/passes/:passType', location.pathname)) : null;
   let documentBackground = null;
   if (documentMatch) {
@@ -172,10 +163,10 @@ export default function App() {
           {isNurse ? (
             <>
               <Route path="/" element={<Dashboard data={pageData} user={user} />} />
-              <Route path="/students" element={<Students data={pageData} setData={setData} commitData={clinic.commitData} reload={clinic.reload} />} />
-              <Route path="/students/new" element={<Students data={pageData} setData={setData} commitData={clinic.commitData} reload={clinic.reload} registrationType="student" />} />
-              <Route path="/faculty/new" element={<Students data={pageData} setData={setData} commitData={clinic.commitData} reload={clinic.reload} registrationType="faculty" />} />
-              <Route path="/students/:studentId" element={<StudentProfile data={pageData} commitData={clinic.commitData} reload={clinic.reload} />} />
+              <Route path="/students" element={<Students directory={clinic.scopeData || {}} directoryReady={clinic.scopeDataReady} loading={clinic.scopeLoading} reload={clinic.reload} />} />
+              <Route path="/students/new" element={<Students directory={clinic.scopeData || {}} directoryReady={clinic.scopeDataReady} loading={clinic.scopeLoading} reload={clinic.reload} registrationType="student" />} />
+              <Route path="/faculty/new" element={<Students directory={clinic.scopeData || {}} directoryReady={clinic.scopeDataReady} loading={clinic.scopeLoading} reload={clinic.reload} registrationType="faculty" />} />
+              <Route path="/students/:studentId" element={<StudentProfile data={pageData} reload={clinic.reload} />} />
               <Route path="/health-record-review" element={<HealthRecordReview data={pageData} />} />
               <Route path="/students/:studentId/visits/:visitId/print" element={<VisitPrint data={pageData} user={user} />} />
               <Route path="/students/:studentId/passes/:passType" element={<VisitPrint data={pageData} user={user} />} />

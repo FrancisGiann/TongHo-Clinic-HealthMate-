@@ -13,10 +13,9 @@ import {
 } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useState, useRef, useEffect } from "react";
-import { saveData } from "../db/database";
 import { api } from "../utils/api";
 
-export default function StudentProfile({ data, commitData, reload }) {
+export default function StudentProfile({ data, reload }) {
   const { studentId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -125,16 +124,6 @@ export default function StudentProfile({ data, commitData, reload }) {
       return false;
     }
 
-    // Check for duplicate student ID among OTHER students
-    const normalizedId = externalId.toLowerCase();
-    const duplicateId = data.students?.some((s) => String(s.id) !== String(student.id)
-      && String(s.studentId || s.facultyId || '').trim().toLowerCase() === normalizedId);
-
-    if (duplicateId) {
-      setRecordSaveError('Another patient record already uses this ID.');
-      return false;
-    }
-
     return true;
   };
 
@@ -152,10 +141,8 @@ export default function StudentProfile({ data, commitData, reload }) {
     setRecordSaveError('');
     try {
       const updated = isFaculty ? { ...form, studentId: form.facultyId || form.studentId } : form;
-      await commitData((current) => saveData({
-        ...current,
-        students: current.students.map((item) => String(item.id) === String(student.id) ? updated : item),
-      }));
+      await api.put(`/api/patients/${encodeURIComponent(student.id)}`, { patient: updated, schemaVersion: data.schemaVersion });
+      await reload?.();
       setRecordSaveMessage('Patient record saved to clinic records.');
       setForm(null);
       setImagePreview(null);
