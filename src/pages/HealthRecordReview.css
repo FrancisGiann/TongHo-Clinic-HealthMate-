@@ -47,6 +47,18 @@
 .health-review-search input:focus-visible, .paper-student-picker > input:focus-visible { outline: 2px solid var(--teal-dark); outline-offset: 2px; }
 .dark .health-review-search input, .dark .paper-student-picker > input { background: #1e2329; }
 
+/* Keep the custom receipt checkmark centered and stable instead of inheriting the global rotate animation. */
+.health-record-review-page .document-receipt-review .checkbox-label input[type="checkbox"] { position: relative; flex: 0 0 16px; }
+.health-record-review-page .document-receipt-review .checkbox-label input[type="checkbox"]:checked::after {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  line-height: 1;
+  transform: none;
+  animation: none;
+}
+
 .health-record-review-page .checkbox-group { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: transparent; gap: 14px; }
 .health-record-review-page .checkbox-label { min-width: 0; overflow-wrap: anywhere; }
 .dark .health-record-review-page .primary-btn { color: #132d4c; }
