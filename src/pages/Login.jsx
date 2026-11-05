@@ -538,7 +538,7 @@ function PasswordField({ label, value, onChange, autoComplete, visible: controll
   return (
     <Field icon={Lock} label={label} inputId={inputId}>
       <div className="password-input">
-        <input id={inputId} type={visible ? 'text' : 'password'} value={value} onChange={(event) => onChange(event.target.value)} autoComplete={autoComplete} required />
+        <input data-password-field id={inputId} type={visible ? 'text' : 'password'} value={value} onChange={(event) => onChange(event.target.value)} autoComplete={autoComplete} required />
         {showToggle && <button type="button" className="password-toggle" onClick={toggleVisibility} aria-label={visible ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}>{visible ? <EyeOff size={18} /> : <Eye size={18} />}</button>}
       </div>
     </Field>

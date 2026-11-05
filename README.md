@@ -61,3 +61,12 @@ The Gemini demo mode is an exception intended only for synthetic fictional conte
 ## Deployment
 
 See [Hostinger deployment](docs/DEPLOYMENT.md) and [user guide](docs/USER_GUIDE.md). Never commit `.env`, database passwords, SMTP credentials, or AI keys.
+
+## Password clipboard behavior
+
+Password inputs prevent native copy and cut, including while revealed. Paste,
+autofill, selection, focus, and context menus remain available. This is a UI
+deterrent, not a security boundary. New password visibility controls must retain
+`data-password-field` when changing an input to text. The shared document listeners also cover dynamically added inputs.
+
+Run the clipboard regression tests with `node src/utils/passwordClipboard.test.js`.
