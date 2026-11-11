@@ -43,12 +43,11 @@ export function validateVisitPayload(payload = {}, { now = new Date() } = {}) {
   const treatment = boundedText(payload.treatment, 300, { required: true });
   const disposition = boundedText(payload.disposition, 120, { required: true });
   const notes = boundedText(payload.notes, 2000);
-  const acknowledgement = boundedText(payload.riskAcknowledgement, 500);
+  const warningSignAction = boundedText(payload.warningSignAction, 2000);
   const followUp = payload.followUp === true;
   const followUpDate = payload.followUpDate === undefined || payload.followUpDate === null || payload.followUpDate === ''
     ? null
     : boundedText(payload.followUpDate, 10);
-  const painScore = optionalNumber(payload.painScore, { min: 1, max: 10, integer: true });
   const temperature = optionalNumber(payload.temperature, { min: 30, max: 45 });
   const pulse = optionalNumber(payload.pulse, { min: 20, max: 250, integer: true });
   const medicineId = payload.medicineId === undefined || payload.medicineId === null || payload.medicineId === ''
@@ -68,8 +67,7 @@ export function validateVisitPayload(payload = {}, { now = new Date() } = {}) {
   if (!treatment) fields.treatment = 'Enter the treatment provided (up to 300 characters).';
   if (!disposition) fields.disposition = 'Enter the visit disposition (up to 120 characters).';
   if (notes === null) fields.notes = 'Notes must be 2,000 characters or fewer.';
-  if (acknowledgement === null) fields.riskAcknowledgement = 'Acknowledgement must be 500 characters or fewer.';
-  if (painScore === undefined || painScore === null) fields.painScore = 'Pain score must be an integer from 1 to 10.';
+  if (warningSignAction === null) fields.warningSignAction = 'Warning-sign action must be 2,000 characters or fewer.';
   if (temperature === undefined) fields.temperature = 'Temperature must be between 30 and 45 °C.';
   if (pulse === undefined) fields.pulse = 'Pulse must be an integer from 20 to 250 bpm.';
   if (medicineId === null && payload.medicineId !== undefined && payload.medicineId !== null && payload.medicineId !== '') fields.medicineId = 'Medicine identifier is invalid.';
@@ -98,20 +96,14 @@ export function validateVisitPayload(payload = {}, { now = new Date() } = {}) {
   if (!followUp && payload.followUpDate !== undefined && payload.followUpDate !== null && payload.followUpDate !== '') {
     fields.followUpDate = 'A follow-up date can only be saved when follow-up is scheduled.';
   }
-  if (payload.clinicianRedFlagAssessed !== undefined && typeof payload.clinicianRedFlagAssessed !== 'boolean') {
+  if (payload.clinicianRedFlagAssessed !== true) {
     fields.clinicianRedFlagAssessed = 'Complete the clinician warning-sign screen before saving.';
   }
-  if (payload.clinicianRedFlag !== undefined && payload.clinicianRedFlag !== null && typeof payload.clinicianRedFlag !== 'boolean') {
+  if (typeof payload.clinicianRedFlag !== 'boolean') {
     fields.clinicianRedFlag = 'Urgent warning sign must be true or false.';
   }
-  const clinicianRedFlagAssessed = payload.clinicianRedFlagAssessed === undefined
-    ? typeof payload.clinicianRedFlag === 'boolean'
-    : payload.clinicianRedFlagAssessed;
-  if (clinicianRedFlagAssessed && payload.clinicianRedFlagAssessed !== undefined && typeof payload.clinicianRedFlag !== 'boolean') {
-    fields.clinicianRedFlag = 'Record whether an urgent warning sign was observed.';
-  }
-  if (!clinicianRedFlagAssessed && payload.clinicianRedFlag === true) {
-    fields.clinicianRedFlagAssessed = 'An observed urgent warning sign must be recorded as assessed.';
+  if (payload.clinicianRedFlag === true && !warningSignAction) {
+    fields.warningSignAction = 'Document the urgent warning-sign action before saving.';
   }
 
   const summaryDraft = boundedText(payload.summaryDraft, 2000);
@@ -129,12 +121,11 @@ export function validateVisitPayload(payload = {}, { now = new Date() } = {}) {
       disposition,
       followUp,
       ...(followUp ? { followUpDate } : {}),
-      painScore,
       temperature,
       pulse,
       clinicianRedFlag: Boolean(payload.clinicianRedFlag),
-      clinicianRedFlagAssessed,
-      riskAcknowledgement: acknowledgement,
+      clinicianRedFlagAssessed: true,
+      warningSignAction,
       medicineId,
       medicineQuantity,
       dispensations: hasDispensations ? dispensations.map((entry) => ({
@@ -145,15 +136,5 @@ export function validateVisitPayload(payload = {}, { now = new Date() } = {}) {
       summaryDraft,
       summaryApproved: Boolean(payload.summaryApproved),
     },
-  };
-}
-
-export function visitRiskInput(visit, recentVisitCount) {
-  return {
-    painScore: visit.painScore,
-    clinicianRedFlag: visit.clinicianRedFlagAssessed === false ? null : visit.clinicianRedFlag,
-    recentVisitCount,
-    temperature: visit.temperature,
-    pulse: visit.pulse,
   };
 }

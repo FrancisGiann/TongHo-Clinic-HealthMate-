@@ -4,6 +4,7 @@ import { changePassword, validatePasswordStrength } from '../utils/auth';
 
 const roleLabels = {
   guardian: 'Guardian',
+  student: 'Student',
 };
 
 export default function PortalAccount({ user, onPasswordChanged }) {

@@ -19,6 +19,7 @@ const GuardianRequests = lazy(() => import('./pages/GuardianRequests'));
 const Home = lazy(() => import('./pages/Home'));
 const Login = lazy(() => import('./pages/Login'));
 const PortalDashboard = lazy(() => import('./pages/PortalDashboard'));
+const StudentDashboard = lazy(() => import('./pages/StudentDashboard'));
 const PortalAccount = lazy(() => import('./pages/PortalAccount'));
 const PortalVisits = lazy(() => import('./pages/PortalVisits'));
 const GuardianHealthRecords = lazy(() => import('./pages/GuardianHealthRecords'));
@@ -106,11 +107,12 @@ export default function App() {
       />
     );
   }
-  if (!['guardian', 'school_nurse', 'system_administrator'].includes(user.role)) {
+  if (!['student', 'guardian', 'school_nurse', 'system_administrator'].includes(user.role)) {
     return <StartupScreen state="unsupported" user={user} dark={dark} logoutError={logoutError} signingOut={loggingOut} onSignOut={handleLogout} />;
   }
   const isNurse = user.role === 'school_nurse';
   const isAdmin = user.role === 'system_administrator';
+  const isStudent = user.role === 'student';
   if (!clinic.ready && !clinic.hasData) {
     return (
       <StartupScreen
@@ -176,7 +178,7 @@ export default function App() {
               <Route path="/appointments" element={<Appointments data={pageData} user={user} reload={clinic.reload} />} />
               <Route path="/incidents" element={<Incidents data={pageData} user={user} />} />
               <Route path="/data-imports" element={<NurseSettingsEntry data={pageData} user={user} reload={clinic.refreshInBackground} section="data" />} />
-              <Route path="/risk-rules" element={<NurseSettingsEntry data={pageData} user={user} reload={clinic.reload} section="risk" />} />
+              <Route path="/risk-rules" element={<Navigate to="/settings" replace />} />
               <Route path="/settings" element={<NurseSettingsEntry data={pageData} user={user} reload={clinic.reload} section="account" />} />
             </>
           ) : isAdmin ? (
@@ -188,10 +190,16 @@ export default function App() {
               <Route path="/users" element={<Settings data={pageData} user={user} reload={clinic.reload} section="users" />} />
               <Route path="/data-imports" element={<Settings data={pageData} user={user} reload={clinic.refreshInBackground} section="data" />} />
               <Route path="/communications" element={<Settings data={pageData} user={user} reload={clinic.reload} section="notifications" />} />
-              <Route path="/risk-rules" element={<Settings data={pageData} user={user} reload={clinic.reload} section="risk" />} />
+              <Route path="/risk-rules" element={<Navigate to="/settings" replace />} />
               <Route path="/security" element={<Settings data={pageData} user={user} reload={clinic.reload} section="security" />} />
               <Route path="/cms" element={<ContentManagement />} />
               <Route path="/settings" element={<AdminSettingsEntry data={pageData} user={user} reload={clinic.reload} />} />
+            </>
+          ) : isStudent ? (
+            <>
+              <Route path="/" element={<StudentDashboard data={pageData} user={user} />} />
+              <Route path="/appointments" element={<Appointments data={pageData} user={user} reload={clinic.reload} />} />
+              <Route path="/settings" element={<PortalAccount user={user} onPasswordChanged={() => setUser(null)} />} />
             </>
           ) : (
             <>
@@ -229,7 +237,7 @@ function AdminSettingsEntry({ data, user, reload }) {
     users: '/users',
     data: '/data-imports',
     notifications: '/communications',
-    risk: '/risk-rules',
+    risk: '/settings',
     security: '/security',
     school: '/cms',
   };
@@ -247,7 +255,7 @@ function NurseSettingsEntry({ data, user, reload, section }) {
   const legacyDestinations = {
     account: '/settings',
     data: '/data-imports',
-    risk: '/risk-rules',
+    risk: '/settings',
     notifications: '/',
     reports: '/reports',
     inventory: '/inventory',

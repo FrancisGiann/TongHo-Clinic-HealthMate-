@@ -44,7 +44,6 @@ export default function Dashboard({ data, user }) {
   const [preferencesSaving, setPreferencesSaving] = useState(false);
   const preferencesSaveLock = useRef(false);
   const [preferencesSaveError, setPreferencesSaveError] = useState('');
-  const userFirstName = (user?.name || "Administrator").replace(/^Nurse\s+/i, "").split(" ")[0] || "Admin";
   const [adminUsers, setAdminUsers] = useState([]);
   const [adminUsersLoading, setAdminUsersLoading] = useState(false);
   const [adminUsersError, setAdminUsersError] = useState('');
@@ -118,16 +117,10 @@ export default function Dashboard({ data, user }) {
     return <><NurseDashboard data={data} user={user} preferences={preferences} preferenceControl={preferenceControl} /></>;
   }
 
-  const currentHour = new Date().getHours();
-  let greeting = "Good morning";
-  if (currentHour >= 12 && currentHour < 18) greeting = "Good afternoon";
-  else if (currentHour >= 18) greeting = "Good evening";
-
   return (
     <div className={`dashboard${isAdmin ? " admin-dashboard" : ""}`}>
       <section className="welcome-band">
         <div>
-          <h2>{isAdmin ? "Administration overview" : `${greeting}, ${userFirstName}`}</h2>
           <p className="welcome-copy">
             {isAdmin
               ? "Review account access and open school reports."
@@ -299,10 +292,6 @@ function NurseDashboard({ data, user, preferences, preferenceControl }) {
   const inventoryAlerts = summary?.inventoryAlerts || (data.inventory || [])
     .filter((item) => !item.archived && Number(item.quantity) <= Number(item.reorderLevel))
     .slice(0, 3);
-  const userFirstName = (user?.name || data.settings?.nurseName || 'Nurse')
-    .replace(/^Nurse\s+/i, '').trim().split(/\s+/)[0] || 'Nurse';
-  const hour = now.getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   const todayLabel = new Intl.DateTimeFormat('en-PH', {
     timeZone: 'Asia/Manila', weekday: 'long', month: 'long', day: 'numeric',
   }).format(now);
@@ -321,7 +310,6 @@ function NurseDashboard({ data, user, preferences, preferenceControl }) {
       <header className="nurse-dashboard-header">
         <div>
           <p className="nurse-dashboard-date">{todayLabel} · {data.settings?.schoolYear || 'School clinic'}</p>
-          <h2>{greeting}, {userFirstName}</h2>
           <p>Here’s what needs your attention at the clinic today.</p>
         </div>
         <div className="role-dashboard-art" aria-hidden="true">
@@ -344,15 +332,7 @@ function NurseDashboard({ data, user, preferences, preferenceControl }) {
 }
 
 function renderNurseDashboardWidget(id, { appointmentRequestCount, upcomingAppointmentCount, todayAppointments, alerts, recentVisits, getPatient }) {
-  if (id === 'nurse.appointmentRequests') return <div className="dashboard-widget nurse-worklink-widget" key={id}><NurseWorkLink to="/appointments" icon={CalendarDays} label="Appointment requests" value={`${appointmentRequestCount} to review`} detail={appointmentRequestCount ? 'Confirm or reschedule' : 'No requests waiting'} /></div>;
-  if (id === 'nurse.upcomingAppointments') return <div className="dashboard-widget nurse-worklink-widget" key={id}><NurseWorkLink to="/appointments" icon={Clock3} label="Upcoming appointments" value={`${upcomingAppointmentCount} scheduled`} detail={todayAppointments.length ? `${todayAppointments.length} scheduled today` : 'View the clinic schedule'} /></div>;
-  if (id === 'nurse.todayAppointments') return <section className="panel nurse-dashboard-panel" key={id}>
-    <div className="panel-heading"><div><h3>Today’s appointments</h3><p>Scheduled visits for today</p></div><Link className="nurse-section-link" to="/appointments">Open schedule <ChevronRight size={15} aria-hidden="true" /></Link></div>
-    {todayAppointments.length ? <div className="nurse-dashboard-list">{todayAppointments.map(({ appointment, timestamp }) => {
-      const patient = getPatient(appointment.studentId || appointment.patientId);
-      return <div className="nurse-dashboard-row" key={appointment.id}><time>{formatManilaDateTime(new Date(timestamp))}</time><div><strong>{patient?.name || 'Patient record unavailable'}</strong><span>{appointment.reason || 'Appointment'}</span></div><span className="status-chip success">Scheduled</span></div>;
-    })}</div> : <div className="nurse-dashboard-empty"><CalendarDays size={20} aria-hidden="true" /><div><strong>Your schedule is clear for today.</strong><p>Scheduled visits for today will appear here.</p><Link to="/appointments">View appointment schedule</Link></div></div>}
-  </section>;
+  if (id === 'nurse.appointments') return <div className="dashboard-widget nurse-worklink-widget" key={id}><NurseWorkLink to="/appointments" icon={CalendarDays} label="Clinic scheduling" value={`${appointmentRequestCount} requests to review`} detail={`${upcomingAppointmentCount} scheduled upcoming · ${todayAppointments.length} today`} /></div>;
   if (id === 'nurse.inventoryAttention') return <section className="panel nurse-dashboard-panel" key={id}>
     <div className="panel-heading"><div><h3>Needs attention</h3><p>Items with a clear next step</p></div><span className="nurse-alert-count" aria-label={`${alerts.length} alerts`}>{alerts.length}</span></div>
     {alerts.length ? <div className="nurse-dashboard-alerts">{alerts.map((alert) => <Link className="nurse-dashboard-alert" key={alert.key} to={alert.to}><span><strong>{alert.title}</strong><small>{alert.detail}</small></span><ChevronRight size={16} aria-hidden="true" /></Link>)}</div> : <div className="nurse-dashboard-empty"><ClipboardCheck size={20} aria-hidden="true" /><div><strong>No inventory items need attention.</strong><p>Items at or below reorder level will appear here.</p></div></div>}

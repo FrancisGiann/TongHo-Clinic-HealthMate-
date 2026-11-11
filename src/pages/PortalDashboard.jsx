@@ -1,6 +1,8 @@
-import { CalendarDays, ChevronRight, ClipboardList, HeartPulse } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { CalendarDays, ChevronRight, ClipboardList, HeartPulse, ShieldCheck } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatManilaDateTime } from '../utils/dateTime';
+import { api } from '../utils/api';
 
 const appointmentTime = (appointment) => {
   const value = appointment.startsAt || (appointment.date
@@ -12,6 +14,30 @@ const appointmentTime = (appointment) => {
 
 export default function PortalDashboard({ data, user }) {
   const patients = data.students || [];
+  const [permissions, setPermissions] = useState({});
+  const [permissionBusy, setPermissionBusy] = useState('');
+  const [permissionFeedback, setPermissionFeedback] = useState(null);
+  useEffect(() => {
+    setPermissions(Object.fromEntries(patients.map((patient) => [String(patient.id), Boolean(patient.schedulingPermission)])));
+  }, [patients]);
+  const changeSchedulingPermission = async (patient) => {
+    const id = String(patient.id);
+    if (permissionBusy) return;
+    const allowed = !permissions[id];
+    setPermissionBusy(id);
+    setPermissionFeedback(null);
+    try {
+      const result = await api.patch(`/api/guardian/students/${encodeURIComponent(id)}/scheduling-access`, { allowed });
+      setPermissions((current) => ({ ...current, [id]: Boolean(result.allowed) }));
+      setPermissionFeedback({ tone: 'success', message: allowed
+        ? 'Student appointment requests are allowed. Ask the school to send a new individual invitation.'
+        : result.changed ? 'Student scheduling access and sign-in were revoked.' : 'Student scheduling access is already off.' });
+    } catch (error) {
+      setPermissionFeedback({ tone: 'error', message: error.message || 'Scheduling access could not be updated.' });
+    } finally {
+      setPermissionBusy('');
+    }
+  };
   const patientIds = new Set(patients.map((patient) => String(patient.id)));
   const visits = (data.visits || [])
     .filter((visit) => patientIds.has(String(visit.studentId || visit.patientId)))
@@ -67,6 +93,15 @@ export default function PortalDashboard({ data, user }) {
                 <Link className="portal-row-action" to={`/profiles/${encodeURIComponent(patient.id)}`} aria-label={`View ${patient.name || 'patient'} health profile`}>
                   View details <ChevronRight size={14} aria-hidden="true" />
                 </Link>
+                <div className="portal-scheduling-permission">
+                  <span><ShieldCheck size={15} aria-hidden="true" /> {permissions[String(patient.id)] ? 'Student scheduling is allowed' : 'Student scheduling is off'}</span>
+                  {patient.canManageSchedulingPermission ? <>
+                    <small>{permissions[String(patient.id)] ? 'Only the guardian who granted this permission can revoke it. Restoring student sign-in requires a new school invitation.' : 'A linked guardian can allow appointment requests. The school must issue a new individual invitation before the student can sign in.'}</small>
+                    <button type="button" className="table-action" onClick={() => changeSchedulingPermission(patient)} disabled={Boolean(permissionBusy)}>
+                      {permissionBusy === String(patient.id) ? 'Saving…' : permissions[String(patient.id)] ? 'Revoke student access' : 'Allow student access'}
+                    </button>
+                  </> : <small>The granting guardian manages this permission. Contact the school clinic if access needs to be disabled.</small>}
+                </div>
               </article>
             ))}
           </div>
@@ -77,6 +112,8 @@ export default function PortalDashboard({ data, user }) {
           </div>
         )}
       </section>
+
+      {permissionFeedback && <p className={permissionFeedback.tone === 'error' ? 'error-banner' : 'success-message'} role={permissionFeedback.tone === 'error' ? 'alert' : 'status'}>{permissionFeedback.message}</p>}
 
       <section className="panel portal-panel" id="portal-appointments" aria-labelledby="portal-appointments-heading">
         <div className="panel-heading">

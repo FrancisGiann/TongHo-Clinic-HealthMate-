@@ -162,7 +162,7 @@ export default function Home({ authError = '' }) {
             <HeartHandshake size={24} aria-hidden="true" />
             <h2 id="hm-home-community-title">One school community, connected with care.</h2>
           </div>
-          <p>Clinic staff can manage health records and visits in one workspace. Guardians can follow information shared for linked students and request clinic appointments.</p>
+          <p>Clinic staff can manage health records and visits in one workspace. Guardians can follow information shared for linked students and request clinic appointments. Students with an approved account can request and track only their own clinic appointments.</p>
         </div>
         <figure className="hm-home-community-art">
           <img
@@ -201,13 +201,13 @@ export default function Home({ authError = '' }) {
             <p>Create a guardian account request, then follow records for linked students and request clinic appointments after an administrator verifies your relationship.</p>
           </article>
         </div>
-        <p className="hm-home-student-note">Students are school-managed patient records. They do not have accounts or sign in.</p>
+        <p className="hm-home-student-note">A guardian must grant scheduling permission, then an administrator verifies the student roster identity and sends an individual invitation. Student accounts can access only their own clinic scheduling; clinical records and incidents remain staff-only.</p>
       </section>
 
       <section className="hm-home-access" aria-labelledby="hm-home-access-title">
         <div>
           <h2 id="hm-home-access-title">Request a guardian account.</h2>
-          <p>Verify your email and submit one student ID. A school administrator reviews the relationship against school records before activating your account. Staff accounts continue to use administrator invitations.</p>
+          <p>Verify your email and submit one student ID. A school administrator reviews the relationship against school records before activating your account. Students receive a separate invitation only after guardian permission and roster verification. Staff accounts continue to use administrator invitations.</p>
         </div>
         <Link className="hm-home-access-link" to="/login">Sign in or create an account <ArrowRight size={17} /></Link>
       </section>

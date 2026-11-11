@@ -109,6 +109,18 @@ export async function issueSession(req, res, user, remember = false, { transacti
   await transactionFn(async (client) => {
     // Serializing issuance on the user row makes the per-account cap safe under concurrent logins.
     await client.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [user.id]);
+    if (user.role === 'student') {
+      const access = await client.query(
+        `SELECT 1 FROM patients p
+         JOIN guardian_student_scheduling_permissions g ON g.patient_id=p.id AND g.allowed=TRUE
+         JOIN guardian_patient_links l ON l.guardian_user_id=g.guardian_user_id AND l.patient_id=g.patient_id
+         JOIN users guardian ON guardian.id=g.guardian_user_id AND guardian.role='guardian' AND guardian.status='active'
+         JOIN users student ON student.id=p.user_id AND student.status='active'
+         WHERE student.id=$1 AND p.patient_type='student' LIMIT 1`,
+        [user.id],
+      );
+      if (!access.rowCount) throw new Error('Student scheduling permission is no longer active.');
+    }
     await client.query(
       `DELETE FROM sessions WHERE user_id=$1
        AND (expires_at<=NOW() OR last_seen_at<=NOW()-($2::double precision * INTERVAL '1 millisecond'))`,
@@ -156,7 +168,14 @@ export async function loadSession(req, _res, next, queryFn = query) {
     const result = await queryFn(
       `UPDATE sessions s SET last_seen_at=NOW() FROM users u
        WHERE s.user_id=u.id AND s.token_hash=$1 AND s.expires_at>NOW()
-         AND s.last_seen_at>NOW()-($2::double precision * INTERVAL '1 millisecond') AND u.status='active' AND u.role<>'student'
+         AND s.last_seen_at>NOW()-($2::double precision * INTERVAL '1 millisecond') AND u.status='active'
+         AND (u.role<>'student' OR EXISTS (
+           SELECT 1 FROM patients p
+           JOIN guardian_student_scheduling_permissions g ON g.patient_id=p.id AND g.allowed=TRUE
+           JOIN guardian_patient_links l ON l.guardian_user_id=g.guardian_user_id AND l.patient_id=g.patient_id
+           JOIN users guardian ON guardian.id=g.guardian_user_id AND guardian.role='guardian' AND guardian.status='active'
+           WHERE p.user_id=u.id AND p.patient_type='student'
+         ))
        RETURNING u.*`,
       [hashSecret(token), SESSION_IDLE_TTL_MS],
     );
@@ -314,7 +333,7 @@ export async function passwordResetChallenge(user, {
   logger = console,
 } = {}) {
   const fallback = newId();
-  if (!user || user.status !== 'active' || user.role === 'student') return fallback;
+  if (!user || user.status !== 'active') return fallback;
   try {
     return await issueChallenge(user, 'password_reset');
   } catch {

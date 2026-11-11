@@ -46,7 +46,7 @@ import { assertCurrentBrandingVersion, BRANDING_SLOT_NAMES, projectBrandingAsset
 import { assertCurrentLandingContentVersion, projectAdminLandingContent, projectPublicLandingContent, validateLandingContent } from './domain/landingContent.js';
 import { sanitizeAuditLogs } from './domain/audit.js';
 import { summarizeEncounter } from './ai.js';
-import { clinicCalendarDate, validateVisitPayload, visitRiskInput } from './domain/visit.js';
+import { clinicCalendarDate, validateVisitPayload } from './domain/visit.js';
 import { appointmentRowsOverlappingPeriod, appointmentSettings, clinicDateTime, generateAppointmentSlots, isAppointmentTransitionAllowed, isValidAppointmentDate, normalizeAppointmentStatus, rankAppointmentSlots, sortedManilaDayLockKeys, unavailablePeriodsForSlot, validateUnavailablePeriod } from './domain/scheduling.js';
 import { clinicalWriteRoles, reportReadRoles } from './domain/authorization.js';
 import { broadcastBatchId, validateBroadcastPayload, validateConsentUpdate } from './domain/communications.js';
@@ -62,7 +62,7 @@ import { persistHealthRecordStatusNotifications } from './domain/healthRecordNot
 import { clinicArrivalNotice, clinicVisitCareSummary, notificationDeliveryCounts, recordClinicArrival, validateClinicArrivalPayload } from './domain/clinicArrivals.js';
 import { listInAppNotifications, markInAppNotificationRead } from './domain/notifications.js';
 import { createOrReplayVisitRequest, findVisitRequest, publicVisitRecord, validVisitRequestId, visitRequestFingerprint } from './domain/visitRequests.js';
-import { activateInvitedAccount, changeAccountStatus, renewPendingInvitation } from './domain/account-access.js';
+import { activateInvitedAccount, changeAccountStatus, renewPendingInvitation, revokeStudentAccountAccess } from './domain/account-access.js';
 import { guardianSignupAcceptedResponse, validateGuardianSignup, validGuardianSignupMetadata } from './domain/guardianSignup.js';
 import { buildAuditPageQuery, formatAuditPage, validateAuditPageQuery } from './domain/auditPagination.js';
 import { normalizeDashboardPreferences, validateDashboardPreferences } from './domain/dashboardPreferences.js';
@@ -124,6 +124,19 @@ async function canAccessPatient(user, patientId) {
     `SELECT 1 FROM guardian_patient_links l JOIN patients p ON p.id=l.patient_id
      WHERE l.guardian_user_id=$1 AND l.patient_id=$2 AND p.patient_type='student'`,
     [user.id, String(patientId)],
+  );
+  return Boolean(result.rowCount);
+}
+
+async function hasStudentSchedulingPermission(userId, queryFn = query) {
+  const result = await queryFn(
+    `SELECT 1 FROM patients p
+     JOIN guardian_student_scheduling_permissions g ON g.patient_id=p.id AND g.allowed=TRUE
+     JOIN guardian_patient_links l ON l.guardian_user_id=g.guardian_user_id AND l.patient_id=g.patient_id
+     JOIN users guardian ON guardian.id=g.guardian_user_id AND guardian.role='guardian' AND guardian.status='active'
+     JOIN users student ON student.id=p.user_id AND student.status='active'
+     WHERE student.id=$1 AND p.patient_type='student' LIMIT 1`,
+    [userId],
   );
   return Boolean(result.rowCount);
 }
@@ -378,14 +391,22 @@ export function createApp({
       return errorResponse(res, 401, 'INVALID_CREDENTIALS', 'Invalid credentials.');
     }
     await clearFailedLogin(failureKey, identifier);
-    if (user.status !== 'active' || user.role === 'student') return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'This account is not active. Contact an administrator.');
+    if (user.status !== 'active') return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'This account is not active. Contact an administrator.');
+    if (user.role === 'student' && !(await hasStudentSchedulingPermission(user.id, query))) {
+      return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'Student scheduling access is no longer active. Contact your guardian or the school clinic.');
+    }
     const requireOtp = loginOtpRequired();
     if (requireOtp) {
       const challengeId = await createOtpChallenge(user, 'login', { remember: req.body?.remember === true });
       await audit(req, 'LOGIN_OTP_SENT', { userId: user.id });
       return res.status(202).json({ data: { mfaRequired: true, challengeId, username: user.username, message: 'A verification code was sent to your email.' } });
     }
-    await issueSession(req, res, user, req.body?.remember === true);
+    try {
+      await issueSession(req, res, user, req.body?.remember === true, { transactionFn: transaction });
+    } catch (error) {
+      if (user.role === 'student') return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'Student scheduling access is no longer active. Contact your guardian or the school clinic.');
+      throw error;
+    }
     await query('UPDATE users SET last_login_at=NOW() WHERE id=$1', [user.id]);
     req.user = user;
     await audit(req, 'LOGIN_SUCCESS');
@@ -395,10 +416,16 @@ export function createApp({
   app.post('/api/auth/otp/verify', otpVerifyLimiter, async (req, res) => {
     const challenge = await consumeOtp(req.body?.challengeId, req.body?.code, 'login');
     if (!challenge) return errorResponse(res, 400, 'INVALID_OTP', 'The verification code is invalid or expired.');
-    const result = await query("SELECT * FROM users WHERE id=$1 AND status='active' AND role<>'student'", [challenge.user_id]);
+    const result = await query("SELECT * FROM users WHERE id=$1 AND status='active'", [challenge.user_id]);
     const user = result.rows[0];
     if (!user) return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'This account is not active.');
-    await issueSession(req, res, user, Boolean(challenge.metadata?.remember));
+    if (user.role === 'student' && !(await hasStudentSchedulingPermission(user.id, query))) return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'Student scheduling access is no longer active. Contact your guardian or the school clinic.');
+    try {
+      await issueSession(req, res, user, Boolean(challenge.metadata?.remember), { transactionFn: transaction });
+    } catch (error) {
+      if (user.role === 'student') return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'Student scheduling access is no longer active. Contact your guardian or the school clinic.');
+      throw error;
+    }
     await query('UPDATE users SET last_login_at=NOW() WHERE id=$1', [user.id]);
     req.user = user;
     await audit(req, 'LOGIN_SUCCESS', { mfa: true });
@@ -773,7 +800,8 @@ export function createApp({
     if (typeof identifier !== 'string' || identifier.length > 254) {
       return errorResponse(res, 400, 'VALIDATION_ERROR', 'Email/username is invalid.');
     }
-    const user = await findUser(identifier);
+    let user = await findUser(identifier);
+    if (user?.role === 'student' && !(await hasStudentSchedulingPermission(user.id, query))) user = null;
     const challengeId = await passwordResetChallenge(user);
     await audit(req, 'PASSWORD_RESET_REQUESTED', { accountFound: Boolean(user) });
     return res.json({ data: { challengeId, message: 'If the account exists, a reset code was sent.' } });
@@ -787,10 +815,11 @@ export function createApp({
     if (passwordError) return errorResponse(res, 400, 'WEAK_PASSWORD', passwordError);
     const challenge = await consumeOtp(req.body?.challengeId, req.body?.code, 'password_reset');
     if (!challenge) return errorResponse(res, 400, 'INVALID_OTP', 'The reset code is invalid or expired.');
-    const account = await query("SELECT id FROM users WHERE id=$1 AND status='active' AND role<>'student'", [challenge.user_id]);
+    const account = await query("SELECT id,role FROM users WHERE id=$1 AND status='active'", [challenge.user_id]);
     if (!account.rowCount) return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'This account cannot use password reset. Contact an administrator.');
+    if (account.rows[0].role === 'student' && !(await hasStudentSchedulingPermission(challenge.user_id, query))) return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'This account cannot use password reset. Contact an administrator.');
     const passwordChanged = await transaction(async (client) => {
-      const updated = await client.query("UPDATE users SET password_hash=$1,updated_at=NOW() WHERE id=$2 AND status='active' AND role<>'student'", [await hashPassword(req.body.password), challenge.user_id]);
+      const updated = await client.query("UPDATE users SET password_hash=$1,updated_at=NOW() WHERE id=$2 AND status='active' AND (role<>'student' OR EXISTS (SELECT 1 FROM patients p JOIN guardian_student_scheduling_permissions g ON g.patient_id=p.id AND g.allowed=TRUE JOIN guardian_patient_links l ON l.guardian_user_id=g.guardian_user_id AND l.patient_id=g.patient_id JOIN users guardian ON guardian.id=g.guardian_user_id AND guardian.role='guardian' AND guardian.status='active' WHERE p.user_id=users.id AND p.patient_type='student'))", [await hashPassword(req.body.password), challenge.user_id]);
       if (!updated.rowCount) return false;
       await client.query('DELETE FROM sessions WHERE user_id=$1', [challenge.user_id]);
       return true;
@@ -1054,6 +1083,13 @@ export function createApp({
     if (!patientId || patientId.length > 120 || !relationship || relationship.length > 80) return errorResponse(res, 400, 'VALIDATION_ERROR', 'A student record and guardian relationship are required.');
     try {
       await transaction(async (client) => {
+        const patient = await client.query("SELECT id FROM patients WHERE id=$1 AND patient_type='student' FOR UPDATE", [patientId]);
+        if (!patient.rowCount) {
+          const error = new Error('Student patient record not found.');
+          error.status = 404;
+          error.code = 'PATIENT_NOT_FOUND';
+          throw error;
+        }
         const account = await client.query('SELECT id,role,status FROM users WHERE id=$1 FOR UPDATE', [req.params.id]);
         if (!account.rowCount) {
           const error = new Error('User not found.');
@@ -1065,13 +1101,6 @@ export function createApp({
           const error = new Error('Only guardian accounts can be linked to a student.');
           error.status = 409;
           error.code = 'GUARDIAN_ACCOUNT_REQUIRED';
-          throw error;
-        }
-        const patient = await client.query("SELECT id FROM patients WHERE id=$1 AND patient_type='student'", [patientId]);
-        if (!patient.rowCount) {
-          const error = new Error('Student patient record not found.');
-          error.status = 404;
-          error.code = 'PATIENT_NOT_FOUND';
           throw error;
         }
         await client.query(
@@ -1086,6 +1115,196 @@ export function createApp({
       if (error.status) return errorResponse(res, error.status, error.code, error.message);
       throw error;
     }
+  });
+
+  app.delete('/api/admin/users/:id/patient-link', requireRoles('system_administrator'), async (req, res) => {
+    if (!validUuid(req.params.id)) return errorResponse(res, 400, 'INVALID_USER_ID', 'A valid user id is required.');
+    const patientId = String(req.body?.patientId || '').trim();
+    if (!patientId || patientId.length > 120) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Choose a student record to unlink.');
+    const result = await transaction(async (client) => {
+      const patient = await client.query("SELECT id,user_id FROM patients WHERE id=$1 AND patient_type='student' FOR UPDATE", [patientId]);
+      if (!patient.rowCount) return { error: 'PATIENT_NOT_FOUND' };
+      const account = await client.query("SELECT id,role FROM users WHERE id=$1 FOR UPDATE", [req.params.id]);
+      if (!account.rowCount) return { error: 'NOT_FOUND' };
+      if (account.rows[0].role !== 'guardian') return { error: 'GUARDIAN_ACCOUNT_REQUIRED' };
+      const deleted = await client.query('DELETE FROM guardian_patient_links WHERE guardian_user_id=$1 AND patient_id=$2 RETURNING guardian_user_id', [req.params.id, patientId]);
+      if (!deleted.rowCount) return { error: 'LINK_NOT_FOUND' };
+      const revoked = await client.query(
+        `UPDATE guardian_student_scheduling_permissions SET allowed=FALSE,updated_at=NOW()
+         WHERE patient_id=$1 AND guardian_user_id=$2 AND allowed=TRUE RETURNING patient_id`,
+        [patientId, req.params.id],
+      );
+      if (revoked.rowCount) await revokeStudentAccountAccess(client, patientId, patient.rows[0].user_id);
+      await audit(req, 'GUARDIAN_STUDENT_LINK_REMOVED', { schedulingAccessRevoked: Boolean(revoked.rowCount) }, 'patient', patientId, client);
+      return { success: true, schedulingAccessRevoked: Boolean(revoked.rowCount) };
+    });
+    if (result.error) return errorResponse(res, result.error === 'PATIENT_NOT_FOUND' || result.error === 'NOT_FOUND' || result.error === 'LINK_NOT_FOUND' ? 404 : 409, result.error, result.error === 'GUARDIAN_ACCOUNT_REQUIRED' ? 'Only guardian accounts can be unlinked.' : 'The selected guardian link was not found.');
+    return res.json({ data: result });
+  });
+
+  app.patch('/api/guardian/students/:patientId/scheduling-access', requireRoles('guardian'), async (req, res) => {
+    const patientId = String(req.params.patientId || '').trim();
+    if (!patientId || patientId.length > 120 || Object.keys(req.body || {}).some((key) => key !== 'allowed') || typeof req.body?.allowed !== 'boolean') {
+      return errorResponse(res, 400, 'VALIDATION_ERROR', 'Choose whether to allow student appointment requests.');
+    }
+    const result = await transaction(async (client) => {
+      const patient = await client.query(
+        `SELECT p.id,p.user_id FROM patients p
+         JOIN guardian_patient_links l ON l.patient_id=p.id AND l.guardian_user_id=$2
+         WHERE p.id=$1 AND p.patient_type='student' FOR UPDATE OF p`,
+        [patientId, req.user.id],
+      );
+      if (!patient.rowCount) return { error: 'LINK_REQUIRED' };
+      const guardian = await client.query("SELECT id FROM users WHERE id=$1 AND role='guardian' AND status='active' FOR UPDATE", [req.user.id]);
+      if (!guardian.rowCount) return { error: 'GUARDIAN_INACTIVE' };
+      const current = await client.query('SELECT guardian_user_id,allowed FROM guardian_student_scheduling_permissions WHERE patient_id=$1 FOR UPDATE', [patientId]);
+      if (req.body.allowed && current.rowCount && current.rows[0].allowed && String(current.rows[0].guardian_user_id) !== String(req.user.id)) {
+        return { error: 'ALREADY_GRANTED' };
+      }
+      if (req.body.allowed) {
+        await client.query(
+          `INSERT INTO guardian_student_scheduling_permissions(patient_id,guardian_user_id,allowed,granted_at,updated_at)
+           VALUES($1,$2,TRUE,NOW(),NOW())
+           ON CONFLICT(patient_id) DO UPDATE SET guardian_user_id=EXCLUDED.guardian_user_id,allowed=TRUE,granted_at=NOW(),updated_at=NOW()`,
+          [patientId, req.user.id],
+        );
+      } else {
+        if (current.rowCount && current.rows[0].allowed && String(current.rows[0].guardian_user_id) !== String(req.user.id)) {
+          return { error: 'GRANTOR_REQUIRED' };
+        }
+        const revoked = current.rowCount && current.rows[0].allowed
+          ? await client.query('UPDATE guardian_student_scheduling_permissions SET allowed=FALSE,updated_at=NOW() WHERE patient_id=$1 AND guardian_user_id=$2 AND allowed=TRUE RETURNING patient_id', [patientId, req.user.id])
+          : { rowCount: 0 };
+        if (revoked.rowCount) {
+          await revokeStudentAccountAccess(client, patientId, patient.rows[0].user_id);
+          await audit(req, 'STUDENT_SCHEDULING_PERMISSION_REVOKED', { patientId }, 'patient', patientId, client);
+        }
+      }
+      if (req.body.allowed) await audit(req, 'STUDENT_SCHEDULING_PERMISSION_GRANTED', { patientId }, 'patient', patientId, client);
+      return { allowed: req.body.allowed, changed: req.body.allowed || Boolean(current.rowCount && current.rows[0].allowed) };
+    });
+    if (result.error === 'LINK_REQUIRED') return errorResponse(res, 404, 'STUDENT_LINK_NOT_FOUND', 'This student is not linked to your guardian account.');
+    if (result.error === 'GUARDIAN_INACTIVE') return errorResponse(res, 403, 'ACCOUNT_INACTIVE', 'This guardian account is not active.');
+    if (result.error === 'ALREADY_GRANTED') return errorResponse(res, 409, 'PERMISSION_ALREADY_GRANTED', 'Another linked guardian currently manages student scheduling access. Ask that guardian to revoke access before granting it here.');
+    if (result.error === 'GRANTOR_REQUIRED') return errorResponse(res, 403, 'PERMISSION_GRANTOR_REQUIRED', 'Only the guardian who granted student scheduling access can revoke it.');
+    return res.json({ data: result });
+  });
+
+  app.post('/api/admin/students/:patientId/invitation', requireRoles('system_administrator'), async (req, res) => {
+    const patientId = String(req.params.patientId || '').trim();
+    const email = normalizeIdentifier(req.body?.email);
+    const confirmedStudentId = String(req.body?.confirmedStudentId || '').trim();
+    if (!patientId || patientId.length > 120 || !validEmail(email) || !confirmedStudentId || confirmedStudentId.length > 80) {
+      return errorResponse(res, 400, 'VALIDATION_ERROR', 'Choose a roster student, confirm their student ID, and enter a valid invitation email.');
+    }
+    const rawToken = createRawToken();
+    const userId = crypto.randomUUID();
+    const invitationId = crypto.randomUUID();
+    const placeholderHash = await bcrypt.hash(createRawToken(), 12);
+    let account;
+    try {
+      account = await transaction(async (client) => {
+        const patientResult = await client.query(
+          "SELECT id,user_id,data FROM patients WHERE id=$1 AND patient_type='student' FOR UPDATE",
+          [patientId],
+        );
+        const patient = patientResult.rows[0];
+        if (!patient) {
+          const error = new Error('The selected student roster record was not found.');
+          error.status = 404;
+          error.code = 'STUDENT_NOT_FOUND';
+          throw error;
+        }
+        const rosterStudentId = String(patient.data?.studentId || '').trim();
+        if (!rosterStudentId || rosterStudentId.toLocaleLowerCase() !== confirmedStudentId.toLocaleLowerCase()) {
+          const error = new Error('Confirm the student ID shown on the selected roster record.');
+          error.status = 409;
+          error.code = 'STUDENT_ID_CONFIRMATION_MISMATCH';
+          throw error;
+        }
+        const permission = await client.query(
+          `SELECT 1 FROM guardian_student_scheduling_permissions g
+           JOIN guardian_patient_links l ON l.guardian_user_id=g.guardian_user_id AND l.patient_id=g.patient_id
+           JOIN users guardian ON guardian.id=g.guardian_user_id AND guardian.role='guardian' AND guardian.status='active'
+           WHERE g.patient_id=$1 AND g.allowed=TRUE LIMIT 1`,
+          [patientId],
+        );
+        if (!permission.rowCount) {
+          const error = new Error('A linked guardian must authorize student appointment requests before an invitation is issued.');
+          error.status = 409;
+          error.code = 'GUARDIAN_PERMISSION_REQUIRED';
+          throw error;
+        }
+        let current = null;
+        if (patient.user_id) {
+          const selected = await client.query('SELECT id,username,email,name,role,status FROM users WHERE id=$1 FOR UPDATE', [patient.user_id]);
+          current = selected.rows[0] || null;
+          if (!current || current.role !== 'student' || !['deactivated', 'invited', 'suspended'].includes(current.status)) {
+            const error = new Error('This student already has an active or unavailable account. Disable the existing account before sending a fresh invitation.');
+            error.status = 409;
+            error.code = 'STUDENT_ACCOUNT_UNAVAILABLE';
+            throw error;
+          }
+        }
+        const conflictingEmail = await client.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1) AND ($2::uuid IS NULL OR id<>$2) LIMIT 1', [email, current?.id || null]);
+        if (conflictingEmail.rowCount) {
+          const error = new Error('That email already belongs to another account.');
+          error.status = 409;
+          error.code = 'ACCOUNT_EXISTS';
+          throw error;
+        }
+        const name = String(patient.data?.name || '').trim();
+        if (!name) {
+          const error = new Error('The selected roster record needs a name before an invitation can be sent.');
+          error.status = 409;
+          error.code = 'STUDENT_IDENTITY_INCOMPLETE';
+          throw error;
+        }
+        const targetUserId = current?.id || userId;
+        if (current) {
+          await client.query(
+            `UPDATE users SET username=$1,email=$2,password_hash=$3,name=$4,status='invited',mfa_enabled=TRUE,updated_at=NOW()
+             WHERE id=$5`,
+            [`invited-${String(current.id).slice(0, 8)}`, email, placeholderHash, name, current.id],
+          );
+          await client.query("UPDATE invitations SET expires_at=LEAST(expires_at,NOW()) WHERE role='student' AND patient_id=$1 AND accepted_at IS NULL", [patientId]);
+          await client.query('DELETE FROM sessions WHERE user_id=$1', [current.id]);
+        } else {
+          const conflict = await client.query('SELECT id FROM users WHERE LOWER(email)=LOWER($1) LIMIT 1', [email]);
+          if (conflict.rowCount) {
+            const error = new Error('That email already belongs to another account.');
+            error.status = 409;
+            error.code = 'ACCOUNT_EXISTS';
+            throw error;
+          }
+          await client.query(
+            `INSERT INTO users(id,username,email,password_hash,name,role,status,mfa_enabled)
+             VALUES($1,$2,$3,$4,$5,'student','invited',TRUE)`,
+            [targetUserId, `invited-${targetUserId.slice(0, 8)}`, email, placeholderHash, name],
+          );
+          await client.query('UPDATE patients SET user_id=$1,updated_at=NOW() WHERE id=$2', [targetUserId, patientId]);
+        }
+        await client.query(
+          `INSERT INTO invitations(id,token_hash,email,role,patient_id,invited_by,expires_at)
+           VALUES($1,$2,$3,'student',$4,$5,NOW()+INTERVAL '72 hours')`,
+          [invitationId, hashSecret(rawToken), email, patientId, req.user.id],
+        );
+        await audit(req, 'STUDENT_ACCOUNT_INVITED', { email, rosterIdentityConfirmed: true }, 'patient', patientId, client);
+        return { id: targetUserId, name, email };
+      });
+    } catch (error) {
+      if (error.status) return errorResponse(res, error.status, error.code || 'STUDENT_INVITATION_FAILED', error.message);
+      if (error.code === '23505') return errorResponse(res, 409, 'ACCOUNT_EXISTS', 'That email or student identity already belongs to an account.');
+      throw error;
+    }
+    const activationUrl = buildInvitationActivationUrl(rawToken);
+    try {
+      await sendEmail({ to: account.email, ...invitationEmail(account.name, activationUrl, buildSignInUrl()) });
+    } catch (error) {
+      await audit(req, 'INVITATION_EMAIL_FAILED', { email: account.email, reason: error.code || 'delivery_error' }, 'user', account.id);
+      return res.status(201).json({ data: { userId: account.id, emailSent: false, message: 'The student account is pending, but the invitation email could not be delivered.' } });
+    }
+    return res.status(201).json({ data: { userId: account.id, emailSent: true } });
   });
 
   app.patch('/api/admin/users/:id/prc-license', requireRoles('system_administrator'), async (req, res) => {
@@ -1926,20 +2145,7 @@ export function createApp({
     }
   });
 
-  app.post('/api/risk/assess', requireRoles(...clinicalWriteRoles), async (req, res) => {
-    const rules = await latestRules();
-    const result = assessRisk(req.body || {}, rules);
-    if (req.body?.visitId) {
-      const visit = await query('SELECT id FROM visits WHERE id=$1', [String(req.body.visitId)]);
-      if (!visit.rowCount) return errorResponse(res, 404, 'VISIT_NOT_FOUND', 'The visit for this assessment was not found.');
-      await query(
-        'INSERT INTO risk_assessments(id,visit_id,rule_version,result) VALUES($1,$2,$3,$4::jsonb)',
-        [crypto.randomUUID(), String(req.body.visitId), Number(result.ruleVersion || 0), JSON.stringify(result)],
-      );
-    }
-    await audit(req, 'RISK_ASSESSMENT_CALCULATED', { category: result.category, status: result.status, ruleVersion: result.ruleVersion });
-    return res.json({ data: result });
-  });
+  app.all(/^\/api\/risk(?:\/.*)?$/, (_req, res) => errorResponse(res, 410, 'FEATURE_RETIRED', 'Automated risk scoring is retired. Review the nurse assessment recorded with each visit.'));
 
   app.post('/api/visits/arrivals', requireRoles('school_nurse'), async (req, res) => {
     const validation = validateClinicArrivalPayload(req.body || {});
@@ -2022,22 +2228,6 @@ export function createApp({
     }
 
     if (!replayed) {
-      const rules = await latestRules();
-      const recent = await query('SELECT COUNT(*)::int AS count FROM visits WHERE patient_id=$1', [input.patientId]);
-      assessment = assessRisk(visitRiskInput(input, recent.rows[0]?.count || 0), rules);
-      if (assessment.status === 'incomplete' && !riskAllowsAcknowledgedIncomplete(assessment)) {
-        return errorResponse(res, 400, 'RISK_INPUT_INCOMPLETE', assessment.rationale, { missingFields: assessment.missingFields });
-      }
-      if (riskNeedsNurseAcknowledgement(assessment) && !input.riskAcknowledgement) {
-        const isHighRisk = assessment.category === 'high';
-        return errorResponse(
-          res,
-          400,
-          isHighRisk ? 'HIGH_RISK_ACKNOWLEDGEMENT_REQUIRED' : 'RISK_REVIEW_ACKNOWLEDGEMENT_REQUIRED',
-          isHighRisk ? 'Document the nurse acknowledgement before saving a high-risk visit.' : 'Document the nurse review and action before saving this assessment.',
-          { riskAcknowledgement: isHighRisk ? 'Required for high-risk results.' : 'Required for incomplete or review-required results.' },
-        );
-      }
       if (input.summaryApproved && !input.summaryDraft) return errorResponse(res, 400, 'SUMMARY_REQUIRED', 'A nurse-approved summary must contain text.');
 
       try {
@@ -2077,9 +2267,9 @@ export function createApp({
               dispensations: resolvedDispensations.map(({ itemId, itemName, itemType, quantity }) => ({ itemId, itemName, itemType, quantity })),
               temperature: input.temperature,
               pulse: input.pulse,
-              painScore: input.painScore,
-              riskAssessment: assessment,
-              riskAcknowledgement: input.riskAcknowledgement || '',
+              clinicianRedFlag: input.clinicianRedFlag,
+              clinicianRedFlagAssessed: input.clinicianRedFlagAssessed,
+              warningSignAction: input.warningSignAction,
               notes: input.notes || '',
               consultationSummary: input.summaryApproved ? input.summaryDraft : '',
               summaryProvider: input.summaryApproved ? 'approved-nurse-workflow' : null,
@@ -2093,10 +2283,6 @@ export function createApp({
                   'INSERT INTO visits(id,patient_id,data,created_by) VALUES($1,$2,$3::jsonb,$4)',
                   [visitId, input.patientId, JSON.stringify(visit), req.user.id],
                 );
-                await client.query(
-                  'INSERT INTO risk_assessments(id,visit_id,rule_version,result,acknowledged_by,acknowledged_at,override_reason) VALUES($1,$2,$3,$4::jsonb,$5,CASE WHEN $6 THEN NOW() ELSE NULL END,$7)',
-                  [crypto.randomUUID(), visitId, Number(assessment.ruleVersion || 0), JSON.stringify(assessment), riskNeedsNurseAcknowledgement(assessment) ? req.user.id : null, riskNeedsNurseAcknowledgement(assessment) && Boolean(input.riskAcknowledgement), riskNeedsNurseAcknowledgement(assessment) ? (input.riskAcknowledgement || null) : null],
-                );
               },
               resolved: resolvedDispensations,
               lockOrder,
@@ -2104,8 +2290,8 @@ export function createApp({
               createdAt,
               userId: req.user.id,
             });
-            await audit(req, 'CLINIC_VISIT_CREATED', { category: assessment.category, ruleVersion: assessment.ruleVersion, inventoryItemsDispensed: resolvedDispensations.length }, 'visit', visitId, client);
-            return { visit, assessment, patientName, patientType };
+            await audit(req, 'CLINIC_VISIT_CREATED', { urgentWarningSign: input.clinicianRedFlag, inventoryItemsDispensed: resolvedDispensations.length }, 'visit', visitId, client);
+            return { visit, assessment: null, patientName, patientType };
           },
         }));
         if (outcome.kind === 'conflict') return errorResponse(res, 409, 'VISIT_REQUEST_CONFLICT', 'This visit request cannot be matched safely. Check the patient visit history before starting another visit.');
@@ -2129,87 +2315,7 @@ export function createApp({
         guardianNotification = { recipientCount: 0, emailSentCount: 0, emailFailedCount: 0, deliveryUnavailable: true };
       }
     }
-    return res.status(replayed ? 200 : 201).json({ data: { visit: publicVisitRecord(visit), assessment, replayed, summaryPendingApproval: Boolean(input.summaryDraft && !input.summaryApproved), guardianNotification } });
-  });
-
-  app.get('/api/risk/rules', requireRoles(...reportReadRoles), async (req, res) => {
-    const result = await query('SELECT id,version,name,status,rules,approved_by,approved_at,created_at FROM risk_rules ORDER BY version DESC');
-    const currentUserLicenseVerified = Boolean(req.user.prc_license_number?.trim() && req.user.prc_license_verified_at && req.user.prc_license_verified_by);
-    return res.json({ data: { rules: result.rows, demonstrationRules: getDemonstrationRules(), candidateRuleDraft: getConservativeCandidateRuleDraft(), currentUserLicenseVerified } });
-  });
-
-  app.post('/api/risk/rules/conservative-candidate', requireRoles('school_nurse', 'system_administrator'), async (req, res) => {
-    let candidate;
-    try {
-      candidate = await transaction((client) => ensureConservativeCandidateDraft(client));
-    } catch (error) {
-      if (error.status) return errorResponse(res, error.status, error.code || 'RISK_RULE_CREATE_FAILED', error.message);
-      if (error.code !== '23505') throw error;
-      try {
-        candidate = await transaction((client) => ensureConservativeCandidateDraft(client));
-      } catch (retryError) {
-        if (retryError.status) return errorResponse(res, retryError.status, retryError.code || 'RISK_RULE_CREATE_FAILED', retryError.message);
-        if (retryError.code === '23505') return errorResponse(res, 409, 'VERSION_EXISTS', 'A rule version was created at the same time. Try again to create the next version.');
-        throw retryError;
-      }
-    }
-    if (candidate.created) await audit(req, 'RISK_RULE_CREATED', { version: candidate.version, status: candidate.status, candidate: 'conservative_triage_v1' }, 'risk_rule', candidate.id);
-    return res.status(candidate.created ? 201 : 200).json({ data: candidate });
-  });
-
-  app.post('/api/risk/rules', requireRoles('school_nurse', 'system_administrator'), async (req, res) => {
-    const hasRequestedVersion = Boolean(req.body && Object.hasOwn(req.body, 'version'));
-    const rawVersion = req.body?.version;
-    const requestedVersion = !hasRequestedVersion ? undefined
-      : typeof rawVersion === 'number' ? rawVersion
-        : typeof rawVersion === 'string' && rawVersion.trim() ? Number(rawVersion) : Number.NaN;
-    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
-    const rules = req.body?.rules;
-    if (hasRequestedVersion && (!Number.isSafeInteger(requestedVersion) || requestedVersion < 1 || requestedVersion > 2147483647)) return errorResponse(res, 400, 'VALIDATION_ERROR', 'If supplied, version must be a positive whole number within the supported range.');
-    if (!name || name.length > 120) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Enter a rule name from 1 to 120 characters.');
-    const validation = validateRiskRules(rules);
-    if (!validation.valid) return errorResponse(res, 400, 'VALIDATION_ERROR', validation.message);
-    let draft;
-    try {
-      draft = await transaction(async (client) => {
-        const created = await createRiskRuleDraft(client, { name, rules, version: requestedVersion });
-        await audit(req, 'RISK_RULE_CREATED', { version: created.version, status: created.status }, 'risk_rule', created.id, client);
-        return created;
-      });
-    } catch (error) {
-      if (error.status) return errorResponse(res, error.status, error.code || 'RISK_RULE_CREATE_FAILED', error.message);
-      if (error.code === '23505') return errorResponse(res, 409, 'VERSION_EXISTS', 'That risk-rule version already exists.');
-      throw error;
-    }
-    return res.status(201).json({ data: draft });
-  });
-
-  app.patch('/api/risk/rules/:id/approve', requireRoles('school_nurse'), async (req, res) => {
-    if (!String(req.user.prc_license_number || '').trim() || !req.user.prc_license_verified_at || !req.user.prc_license_verified_by) {
-      return errorResponse(res, 403, 'LICENSE_REQUIRED', 'A school nurse with an administrator-recorded, verified PRC license is required to approve risk rules.');
-    }
-    let approved;
-    try {
-      approved = await transaction(async (client) => {
-        const rule = await approveDraftRiskRule(client, req.params.id, req.user.id);
-        await audit(req, 'RISK_RULE_APPROVED', { version: rule.version, approverRole: req.user.role }, 'risk_rule', req.params.id, client);
-        return rule;
-      });
-    } catch (error) {
-      if (error.status) return errorResponse(res, error.status, error.code || 'RULE_APPROVAL_FAILED', error.message);
-      throw error;
-    }
-    return res.json({ data: { ...approved, approvedBy: req.user.id } });
-  });
-
-  app.patch('/api/risk/assessments/:id/acknowledge', requireRoles(...clinicalWriteRoles), async (req, res) => {
-    const reason = String(req.body?.overrideReason || '').trim();
-    const result = await query('SELECT result FROM risk_assessments WHERE id=$1', [req.params.id]);
-    if (!result.rowCount) return errorResponse(res, 404, 'NOT_FOUND', 'Risk assessment not found.');
-    if (riskNeedsNurseAcknowledgement(result.rows[0].result) && !reason) return errorResponse(res, 400, 'OVERRIDE_REASON_REQUIRED', 'Document the nurse review and action for this result.');
-    await query('UPDATE risk_assessments SET acknowledged_by=$1,acknowledged_at=NOW(),override_reason=$2 WHERE id=$3', [req.user.id, reason || null, req.params.id]);
-    await audit(req, 'RISK_ASSESSMENT_ACKNOWLEDGED', { overrideReason: reason }, 'risk_assessment', req.params.id);
-    return res.json({ data: { success: true } });
+    return res.status(replayed ? 200 : 201).json({ data: { visit: publicVisitRecord(visit), ...(assessment ? { assessment } : {}), replayed, summaryPendingApproval: Boolean(input.summaryDraft && !input.summaryApproved), guardianNotification } });
   });
 
   app.all('/api/queue', (_req, res) => errorResponse(res, 410, 'FEATURE_REMOVED', 'The walk-in queue feature is no longer available. Begin a visit or use appointments.'));
@@ -2550,23 +2656,29 @@ export function createApp({
   });
 
   app.get('/api/notifications', requireAuth, async (req, res) => {
+    if (req.user.role === 'student') return errorResponse(res, 403, 'FORBIDDEN', 'Student accounts do not have access to clinic notifications.');
     const result = await listInAppNotifications(req.user.id, query);
     return res.json({ data: { notifications: result.rows } });
   });
 
   app.patch('/api/notifications/:id/read', requireAuth, async (req, res) => {
+    if (req.user.role === 'student') return errorResponse(res, 403, 'FORBIDDEN', 'Student accounts do not have access to clinic notifications.');
     const result = await markInAppNotificationRead(req.params.id, req.user.id, query);
     if (!result.rowCount) return errorResponse(res, 404, 'NOT_FOUND', 'Notification not found.');
     return res.json({ data: { notification: result.rows[0] } });
   });
 
-  app.post('/api/appointments', requireRoles('guardian', ...clinicalWriteRoles), async (req, res) => {
-    const patientId = String(req.body?.patientId || '').trim();
+  app.post('/api/appointments', requireRoles('guardian', 'student', ...clinicalWriteRoles), async (req, res) => {
+    let patientId = String(req.body?.patientId || '').trim();
+    if (req.user.role === 'student') {
+      const ownPatient = await query("SELECT id FROM patients WHERE user_id=$1 AND patient_type='student'", [req.user.id]);
+      patientId = ownPatient.rows[0]?.id || '';
+    }
     const startsAt = clinicDateTime(req.body?.startsAt);
     const reason = String(req.body?.reason || '').trim().slice(0, 500);
-    if (!patientId || Number.isNaN(startsAt.getTime()) || !reason) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Patient, appointment time, and reason are required.');
+    if (!patientId || Number.isNaN(startsAt.getTime()) || !reason) return errorResponse(res, 400, 'VALIDATION_ERROR', 'Appointment time and reason are required.');
     if (startsAt.getTime() <= Date.now()) return errorResponse(res, 400, 'PAST_APPOINTMENT', 'Choose a future appointment time.');
-    if (!(await canAccessPatient(req.user, patientId))) return errorResponse(res, 403, 'FORBIDDEN', 'You cannot book for this patient.');
+    if (req.user.role !== 'student' && !(await canAccessPatient(req.user, patientId))) return errorResponse(res, 403, 'FORBIDDEN', 'You cannot book for this patient.');
     const settingsResult = await query('SELECT data FROM clinic_settings WHERE id=1');
     const schedule = appointmentSettings(settingsResult.rows[0]?.data || {});
     const localDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(startsAt);
@@ -2574,6 +2686,37 @@ export function createApp({
     const id = crypto.randomUUID();
     try {
       await clinicDataTransaction(async (client) => {
+        if (req.user.role === 'student') {
+          const patient = await client.query("SELECT id FROM patients WHERE id=$1 AND patient_type='student' FOR UPDATE", [patientId]);
+          if (!patient.rowCount) {
+            const error = new Error('Student scheduling access is no longer active.');
+            error.status = 403;
+            error.code = 'STUDENT_ACCESS_REVOKED';
+            throw error;
+          }
+          const studentAccount = await client.query("SELECT id FROM users WHERE id=$1 AND role='student' AND status='active' FOR UPDATE", [req.user.id]);
+          if (!studentAccount.rowCount) {
+            const error = new Error('Student scheduling access is no longer active.');
+            error.status = 403;
+            error.code = 'STUDENT_ACCESS_REVOKED';
+            throw error;
+          }
+          const access = await client.query(
+            `SELECT 1 FROM patients p
+             JOIN guardian_student_scheduling_permissions g ON g.patient_id=p.id AND g.allowed=TRUE
+             JOIN guardian_patient_links l ON l.guardian_user_id=g.guardian_user_id AND l.patient_id=g.patient_id
+             JOIN users guardian ON guardian.id=g.guardian_user_id AND guardian.role='guardian' AND guardian.status='active'
+             JOIN users student ON student.id=p.user_id AND student.role='student' AND student.status='active'
+             WHERE p.id=$1 AND student.id=$2 LIMIT 1`,
+            [patientId, req.user.id],
+          );
+          if (!access.rowCount) {
+            const error = new Error('Student scheduling access is no longer active.');
+            error.status = 403;
+            error.code = 'STUDENT_ACCESS_REVOKED';
+            throw error;
+          }
+        }
         for (const key of sortedManilaDayLockKeys(localDate)) await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
         const [appointments, periods] = await Promise.all([
           client.query("SELECT starts_at,status FROM appointments WHERE (starts_at AT TIME ZONE 'Asia/Manila')::date=$1::date AND status NOT IN ('Cancelled','Rejected')", [localDate]),
@@ -2593,6 +2736,7 @@ export function createApp({
       });
     } catch (error) {
       if (error.status === 409) return errorResponse(res, 409, 'APPOINTMENT_CONFLICT', error.message);
+      if (error.status === 403) return errorResponse(res, error.status, error.code || 'FORBIDDEN', error.message);
       throw error;
     }
     await audit(req, 'APPOINTMENT_CREATED', { startsAt: startsAt.toISOString() }, 'appointment', id);

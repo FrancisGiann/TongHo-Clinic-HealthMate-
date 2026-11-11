@@ -8118,6 +8118,53 @@ fieldset.form-section { min-width: 0; border: 0; }
 .hm-login-card .login-form { grid-template-columns: minmax(0, 1fr); }
 .hm-login-card .login-field { min-width: 0; }
 
+.patient-directory-table { min-width: 860px; }
+.patient-directory-profile-link { display: inline-block; color: var(--teal-dark); font-weight: 600; text-decoration: none; }
+.patient-directory-profile-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.patient-directory-profile-link:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
+.patient-directory-profile-link small { display: block; margin-top: 3px; color: var(--muted); font-weight: 400; }
+.user-management-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.user-row-actions { min-width: 110px; }
+.user-row-actions > summary { width: fit-content; min-height: 36px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--white); color: var(--teal-dark); font-size: var(--type-compact); font-weight: 600; cursor: pointer; list-style-position: inside; }
+.user-row-actions > summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.user-row-actions-menu { display: grid; justify-items: start; gap: 5px; padding: 7px 0 0; }
+.user-row-actions-menu .table-action { min-height: 36px; margin: 0; white-space: normal; text-align: left; }
+.student-invitation-identity { margin: -4px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--surface-muted, #f1f5f9); color: var(--muted); }
+.student-invitation-identity strong { color: var(--ink); }
+.data-purpose-note { grid-column: 1 / -1; margin-bottom: 0; }
+.data-purpose-note h3 { margin: 0 0 8px; }
+.data-purpose-note p:last-child { margin-bottom: 0; line-height: 1.55; }
+.notification-item.is-unread { margin-inline: -8px; padding-inline: 8px !important; border-radius: 7px; background: color-mix(in srgb, var(--teal) 7%, var(--white)); }
+.notification-item-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.notification-item-heading b { min-width: 0; }
+.notification-unread-label { flex: none; border-radius: 999px; padding: 2px 7px; background: #dce7f5; color: #1a3860 !important; font-size: 11px !important; font-weight: 700; }
+.notification-time { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }
+.notification-panel :is(button, a):focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
+.reports-page > .panel,
+.reports-page > .reports-grid,
+.reports-page > .report-kpis { min-width: 0; }
+.reports-page .report-filter-grid { gap: 16px; align-items: end; }
+.reports-page .table-panel { padding: clamp(16px, 2vw, 24px); }
+.reports-page .empty-state,
+.reports-page .field-hint[role="note"] { margin: 12px 0 0; line-height: 1.55; }
+.dark .notification-item.is-unread { background: color-mix(in srgb, var(--teal) 14%, #192c45); }
+.dark .notification-unread-label { background: #2b4565; color: #e8f0fa !important; }
+
+@media (max-width: 700px) {
+  .patient-directory-table-wrap { overflow: visible; border: 0; }
+  .patient-directory-table { display: block; width: 100%; min-width: 0; }
+  .patient-directory-table thead { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
+  .patient-directory-table tbody { display: grid; gap: 10px; }
+  .patient-directory-table tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--white); }
+  .patient-directory-table td { display: grid; grid-template-columns: minmax(80px, .75fr) minmax(0, 1fr); align-items: start; gap: 8px; min-width: 0; padding: 10px; border-top: 0; overflow-wrap: anywhere; }
+  .patient-directory-table td::before { content: attr(data-label); color: var(--muted); font-size: 12px; font-weight: 600; }
+  .patient-directory-table td:first-child { grid-column: 1 / -1; display: block; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--teal) 5%, var(--white)); }
+  .patient-directory-table td:first-child::before { display: block; margin-bottom: 5px; }
+  .patient-directory-table td:first-child a { font-size: 15px; }
+  .user-management-actions { width: 100%; }
+  .user-management-actions > button { flex: 1 1 140px; justify-content: center; }
+}
+
 /* Shared confirmations use the same modal surface, spacing and dark theme. */
 .quick-entry-dialog.confirmation-dialog { width: min(480px, calc(100vw - 32px)); }
 .confirmation-dialog-message { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 24px; }

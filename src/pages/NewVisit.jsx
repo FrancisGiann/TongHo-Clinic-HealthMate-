@@ -4,7 +4,6 @@ import { ArrowUpRight, Check, ChevronDown, ClipboardPlus, Plus, RefreshCw, Trash
 import { api } from "../utils/api";
 import StudentPicker from "../components/StudentPicker";
 import { clearPendingVisitSubmission, getPendingVisitSubmission, rememberPendingVisitSubmission } from "../utils/visitSubmission";
-import { riskRuleStatusLabel } from "../utils/riskRules";
 
   const complaints = [
   "Headache",
@@ -91,10 +90,8 @@ export default function NewVisit({ data, user, refreshInBackground }) {
   const [temperature, setTemperature] = useState(initialDraft.temperature == null ? "" : String(initialDraft.temperature));
   const [pulse, setPulse] = useState(initialDraft.pulse == null ? "" : String(initialDraft.pulse));
   const [notes, setNotes] = useState(initialDraft.notes || "");
-  const [painScore, setPainScore] = useState(initialDraft.painScore == null ? "" : String(initialDraft.painScore));
   const [clinicianRedFlag, setClinicianRedFlag] = useState(initialDraft.clinicianRedFlagAssessed ? String(Boolean(initialDraft.clinicianRedFlag)) : "");
-  const [riskAcknowledgement, setRiskAcknowledgement] = useState(initialDraft.riskAcknowledgement || "");
-  const [riskResult, setRiskResult] = useState(null);
+  const [warningSignAction, setWarningSignAction] = useState(initialDraft.warningSignAction || "");
   const [saveError, setSaveError] = useState("");
   const [summaryDraft, setSummaryDraft] = useState(initialDraft.summaryDraft || "");
   const [summaryMeta, setSummaryMeta] = useState(null);
@@ -130,10 +127,8 @@ export default function NewVisit({ data, user, refreshInBackground }) {
     setTemperature('');
     setPulse('');
     setNotes('');
-    setPainScore('');
     setClinicianRedFlag('');
-    setRiskAcknowledgement('');
-    setRiskResult(null);
+    setWarningSignAction('');
     setSummaryDraft('');
     setSummaryMeta(null);
     setSummaryApproved(false);
@@ -183,10 +178,6 @@ export default function NewVisit({ data, user, refreshInBackground }) {
       if (selectedPatientIdRef.current === patientId) setArrivalSaving(false);
     }
   };
-  const canAcknowledgeMissingTemperature = riskResult?.decisionSupportMode === 'conservative_triage_v1'
-    && riskResult?.status === 'incomplete'
-    && riskResult?.missingFields?.length === 1
-    && riskResult.missingFields[0] === 'temperature';
   const inventoryItems = data.inventory || [];
   const eligibleInventoryItems = inventoryItems.filter((item) => inventoryAvailability(item, clinicToday).length === 0);
   const unavailableInventoryItems = inventoryItems
@@ -239,7 +230,7 @@ export default function NewVisit({ data, user, refreshInBackground }) {
   const generateSummary = async () => {
     setSaveError("");
     try {
-      const result = await api.post('/api/summaries/draft', { type: visitType, chiefComplaint: complaint, treatment, disposition, notes, painScore: painScore ? Number(painScore) : null, temperature, pulse, risk: riskResult });
+      const result = await api.post('/api/summaries/draft', { type: visitType, chiefComplaint: complaint, treatment, disposition, notes, temperature, pulse });
       setSummaryDraft(result.draft);
       setSummaryMeta(result);
       setSummaryApproved(false);
@@ -259,7 +250,6 @@ export default function NewVisit({ data, user, refreshInBackground }) {
       visitSubmissionRef.current = null;
       setSaveOutcomeUnknown(false);
       setVisitRequestConflict(false);
-      setRiskResult(result.assessment);
       setGuardianNotification(result.guardianNotification || null);
       setSaved(true);
       try {
@@ -315,6 +305,8 @@ export default function NewVisit({ data, user, refreshInBackground }) {
     if (!selected) return setSaveError('Select a patient before saving the visit.');
     if (!complaint.trim()) return setSaveError('Enter a chief complaint before saving the visit.');
     if (!treatment.trim()) return setSaveError('Enter the treatment or care provided before saving the visit.');
+    if (!['true', 'false'].includes(clinicianRedFlag)) return setSaveError('Complete the warning-sign assessment before saving the visit.');
+    if (clinicianRedFlag === 'true' && !warningSignAction.trim()) return setSaveError('Document the action taken for the urgent warning sign before saving.');
     const chosenDispensations = dispensations.filter((entry) => entry.itemId || entry.quantity !== '1');
     const dispensedIds = new Set();
     for (const entry of chosenDispensations) {
@@ -330,41 +322,6 @@ export default function NewVisit({ data, user, refreshInBackground }) {
     if (followUp && followUpDate < clinicToday) return setSaveError('Follow-up date must be today or later.');
     setSaveError("");
     setSaving(true);
-    try {
-      const preview = await api.post('/api/risk/assess', {
-        painScore: painScore === "" ? null : Number(painScore),
-        clinicianRedFlag: clinicianRedFlag === "" ? null : clinicianRedFlag === "true",
-        recentVisitCount: data.visits.filter((visit) => String(visit.studentId || visit.patientId) === String(selected.id)).length,
-        temperature: temperature === "" ? null : Number(temperature),
-        pulse: pulse === "" ? null : Number(pulse),
-      });
-      setRiskResult(preview);
-      const missingWarningScreen = preview.missingFields?.some((field) => ['clinicianRedFlag', 'validClinicianRedFlag'].includes(field));
-      if (preview.status === 'incomplete' && missingWarningScreen) {
-        setSaveError('Complete the clinician warning-sign screen before saving. Select “No warning sign observed” only after assessing the student.');
-        setSaving(false);
-        return;
-      }
-      const canAcknowledgeIncomplete = preview.decisionSupportMode === 'conservative_triage_v1'
-        && preview.status === 'incomplete'
-        && preview.missingFields?.length === 1
-        && preview.missingFields[0] === 'temperature';
-      if (preview.status === 'incomplete' && !canAcknowledgeIncomplete) {
-        setSaveError(preview.rationale);
-        setSaving(false);
-        return;
-      }
-      const requiresNurseReview = preview.category === 'high' || preview.priority === 'requires-review' || preview.status === 'incomplete';
-      if (requiresNurseReview && !riskAcknowledgement.trim()) {
-        setSaveError('Document the nurse review and action before saving this assessment.');
-        setSaving(false);
-        return;
-      }
-    } catch (error) {
-      setSaveError(error.message);
-      setSaving(false);
-      return;
-    }
     const payload = {
         patientId: selected.id,
         visitType,
@@ -376,10 +333,9 @@ export default function NewVisit({ data, user, refreshInBackground }) {
         dispensations: chosenDispensations.map((entry) => ({ itemId: entry.itemId, quantity: Number(entry.quantity) })),
         temperature: temperature === "" ? null : Number(temperature),
         pulse: pulse === "" ? null : Number(pulse),
-        painScore: painScore === "" ? null : Number(painScore),
         clinicianRedFlag: clinicianRedFlag === "" ? null : clinicianRedFlag === "true",
-        clinicianRedFlagAssessed: clinicianRedFlag !== "",
-        riskAcknowledgement: riskAcknowledgement.trim(),
+        clinicianRedFlagAssessed: true,
+        warningSignAction: warningSignAction.trim(),
         notes,
         summaryDraft: summaryDraft.trim(),
         summaryApproved,
@@ -399,7 +355,7 @@ export default function NewVisit({ data, user, refreshInBackground }) {
       <div className="page-intro">
         <div>
           <h2>New visit</h2>
-          <p>Capture what happened, clearly and quickly.</p>
+          <p>Record the complaint or illness, clinic date, care provided, disposition, and remarks.</p>
         </div>
       </div>
       <div className="form-layout">
@@ -468,6 +424,10 @@ export default function NewVisit({ data, user, refreshInBackground }) {
             )}
           </FormStep>
           <FormStep number="02" title="Visit details">
+            <div className="two-fields">
+              <label>Clinic date<input type="text" value={new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'long' }).format(new Date())} readOnly /></label>
+              <label>Recorded by<input type="text" value={user?.name || 'Signed-in school nurse'} readOnly /></label>
+            </div>
             <label>
               Visit type{" "}
               <select value={visitType} onChange={(e) => setVisitType(e.target.value)}>
@@ -475,7 +435,7 @@ export default function NewVisit({ data, user, refreshInBackground }) {
               </select>
               <ChevronDown size={15} />
             </label>
-            <label>Chief complaint *<textarea value={complaint} onChange={(event) => setComplaint(event.target.value)} maxLength={300} placeholder="Describe the student’s concern in their own words or your observation." required disabled={saving} /></label>
+            <label>Complaint / illness *<textarea value={complaint} onChange={(event) => setComplaint(event.target.value)} maxLength={300} placeholder="Describe the student’s concern in their own words or your observation." required disabled={saving} /></label>
             <span className="field-label">Optional complaint suggestions</span>
             <div className="chip-row">
               {complaints.map((item) => (
@@ -548,7 +508,6 @@ export default function NewVisit({ data, user, refreshInBackground }) {
               </label>
             </div>
             <div className="two-fields">
-              <label>Pain score (1–10)<input type="number" min="1" max="10" step="1" value={painScore} onChange={(event) => setPainScore(event.target.value)} required /></label>
               <label>Clinician warning-sign screen *
                 <select value={clinicianRedFlag} onChange={(event) => setClinicianRedFlag(event.target.value)} required disabled={saving}>
                   <option value="">Complete screen before saving…</option>
@@ -558,13 +517,13 @@ export default function NewVisit({ data, user, refreshInBackground }) {
                 <small>Choose after assessing the student. Leaving this unanswered does not mean no warning sign was found. Examples include severe breathing difficulty or blue lips, unresponsiveness or seizure, heavy bleeding or possible shock, high-risk trauma, and poisoning. Examples are not exhaustive; use full age-appropriate triage. See <a href="https://www.who.int/tools/triage" target="_blank" rel="noreferrer">WHO IITT guidance</a>.</small>
               </label>
             </div>
-            {(clinicianRedFlag === "true" || riskResult?.category === 'high' || (riskResult?.priority === 'requires-review' && (riskResult?.status !== 'incomplete' || canAcknowledgeMissingTemperature)) || canAcknowledgeMissingTemperature) && <label>Nurse review / acknowledgement<textarea value={riskAcknowledgement} onChange={(event) => setRiskAcknowledgement(event.target.value)} placeholder="Document the review and action taken…" disabled={saving} /></label>}
+            {clinicianRedFlag === "true" && <label>Urgent warning-sign action *<textarea value={warningSignAction} onChange={(event) => setWarningSignAction(event.target.value)} maxLength={2000} placeholder="Document the immediate action, referral, and handoff…" required disabled={saving} /></label>}
             <label>
-              Notes{" "}
-              <textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Describe symptoms, observations, and action taken..." />
+              Remarks{" "}
+              <textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={2000} placeholder="Add observations, follow-up details, or other visit remarks…" />
             </label>
             <button type="button" className="secondary-btn" onClick={generateSummary} disabled={!complaint || saving}>Generate summary draft</button>
-            {summaryDraft && <div className="risk-result"><strong>Review summary draft</strong>{summaryMeta?.reviewNotice && <small role="status">{summaryMeta.reviewNotice}</small>}<textarea className="summary-draft-input" aria-label="Visit summary draft" rows="6" value={summaryDraft} onChange={(event) => { setSummaryDraft(event.target.value); setSummaryApproved(false); setSummaryMeta((current) => current ? { ...current, manualEntryRequired: false } : current); }} disabled={saving} />{user?.role === 'school_nurse' ? <label className="check-label"><input type="checkbox" checked={summaryApproved} onChange={(event) => setSummaryApproved(event.target.checked)} disabled={saving || Boolean(summaryMeta?.manualEntryRequired)} /> I reviewed and approve this summary for the record</label> : <small>A school nurse must approve this draft before it can be saved to the record.</small>}<small>Provider: {summaryMeta?.provider}. The risk score is calculated separately and is never controlled by AI.</small></div>}
+            {summaryDraft && <div className="risk-result"><strong>Review summary draft</strong>{summaryMeta?.reviewNotice && <small role="status">{summaryMeta.reviewNotice}</small>}<textarea className="summary-draft-input" aria-label="Visit summary draft" rows="6" value={summaryDraft} onChange={(event) => { setSummaryDraft(event.target.value); setSummaryApproved(false); setSummaryMeta((current) => current ? { ...current, manualEntryRequired: false } : current); }} disabled={saving} />{user?.role === 'school_nurse' ? <label className="check-label"><input type="checkbox" checked={summaryApproved} onChange={(event) => setSummaryApproved(event.target.checked)} disabled={saving || Boolean(summaryMeta?.manualEntryRequired)} /> I reviewed and approve this summary for the record</label> : <small>A school nurse must approve this draft before it can be saved to the record.</small>}<small>Provider: {summaryMeta?.provider}. This text is an optional draft for nurse review.</small></div>}
           </FormStep>
           </fieldset>
           <div className="form-actions visit-save-actions">
@@ -579,7 +538,6 @@ export default function NewVisit({ data, user, refreshInBackground }) {
             </button>
           </div>
           {saveError && <div className="error-banner" role="alert">{saveError}</div>}
-          {riskResult && <div className={`risk-result risk-${riskResult.category}`}><strong>{riskResult.priority === 'requires-review' ? 'Nurse review required' : riskResult.priority === 'urgent' ? 'Urgent nurse review required' : `Decision-support result: ${riskResult.category}`}</strong><p>{riskResult.rationale}</p>{riskResult.decisionSupportMode === 'conservative_triage_v1' && <small>No-match remains unclassified and never means low risk or routine disposition. This prompt cannot replace the nurse’s assessment.</small>}<small>{riskResult.disclaimer} {riskResult.ruleName || 'Risk rules'} · {riskRuleStatusLabel(riskResult)}.</small></div>}
         </form>
         <aside className="visit-aside">
           <div className="aside-card">

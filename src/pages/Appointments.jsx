@@ -8,20 +8,8 @@ import ListPagination from '../components/ListPagination.jsx';
 import StudentPicker from '../components/StudentPicker';
 import ModalDialog from '../components/ModalDialog';
 import AppointmentAvailability from '../components/AppointmentAvailability.jsx';
+import AppointmentSlotPicker from '../components/AppointmentSlotPicker.jsx';
 import './Appointments.css';
-
-function manilaDateTimeNow() {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Manila',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date()).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
-}
 
 export default function Appointments({ data, user, reload }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -29,18 +17,15 @@ export default function Appointments({ data, user, reload }) {
   const statusFilter = searchParams.get('status') || '';
   const startDate = searchParams.get('startDate') || '';
   const endDate = searchParams.get('endDate') || '';
-  const [patientId, setPatientId] = useState('');
+  const [patientId, setPatientId] = useState(() => user.role === 'student' ? String(data.students?.[0]?.id || '') : '');
   const [slotDate, setSlotDate] = useState('');
+  const [slotRefresh, setSlotRefresh] = useState(0);
   const [showScheduleDialog, setShowScheduleDialog] = useState(false);
   const [startsAt, setStartsAt] = useState('');
   const [reason, setReason] = useState('');
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [slots, setSlots] = useState([]);
-  const [traffic, setTraffic] = useState(null);
-  const [slotsLoading, setSlotsLoading] = useState(false);
-  const [slotError, setSlotError] = useState('');
   const [reschedule, setReschedule] = useState({});
   const [rescheduleAppointment, setRescheduleAppointment] = useState(null);
   const [rescheduleError, setRescheduleError] = useState('');
@@ -52,6 +37,7 @@ export default function Appointments({ data, user, reload }) {
   const updateLock = useRef(false);
   const patientIds = useMemo(() => new Set((data.students || []).map((patient) => String(patient.id))), [data.students]);
   const isStaff = user.role === 'school_nurse';
+  const isStudent = user.role === 'student';
   const allAppointments = (data.appointments || []).filter((appointment) => patientIds.has(String(appointment.studentId || appointment.patientId)));
   const appointmentPatient = (appointment) => (data.students || []).find((person) => String(person.id) === String(appointment.studentId || appointment.patientId));
   const appointmentDay = (appointment) => {
@@ -80,33 +66,9 @@ export default function Appointments({ data, user, reload }) {
   useEffect(() => {
     if (isStaff && list.page !== pageResult.page) setListValue('page', pageResult.page === 1 ? null : pageResult.page, false);
   }, [isStaff, list.page, pageResult.page]);
-  const clinicToday = manilaDateTimeNow().slice(0, 10);
-
   useEffect(() => {
-    if (!slotDate) {
-      setSlots([]);
-      setTraffic(null);
-      setSlotsLoading(false);
-      return undefined;
-    }
-    let active = true;
-    setSlotsLoading(true);
-    setSlotError('');
-    api.get(`/api/appointments/slots?date=${encodeURIComponent(slotDate)}`).then((result) => {
-      if (!active) return;
-      setSlots(result.slots || []);
-      setTraffic(result.traffic || null);
-      setSlotError('');
-    }).catch((requestError) => {
-      if (!active) return;
-      setSlots([]);
-      setTraffic(null);
-      setSlotError(requestError.message);
-    }).finally(() => {
-      if (active) setSlotsLoading(false);
-    });
-    return () => { active = false; };
-  }, [slotDate]);
+    if (isStudent && !patientId && data.students?.[0]?.id) setPatientId(String(data.students[0].id));
+  }, [data.students, isStudent, patientId]);
 
   const submit = async (event) => {
     event.preventDefault();
@@ -115,12 +77,12 @@ export default function Appointments({ data, user, reload }) {
     setMessage('');
     setScheduleError('');
     setScheduleMessage('');
-    if (!patientId) return setError('Choose the patient this appointment is for.');
+    if (!isStudent && !patientId) return setError('Choose the patient this appointment is for.');
     setSaving(true);
     try {
-      await api.post('/api/appointments', { patientId, startsAt, reason });
-      setMessage(isStaff ? 'Appointment scheduled for the selected patient.' : 'Appointment request submitted for the selected patient.');
-      setPatientId('');
+      await api.post('/api/appointments', { ...(!isStudent ? { patientId } : {}), startsAt, reason });
+      setMessage(isStaff ? 'Appointment scheduled for the selected patient.' : isStudent ? 'Appointment request submitted.' : 'Appointment request submitted for the selected patient.');
+      if (!isStudent) setPatientId('');
       setStartsAt('');
       setSlotDate('');
       setReason('');
@@ -132,6 +94,10 @@ export default function Appointments({ data, user, reload }) {
       if (isStaff) setShowScheduleDialog(false);
     } catch (requestError) {
       setError(requestError.message);
+      if (requestError.code === 'APPOINTMENT_CONFLICT') {
+        setStartsAt('');
+        setSlotRefresh((current) => current + 1);
+      }
     } finally {
       setSaving(false);
     }
@@ -158,7 +124,7 @@ export default function Appointments({ data, user, reload }) {
     }
   };
   const updateTime = async (appointment) => {
-    const nextStartsAt = reschedule[appointment.id];
+    const nextStartsAt = reschedule[appointment.id]?.startsAt;
     if (!nextStartsAt) return setRescheduleError('Choose a new date and time before rescheduling.');
     if (updateLock.current) return;
     updateLock.current = true;
@@ -173,6 +139,10 @@ export default function Appointments({ data, user, reload }) {
       setRescheduleAppointment(null);
     } catch (requestError) {
       setRescheduleError(requestError.message);
+      if (requestError.code === 'APPOINTMENT_CONFLICT') {
+        setReschedule((current) => ({ ...current, [appointment.id]: { ...current[appointment.id], startsAt: '' } }));
+        setSlotRefresh((current) => current + 1);
+      }
     } finally {
       updateLock.current = false;
       setUpdatingAppointment(null);
@@ -187,30 +157,21 @@ export default function Appointments({ data, user, reload }) {
   const scheduleForm = (
     <form className={`panel form-panel appointment-form${isStaff ? ' appointment-dialog-form' : ''}`} onSubmit={submit}>
       <div className="two-fields">
-        <StudentPicker students={data.students || []} value={patientId} onChange={setPatientId} label={isStaff ? 'Schedule for patient' : 'Student'} required disabled={saving}/>
-        <label>Appointment date<input type="date" min={clinicToday} value={slotDate} onChange={(event) => { setSlotDate(event.target.value); setStartsAt(''); setSlots([]); setTraffic(null); setSlotError(''); }} required disabled={saving}/></label>
+        {!isStudent && <StudentPicker students={data.students || []} value={patientId} onChange={setPatientId} label={isStaff ? 'Schedule for patient' : 'Student'} required disabled={saving}/>}
+        <AppointmentSlotPicker
+          date={slotDate}
+          onDateChange={setSlotDate}
+          startsAt={startsAt}
+          onStartsAtChange={setStartsAt}
+          disabled={saving}
+          refreshKey={slotRefresh}
+        />
       </div>
-      {slotDate && <>
-        <label>Available time{traffic?.historyAvailable ? ' (suggestions first)' : ''}
-          <select value={startsAt} onChange={(event) => setStartsAt(event.target.value)} disabled={saving || slotsLoading || !slots.length} required>
-            <option value="">Choose a clinic time</option>
-            {slots.map((slot) => <option key={slot.local} value={slot.local}>{slot.suggestionRank && slot.suggestionRank <= 3 ? `Suggested ${slot.suggestionRank} · ` : ''}{slot.local.slice(11)}</option>)}
-          </select>
-        </label>
-        <div className="slot-guidance" aria-live="polite">
-          {slotsLoading && <span className="field-hint">Checking availability…</span>}
-          {!slotsLoading && slotError && <span className="error-banner" role="alert">{slotError}</span>}
-          {!slotsLoading && !slotError && !slots.length && <span className="field-hint">No available clinic times on this date.</span>}
-          {!slotsLoading && !slotError && slots.length > 0 && (traffic?.historyAvailable
-            ? <span className="field-hint">Lower-traffic suggestions use same-weekday visit history from the past {traffic.lookbackDays} days. Availability can change before you submit.</span>
-            : <span className="field-hint">There is not enough recent same-weekday history to rank times, so available slots are listed in clinic order.</span>)}
-        </div>
-      </>}
       <label>Reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} required disabled={saving}/></label>
       {error && <div className="error-banner" role="alert">{error}</div>}
       <div className="appointment-form-actions">
         {isStaff && <button type="button" className="secondary-btn" onClick={() => setShowScheduleDialog(false)} disabled={saving}>Cancel</button>}
-        <button className="primary-btn" disabled={saving || !data.students?.length || !patientId || !slotDate || !startsAt}><CalendarPlus size={16} /> {saving ? 'Saving…' : isStaff ? 'Schedule appointment' : 'Request appointment'}</button>
+        <button className="primary-btn" disabled={saving || !data.students?.length || (!isStudent && !patientId) || !slotDate || !startsAt}><CalendarPlus size={16} /> {saving ? 'Saving…' : isStaff ? 'Schedule appointment' : 'Request appointment'}</button>
       </div>
       {!isStaff && message && <p className="success-message" role="status">{message}</p>}
     </form>
@@ -218,7 +179,7 @@ export default function Appointments({ data, user, reload }) {
 
   return (
     <div className="form-page">
-      <div className="page-intro"><div><h2>{isStaff ? 'Appointments' : 'Clinic scheduling'}</h2><p>{isStaff ? 'Schedule student and faculty appointments, then manage their status.' : 'Request an appointment for a student linked to your account.'}</p></div>{isStaff && <button type="button" className="primary-btn" onClick={() => { setError(''); setMessage(''); setShowScheduleDialog(true); }}><CalendarPlus size={16} /> Schedule appointment</button>}</div>
+      <div className="page-intro"><div><h2>Clinic scheduling</h2><p>{isStaff ? 'Schedule student and faculty appointments, then manage their status.' : isStudent ? 'Request an available clinic time and check your appointment status.' : 'Request an appointment for a student linked to your guardian account.'}</p></div>{isStaff && <button type="button" className="primary-btn" onClick={() => { setError(''); setMessage(''); setShowScheduleDialog(true); }}><CalendarPlus size={16} /> Schedule appointment</button>}</div>
       {isStaff ? <ModalDialog open={showScheduleDialog} title="Schedule appointment" eyebrow="Clinic scheduling" onClose={() => setShowScheduleDialog(false)} busy={saving}>{scheduleForm}</ModalDialog> : scheduleForm}
       <ModalDialog open={Boolean(decisionTarget)} title={`${decisionTarget?.status === 'Rejected' ? 'Reject' : 'Cancel'} appointment`} onClose={() => setDecisionTarget(null)} busy={updatingAppointment !== null}>
         {decisionTarget && <form onSubmit={(event) => { event.preventDefault(); updateStatus(decisionTarget.appointment, decisionTarget.status, decisionReason); }}>
@@ -231,7 +192,14 @@ export default function Appointments({ data, user, reload }) {
       <ModalDialog open={Boolean(rescheduleAppointment)} title="Reschedule appointment" eyebrow="Clinic scheduling" onClose={() => setRescheduleAppointment(null)} busy={updatingAppointment !== null} className="appointment-reschedule-dialog">
         {rescheduleAppointment && <form onSubmit={(event) => { event.preventDefault(); updateTime(rescheduleAppointment); }}>
           <p className="field-hint">{rescheduleAppointment.patient?.name || data.students.find((person) => String(person.id) === String(rescheduleAppointment.studentId || rescheduleAppointment.patientId))?.name || 'Patient'} · Current time: {formatManilaDateTime(rescheduleAppointment.startsAt || rescheduleAppointment.date, rescheduleAppointment.time)}</p>
-          <label>New date and time<input autoFocus type="datetime-local" min={manilaDateTimeNow()} value={reschedule[rescheduleAppointment.id] || ''} onChange={(event) => setReschedule((current) => ({ ...current, [rescheduleAppointment.id]: event.target.value }))} required disabled={updatingAppointment !== null} /></label>
+          <AppointmentSlotPicker
+            date={reschedule[rescheduleAppointment.id]?.date || ''}
+            onDateChange={(date) => setReschedule((current) => ({ ...current, [rescheduleAppointment.id]: { date, startsAt: '' } }))}
+            startsAt={reschedule[rescheduleAppointment.id]?.startsAt || ''}
+            onStartsAtChange={(startsAt) => setReschedule((current) => ({ ...current, [rescheduleAppointment.id]: { ...current[rescheduleAppointment.id], startsAt } }))}
+            disabled={updatingAppointment !== null}
+            refreshKey={slotRefresh}
+          />
           {rescheduleError && <div className="error-banner" role="alert">{rescheduleError}</div>}
           <div className="appointment-form-actions">
             <button type="button" className="secondary-btn" onClick={() => setRescheduleAppointment(null)} disabled={updatingAppointment !== null}>Cancel</button>
@@ -241,7 +209,7 @@ export default function Appointments({ data, user, reload }) {
       </ModalDialog>
       {isStaff && message && <p className="success-message" role="status">{message}</p>}
       <section className="panel table-panel appointments-list">
-        <div className="panel-heading"><div><p className="section-kicker">Schedule</p><h3>{isStaff ? 'Patient appointments and requests' : 'Your appointment requests'}</h3></div></div>
+        <div className="panel-heading"><div><p className="section-kicker">Clinic scheduling</p><h3>{isStaff ? 'Patient appointments and requests' : isStudent ? 'My appointment requests' : 'Your appointment requests'}</h3></div></div>
         {isStaff && <div className="patient-toolbar appointment-toolbar">
           <label className="directory-filter appointment-search-filter">Search<span className="search-box appointment-search-control"><input value={list.q} onChange={(event) => setListValue('q', event.target.value)} placeholder="Patient name or ID" aria-label="Search patient name or ID" /></span></label>
           <label className="directory-filter">Status<select value={statusFilter} onChange={(event) => setListValue('status', event.target.value)}><option value="">All statuses</option>{['Requested', 'Scheduled', 'Completed', 'Cancelled', 'Rejected'].map((status) => <option key={status}>{status}</option>)}</select></label>
@@ -259,7 +227,7 @@ export default function Appointments({ data, user, reload }) {
           return (
             <article className="appointment-row" key={appointment.id}>
               <div className="appointment-date"><span>Date & time</span><strong>{formatManilaDateTime(appointment.startsAt || appointment.date, appointment.time)}</strong></div>
-              <div className="appointment-patient"><strong>{student?.name || 'Unknown student'}</strong><span>{student?.studentId || 'Student ID unavailable'}</span><p>{appointment.reason}</p></div>
+              <div className="appointment-patient"><strong>{isStudent ? 'My appointment' : student?.name || 'Unknown student'}</strong>{!isStudent && <><span>{student?.studentId || 'Student ID unavailable'}</span><p>{appointment.reason}</p></>}</div>
               <span className="status-chip neutral appointment-status">{appointment.status}</span>
               {appointment.decisionReason && ['Rejected', 'Cancelled'].includes(appointment.status) && <p className="appointment-decision-reason"><strong>Decision reason:</strong> {appointment.decisionReason}</p>}
               {isStaff && actions.length > 0 && <div className="appointment-actions"><button type="button" className="table-action" onClick={() => { setRescheduleError(''); setRescheduleAppointment(appointment); }} disabled={updatingAppointment !== null}>{isUpdating && updatingAppointment.action === 'Rescheduling…' ? 'Rescheduling…' : 'Reschedule'}</button>{actions.map((action) => <button type="button" className="table-action" key={action} onClick={() => {
@@ -270,7 +238,7 @@ export default function Appointments({ data, user, reload }) {
             </article>
           );
         })}
-        {!appointments.length && <div className="empty-state">{allAppointments.length ? 'No appointments match these filters.' : isStaff ? 'No student appointments or requests yet.' : 'No appointments recorded for linked students.'}</div>}
+        {!appointments.length && <div className="empty-state">{allAppointments.length ? 'No appointments match these filters.' : isStaff ? 'No student appointments or requests yet.' : isStudent ? 'No appointments are recorded for your student account.' : 'No appointments recorded for linked students.'}</div>}
         {isStaff && <ListPagination page={pageResult.page} pageCount={pageResult.pageCount} pageSize={pageResult.pageSize} total={pageResult.total}
           onPageChange={(page) => setListValue('page', page === 1 ? null : page, false)} onPageSizeChange={(pageSize) => updateListParams(searchParams, setSearchParams, { pageSize, page: null }, { resetPage: true })} />}
       </section>

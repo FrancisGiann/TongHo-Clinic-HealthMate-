@@ -6,7 +6,6 @@ import { Check, Database, Download, Lock, RotateCcw, ShieldCheck, Upload, X, Use
 import { downloadCsv } from "../utils/csv";
 import { api } from "../utils/api";
 import ImportPanel from "../components/ImportPanel";
-import RiskRuleBuilder, { RiskRuleDetails } from "../components/RiskRuleBuilder";
 import StudentPicker from "../components/StudentPicker";
 import ListPagination from "../components/ListPagination";
 import { compareValues, readListState, sortAndPaginate, updateListParams } from "../utils/listState";
@@ -19,7 +18,6 @@ import {
   changePassword,
   authenticateUser,
 } from "../utils/auth";
-import { describeRiskCondition, riskRuleFormFromRule } from "../utils/riskRules";
 
 const auditEventMeta = {
   LOGIN_SUCCESS: { label: "Signed in", tone: "positive", group: "Access" },
@@ -113,23 +111,10 @@ export default function Settings({ data, user, reload, section }) {
   const [broadcastConfirmed, setBroadcastConfirmed] = useState(false);
   const [broadcastBusy, setBroadcastBusy] = useState(false);
   const [broadcastMessage, setBroadcastMessage] = useState(null);
-  const [riskRules, setRiskRules] = useState([]);
-  const [demonstrationRules, setDemonstrationRules] = useState(null);
-  const [candidateRuleDraft, setCandidateRuleDraft] = useState(null);
-  const [currentUserLicenseVerified, setCurrentUserLicenseVerified] = useState(false);
-  const [riskLoading, setRiskLoading] = useState(true);
-  const [riskLoadError, setRiskLoadError] = useState('');
-  const [riskActionBusy, setRiskActionBusy] = useState('');
-  const [riskMessage, setRiskMessage] = useState(null);
-  const [riskEditorSeed, setRiskEditorSeed] = useState(null);
-  const [riskAdvancedOpen, setRiskAdvancedOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPasswordValue, setNewPasswordValue] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const isAdmin = user?.role === 'system_administrator';
-  const savedCandidateRule = riskRules.find((rule) => rule.rules?.mode === 'conservative_triage_v1');
-  const reusableCandidateRule = riskRules.find((rule) => rule.rules?.mode === 'conservative_triage_v1' && rule.status !== 'retired');
-  const currentRiskRule = riskRules.find((rule) => rule.status === 'clinician_approved');
   const [users, setUsers] = useState([]);
   const [showUserForm, setShowUserForm] = useState(false);
   const [inviteSaving, setInviteSaving] = useState(false);
@@ -137,6 +122,10 @@ export default function Settings({ data, user, reload, section }) {
   const [guardianLinkTarget, setGuardianLinkTarget] = useState(null);
   const [guardianLinkForm, setGuardianLinkForm] = useState({ patientId: '', relationship: 'Parent' });
   const [guardianLinkSaving, setGuardianLinkSaving] = useState(false);
+  const [studentInviteOpen, setStudentInviteOpen] = useState(false);
+  const [studentInviteTarget, setStudentInviteTarget] = useState(null);
+  const [studentInviteForm, setStudentInviteForm] = useState({ patientId: '', email: '', confirmedStudentId: '' });
+  const [studentInviteSaving, setStudentInviteSaving] = useState(false);
   const [nurseLicenseTarget, setNurseLicenseTarget] = useState(null);
   const [nurseLicenseNumber, setNurseLicenseNumber] = useState('');
   const [licenseVerificationConfirmed, setLicenseVerificationConfirmed] = useState(false);
@@ -145,6 +134,7 @@ export default function Settings({ data, user, reload, section }) {
   const linkableStudents = Array.isArray(data?.students)
     ? data.students.filter((student) => student.patientType === 'student')
     : [];
+  const studentInvitePatient = linkableStudents.find((student) => String(student.id) === String(studentInviteForm.patientId));
   const activeSection = section || 'account';
   const feedbackScope = `${location.pathname}:${activeSection}`;
   const feedbackScopeRef = useRef(feedbackScope);
@@ -242,7 +232,6 @@ export default function Settings({ data, user, reload, section }) {
     setSessionMessage('');
     setSessionsError('');
     setBroadcastMessage(null);
-    setRiskMessage(null);
     return () => {
       if (userActionFeedbackTimerRef.current) window.clearTimeout(userActionFeedbackTimerRef.current);
       userActionFeedbackTimerRef.current = null;
@@ -251,7 +240,6 @@ export default function Settings({ data, user, reload, section }) {
 
   useEffect(() => {
     if (activeSection === 'account') refreshSessions();
-    loadRiskRules();
     if (!isAdmin) return;
     if (activeSection === 'security') {
       getUsersForAdmin().then(setUsers);
@@ -416,14 +404,12 @@ export default function Settings({ data, user, reload, section }) {
     users: ['Users', 'Manage account access and invitations.'],
     data: ['Data & Imports', 'Review oversight exports and roster imports.'],
     notifications: ['Communications', 'Send a clinic notice or process due reminders.'],
-    risk: ['Risk Rules', 'See which review prompts are in use. Custom rules are optional.'],
     security: ['Audit history', 'Review recent access, account, clinic, and system activity.'],
   };
   const [adminPageTitle, adminPageDescription] = adminPageDetails[activeSection] || adminPageDetails.account;
   const nursePageDetails = {
     account: ['My account', 'Manage your password and sign-in preferences.'],
     data: ['Data & Imports', 'Import authorized historical clinic records and review roster workflows.'],
-    risk: ['Risk Rules', 'See which review prompts are in use. Custom rules are optional.'],
   };
   const [nursePageTitle, nursePageDescription] = nursePageDetails[activeSection] || nursePageDetails.account;
   const updateUserFilter = (value) => {
@@ -476,77 +462,6 @@ export default function Settings({ data, user, reload, section }) {
     } finally {
       setBroadcastBusy(false);
     }
-  };
-  const loadRiskRules = async () => {
-    setRiskLoading(true);
-    setRiskLoadError('');
-    try {
-      const result = await api.get('/api/risk/rules');
-      setRiskRules(result.rules || []);
-      setDemonstrationRules(result.demonstrationRules || null);
-      setCandidateRuleDraft(result.candidateRuleDraft || null);
-      setCurrentUserLicenseVerified(Boolean(result.currentUserLicenseVerified));
-    } catch (error) {
-      setRiskLoadError(error.message || 'Risk rules could not be loaded. Try refreshing.');
-    } finally {
-      setRiskLoading(false);
-    }
-  };
-  const setRiskFeedback = (tone, text, position = 'builder') => setRiskMessage({ tone, text, position });
-  const setScopedRiskFeedback = (scope, tone, text, position = 'builder') => {
-    if (feedbackScopeRef.current === scope) setRiskFeedback(tone, text, position);
-  };
-  const createCandidateRuleDraft = async () => {
-    const scope = feedbackScopeRef.current;
-    setRiskMessage(null);
-    setRiskActionBusy('candidate');
-    try {
-      const result = await api.post('/api/risk/rules/conservative-candidate', {});
-      setScopedRiskFeedback(scope, 'success', result.created
-        ? 'The optional screening candidate was saved for nurse review. It will not be used unless a verified school nurse approves it.'
-        : 'An optional screening candidate already exists. No duplicate was created.', 'candidate');
-      await loadRiskRules();
-    } catch (error) {
-      setScopedRiskFeedback(scope, 'error', error.message || 'The candidate draft could not be created.', 'candidate');
-    } finally {
-      setRiskActionBusy('');
-    }
-  };
-  const createRiskRule = async ({ name, rules }) => {
-    const scope = feedbackScopeRef.current;
-    setRiskMessage(null);
-    setRiskActionBusy('create');
-    try {
-      await api.post('/api/risk/rules', { name, rules });
-      setScopedRiskFeedback(scope, 'success', 'Custom rules saved for nurse review. They will only be used after a verified school nurse approves them.');
-      await loadRiskRules();
-      return true;
-    } catch (error) {
-      setScopedRiskFeedback(scope, 'error', error.message || 'The inactive draft could not be saved.');
-      return false;
-    } finally {
-      setRiskActionBusy('');
-    }
-  };
-  const approveRiskRule = async (rule) => {
-    const scope = feedbackScopeRef.current;
-    setRiskMessage(null);
-    setRiskActionBusy(`approve:${rule.id}`);
-    try {
-      await api.patch(`/api/risk/rules/${encodeURIComponent(rule.id)}/approve`, {});
-      setScopedRiskFeedback(scope, 'success', 'Custom rules approved and now in use. The previously approved rules were retired.', rule.id);
-      await loadRiskRules();
-    } catch (error) {
-      setScopedRiskFeedback(scope, 'error', error.message || 'The rule could not be approved.', rule.id);
-    } finally {
-      setRiskActionBusy('');
-    }
-  };
-  const copyRiskRuleToDraft = (rule) => {
-    if (!riskRuleFormFromRule(rule)) return;
-    setRiskAdvancedOpen(true);
-    setRiskEditorSeed({ rule, revision: (riskEditorSeed?.revision || 0) + 1 });
-    setRiskFeedback('success', 'This rule is loaded below as a starting point. Review it, then save it for nurse approval.', 'builder');
   };
   const handleCreateUser = async (event) => {
     event.preventDefault();
@@ -628,6 +543,42 @@ export default function Settings({ data, user, reload, section }) {
     } catch (error) {
       showScopedUserActionFeedback(scope, 'error', error.message || 'The guardian link could not be saved.');
     } finally { contextSaveLock.current = false; setGuardianLinkSaving(false); }
+  };
+  const sendStudentInvitation = async (event) => {
+    event.preventDefault();
+    if (contextSaveLock.current || studentInviteSaving) return;
+    const patient = linkableStudents.find((student) => String(student.id) === String(studentInviteForm.patientId));
+    if (!patient || !studentInviteForm.email.trim() || String(patient.studentId || '').trim().toLocaleLowerCase() !== studentInviteForm.confirmedStudentId.trim().toLocaleLowerCase()) {
+      showScopedUserActionFeedback(feedbackScopeRef.current, 'error', 'Select a roster student, re-enter the matching student ID, and enter an email address.');
+      return;
+    }
+    contextSaveLock.current = true;
+    setStudentInviteSaving(true);
+    clearUserActionFeedback();
+    try {
+      const result = await api.post(`/api/admin/students/${encodeURIComponent(patient.id)}/invitation`, {
+        email: studentInviteForm.email.trim(),
+        confirmedStudentId: studentInviteForm.confirmedStudentId.trim(),
+      });
+      showScopedUserActionFeedback(feedbackScopeRef.current, result.emailSent === false ? 'error' : 'success', result.emailSent === false
+        ? (result.message || 'The invitation was saved, but email delivery failed. Check delivery before retrying.')
+        : 'Student invitation sent. The activation link is scoped to this roster record.');
+      setStudentInviteOpen(false);
+      setStudentInviteTarget(null);
+      setStudentInviteForm({ patientId: '', email: '', confirmedStudentId: '' });
+      await refreshUsers();
+    } catch (error) {
+      showScopedUserActionFeedback(feedbackScopeRef.current, 'error', error.message || 'The student invitation could not be issued.');
+    } finally {
+      contextSaveLock.current = false;
+      setStudentInviteSaving(false);
+    }
+  };
+  const openStudentReinvite = (account) => {
+    clearUserActionFeedback();
+    setStudentInviteTarget(account);
+    setStudentInviteForm({ patientId: account.patientId || '', email: account.email || '', confirmedStudentId: '' });
+    setStudentInviteOpen(true);
   };
   
   // If not authorized, show authentication modal
@@ -745,7 +696,7 @@ export default function Settings({ data, user, reload, section }) {
 
       {activeSection === 'users' && isAdmin && (
         <section className="panel settings-tab-panel">
-          <div className="settings-panel-heading"><div><p className="section-kicker">Access control</p><h3>User management</h3></div><button className="primary-btn" onClick={() => { clearUserActionFeedback(); setShowUserForm(true); }}><UserCog size={15} /> Add new user</button></div>
+          <div className="settings-panel-heading"><div><p className="section-kicker">Access control</p><h3>User management</h3></div><div className="user-management-actions"><button type="button" className="secondary-btn" onClick={() => { clearUserActionFeedback(); setStudentInviteTarget(null); setStudentInviteForm({ patientId: '', email: '', confirmedStudentId: '' }); setStudentInviteOpen(true); }}>Invite student</button><button className="primary-btn" onClick={() => { clearUserActionFeedback(); setShowUserForm(true); }}><UserCog size={15} /> Add new user</button></div></div>
           <div className="registration-requests-shortcut"><div><strong>Guardian registration requests</strong><p className="field-hint">Review new guardian applications in the dedicated registration queue.</p></div><Link className="secondary-btn" to="/guardian-requests" state={{ returnTo: `${location.pathname}${location.search}` }}>Open registration requests</Link></div>
           <div className="settings-users-toolbar">
             <p className="tab-description">Invite staff or manage administrator-issued guardian invitations. Self-registered guardians remain pending until you verify their relationship against school records. Administrators record nurse PRC verification here.</p>
@@ -791,6 +742,15 @@ export default function Settings({ data, user, reload, section }) {
               <label>Relationship<input value={newUser.relationship} onChange={(event) => setNewUser({ ...newUser, relationship: event.target.value })} required disabled={inviteSaving} /></label>
             </>}
             <div className="form-actions"><button type="button" className="secondary-btn" disabled={inviteSaving} onClick={() => setShowUserForm(false)}>Cancel</button><button type="submit" className="primary-btn" disabled={inviteSaving || (newUser.role === 'Guardian' && !newUser.patientId)}>{inviteSaving ? 'Sending…' : 'Send invitation'}</button></div></form></ModalDialog>}
+          {studentInviteOpen && <ModalDialog open title={studentInviteTarget ? `Reconfirm student identity · ${studentInviteTarget.name}` : 'Invite student to clinic scheduling'} eyebrow="Student account access" historyKey="invite-student" onClose={() => { setStudentInviteOpen(false); setStudentInviteTarget(null); }} busy={studentInviteSaving} className="admin-context-dialog invite-user-dialog"><form className="context-dialog-form" onSubmit={sendStudentInvitation}>
+            {userActionFeedback?.tone === 'error' && <div className="error-banner" role="alert">{userActionFeedback.message}</div>}
+            <p className="field-hint">A linked guardian must first allow appointment requests. Confirm one roster identity to issue a fresh individual invitation{studentInviteTarget ? ' and revoke any prior pending link' : ''}.</p>
+            <StudentPicker students={linkableStudents} value={studentInviteForm.patientId} onChange={(patientId) => setStudentInviteForm((current) => ({ ...current, patientId, confirmedStudentId: '' }))} label="Student roster record" itemLabel="student" searchPlaceholder="Search by student name or ID" description="Select the exact roster record for this invitation." required disabled={studentInviteSaving} />
+            {studentInvitePatient && <p className="student-invitation-identity" role="status">Selected roster ID: <strong>{studentInvitePatient.studentId || 'Missing ID'}</strong></p>}
+            <label>Re-enter student ID to confirm<input value={studentInviteForm.confirmedStudentId} onChange={(event) => setStudentInviteForm((current) => ({ ...current, confirmedStudentId: event.target.value }))} autoComplete="off" required disabled={studentInviteSaving || !studentInvitePatient} /></label>
+            <label>Student email<input type="email" value={studentInviteForm.email} onChange={(event) => setStudentInviteForm((current) => ({ ...current, email: event.target.value }))} autoComplete="email" required disabled={studentInviteSaving} /></label>
+            <div className="form-actions"><button type="button" className="secondary-btn" onClick={() => { setStudentInviteOpen(false); setStudentInviteTarget(null); }} disabled={studentInviteSaving}>Cancel</button><button type="submit" className="primary-btn" disabled={studentInviteSaving || !studentInvitePatient || studentInviteForm.confirmedStudentId.trim().toLocaleLowerCase() !== String(studentInvitePatient?.studentId || '').trim().toLocaleLowerCase()}>{studentInviteSaving ? 'Sending…' : studentInviteTarget ? 'Reissue individual invitation' : 'Issue individual invitation'}</button></div>
+          </form></ModalDialog>}
           {guardianLinkTarget && <ModalDialog open title={`Link student · ${guardianLinkTarget.name}`} eyebrow="Guardian access" historyKey="link-student" onClose={() => setGuardianLinkTarget(null)} busy={guardianLinkSaving} className="admin-context-dialog"><form className="context-dialog-form" onSubmit={saveGuardianLink}>
             {userActionFeedback?.tone === 'error' && <div className="error-banner" role="alert">{userActionFeedback.message}</div>}
             <div><h4>Link student to {guardianLinkTarget.name}</h4><p className="field-hint">Only student roster records can be linked. Suspended accounts require a separate activation after relinking.</p></div>
@@ -817,7 +777,7 @@ export default function Settings({ data, user, reload, section }) {
             {Boolean(nurseLicenseNumber.trim()) && <label className="check-label"><input type="checkbox" checked={licenseVerificationConfirmed} disabled={licenseSaving} onChange={(event) => setLicenseVerificationConfirmed(event.target.checked)} required /> I independently verified this license against an authoritative source.</label>}
             <div className="form-actions"><button type="button" className="secondary-btn" onClick={() => setNurseLicenseTarget(null)} disabled={licenseSaving}>Cancel</button><button type="submit" className="primary-btn" disabled={licenseSaving || (Boolean(nurseLicenseNumber.trim()) && !licenseVerificationConfirmed) || (!nurseLicenseNumber.trim() && !nurseLicenseTarget.prcLicenseNumber)}>{licenseSaving ? 'Saving…' : nurseLicenseNumber.trim() ? 'Record verified license' : 'Clear license record'}</button></div>
           </form></ModalDialog>}
-          <div className="admin-table-wrap"><table className="admin-table settings-users-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>PRC license</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{visibleUsers.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student (login removed)', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.role === 'school_nurse' ? <span className={`status-chip ${account.prcLicenseVerified ? 'success' : 'warn'}`}>{account.prcLicenseVerified ? 'Recorded by admin' : 'Not recorded'}</span> : '—'}</td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.role === 'student' ? 'Student sign-in is disabled' : <>{account.status === 'invited' ? <><button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button><button type="button" className="table-action" onClick={() => handleCancelInvitation(account)}>Cancel invitation</button></> : account.status === 'deactivated' && !account.invitationAccepted && account.username === `invited-${account.id.slice(0, 8)}` ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Send new invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}{account.role === 'guardian' && <button type="button" className="table-action" onClick={() => { clearUserActionFeedback(); setGuardianLinkTarget(account); setGuardianLinkForm({ patientId: '', relationship: 'Parent' }); }}>Link student</button>}{account.role === 'school_nurse' && <button type="button" className="table-action" onClick={() => { clearUserActionFeedback(); openNurseLicenseEditor(account); }}>{account.prcLicenseVerified ? 'Update or clear license' : 'Record verified license'}</button>}</>}</td></tr>)}</tbody></table>{visibleUsers.length === 0 && <p className="empty-state">{users.length ? 'No accounts match this filter.' : 'No system accounts are available yet.'}</p>}</div>
+          <div className="admin-table-wrap"><table className="admin-table settings-users-table"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Status</th><th>PRC license</th><th>Last login</th><th>Actions</th></tr></thead><tbody>{visibleUsers.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>@{account.username}</small></td><td>{({ system_administrator: 'Admin', school_nurse: 'Nurse', student: 'Student', guardian: 'Guardian' })[account.role] || account.role}</td><td>{account.email}</td><td><span className={`status-chip ${account.status === 'active' ? 'success' : 'warn'}`}>{account.status}</span></td><td>{account.role === 'school_nurse' ? <span className={`status-chip ${account.prcLicenseVerified ? 'success' : 'warn'}`}>{account.prcLicenseVerified ? 'Recorded by admin' : 'Not recorded'}</span> : '—'}</td><td>{account.lastLogin ? new Date(account.lastLogin).toLocaleDateString() : 'Never'}</td><td>{account.role === 'student' ? account.status === 'active' ? <details className="user-row-actions"><summary aria-label={`Actions for ${account.name}`}>Actions</summary><div className="user-row-actions-menu"><button type="button" className="table-action" onClick={() => handleUserStatus(account)}>Disable student access</button></div></details> : <div className="user-student-access-actions"><button type="button" className="table-action" onClick={() => openStudentReinvite(account)}>Confirm and re-invite</button>{account.status === 'invited' && <button type="button" className="table-action" onClick={() => handleCancelInvitation(account)}>Cancel invitation</button>}</div> : <details className="user-row-actions"><summary aria-label={`Actions for ${account.name}`}>Actions</summary><div className="user-row-actions-menu">{account.status === 'invited' ? <><button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Resend invitation</button><button type="button" className="table-action" onClick={() => handleCancelInvitation(account)}>Cancel invitation</button></> : account.status === 'deactivated' && !account.invitationAccepted && account.username === `invited-${account.id.slice(0, 8)}` ? <button type="button" className="table-action" onClick={() => handleResendInvitation(account)}>Send new invitation</button> : <button type="button" className="table-action" onClick={() => handleUserStatus(account)}>{account.status === 'active' ? 'Deactivate' : 'Activate'}</button>}{account.role === 'guardian' && <button type="button" className="table-action" onClick={() => { clearUserActionFeedback(); setGuardianLinkTarget(account); setGuardianLinkForm({ patientId: '', relationship: 'Parent' }); }}>Link student</button>}{account.role === 'school_nurse' && <button type="button" className="table-action" onClick={() => { clearUserActionFeedback(); openNurseLicenseEditor(account); }}>{account.prcLicenseVerified ? 'Update or clear license' : 'Record verified license'}</button>}</div></details>}</td></tr>)}</tbody></table>{visibleUsers.length === 0 && <p className="empty-state">{users.length ? 'No accounts match this filter.' : 'No system accounts are available yet.'}</p>}</div>
           <ListPagination page={userPage.page} pageCount={userPage.pageCount} pageSize={userPage.pageSize} total={userPage.total} onPageChange={(page) => updateListParams(searchParams, setSearchParams, { page })} onPageSizeChange={(pageSize) => updateListParams(searchParams, setSearchParams, { pageSize }, { resetPage: true })} />
         </section>
       )}
@@ -880,92 +840,6 @@ export default function Settings({ data, user, reload, section }) {
         </section>
       )}
 
-      {activeSection === 'risk' && (
-        <section className="panel settings-tab-panel">
-          <div className="settings-panel-heading">
-            <div><h3>Risk rules</h3><p className="field-hint">Rules offer prompts for nurse review. They do not diagnose or replace clinical judgment.</p></div>
-            <button type="button" className="secondary-btn" onClick={loadRiskRules} disabled={riskLoading || Boolean(riskActionBusy)}>{riskLoading ? 'Refreshing…' : 'Refresh rules'}</button>
-          </div>
-          {riskLoadError && <div className="risk-feedback is-error" role="alert"><span>{riskLoadError}</span><button type="button" className="secondary-btn" onClick={loadRiskRules} disabled={riskLoading}>{riskLoading ? 'Retrying…' : 'Try again'}</button></div>}
-          {riskLoading && !demonstrationRules && <p className="risk-loading" role="status">Checking which rules are in use…</p>}
-          {demonstrationRules && currentRiskRule && <div className="risk-current-rule">
-            <div className="risk-current-rule-heading"><div><h4>Clinician-approved custom rules are in use</h4><p>{currentRiskRule.name}</p></div><span className="status-chip success">Approved by a nurse</span></div>
-            <p>For each visit, complete the full assessment and use your clinical judgment with these prompts.</p>
-            <RiskRuleDetails rule={currentRiskRule} />
-          </div>}
-          {demonstrationRules && !currentRiskRule && <div className="risk-sample-card">
-            <div className="risk-sample-heading"><h4>Sample risk rules are automatically in use</h4><span className="status-chip warn">Not approved by a nurse</span></div>
-            <p>No setup is needed. This sample is used whenever there are no clinician-approved custom rules. Its values are not nurse-approved or clinically validated.</p>
-            <p className="risk-sample-next-step">For every visit, complete the full assessment, review the student's condition, and decide care yourself.</p>
-            <details className="risk-sample-details">
-              <summary>See how sample rules work</summary>
-              <p>Each matching condition adds points. A measurement can match more than one condition, and those points add together. The score bands begin at {demonstrationRules.thresholds.moderate} points for moderate and {demonstrationRules.thresholds.high} points for high.</p>
-              <ul>{demonstrationRules.indicators.map((indicator, index) => <li key={`${indicator.field}-${indicator.operator}-${index}`}><strong>{indicator.label}</strong><span>{describeRiskCondition(indicator)}; adds {indicator.weight} point{Number(indicator.weight) === 1 ? '' : 's'}.</span></li>)}</ul>
-            </details>
-          </div>}
-          <details className="risk-advanced" open={riskAdvancedOpen} onToggle={(event) => setRiskAdvancedOpen(event.currentTarget.open)}>
-            <summary>Advanced: manage custom rules</summary>
-            <p className="risk-advanced-intro">Custom rules are optional. Saving a rule does not change assessments; a verified school nurse must approve it before it can be used.</p>
-            {candidateRuleDraft && <div className="risk-candidate-card">
-              <h4>Optional WHO-informed screening candidate</h4>
-              <p>This partial screening option does not replace a full assessment. {reusableCandidateRule?.status === 'clinician_approved' ? 'A verified school nurse approved it, and it is currently in use.' : 'It stays out of use until a verified school nurse approves it.'}</p>
-              {reusableCandidateRule && <p className={currentRiskRule?.id === reusableCandidateRule.id ? 'risk-current-label' : 'risk-candidate-state'}>{currentRiskRule?.id === reusableCandidateRule.id ? 'Approved and in use' : reusableCandidateRule.status === 'draft' ? 'Saved for nurse review' : 'Retired'}</p>}
-              <details className="risk-candidate-details">
-                <summary>Sources and limits of this option</summary>
-                <p className="risk-source-links">WHO sources: {candidateRuleDraft.sources.map((source, index) => <span key={source.url}>{index > 0 ? ' · ' : ''}<a href={source.url} target="_blank" rel="noreferrer">{source.label}</a></span>)}</p>
-                <ul>{candidateRuleDraft.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul>
-              </details>
-              <div className="form-actions">
-                <button type="button" className="secondary-btn" onClick={createCandidateRuleDraft} disabled={riskLoading || Boolean(riskActionBusy) || Boolean(reusableCandidateRule)}>
-                  {riskActionBusy === 'candidate' ? 'Saving…' : reusableCandidateRule?.status === 'clinician_approved' ? 'Approved and in use' : reusableCandidateRule ? 'Saved for nurse review' : 'Save candidate for nurse review'}
-                </button>
-                {savedCandidateRule?.status === 'retired' && !reusableCandidateRule && <span className="field-hint">The earlier candidate is retired. Saving it again creates a new version.</span>}
-              </div>
-              {riskMessage?.position === 'candidate' && <p className={`risk-feedback ${riskMessage.tone === 'error' ? 'is-error' : 'is-success'}`} role={riskMessage.tone === 'error' ? 'alert' : 'status'}>{riskMessage.text}</p>}
-            </div>}
-            {riskMessage?.position === 'builder' && <p className={`risk-feedback ${riskMessage.tone === 'error' ? 'is-error' : 'is-success'}`} role={riskMessage.tone === 'error' ? 'alert' : 'status'}>{riskMessage.text}</p>}
-            <RiskRuleBuilder onSave={createRiskRule} saving={riskActionBusy === 'create'} busy={riskLoading || Boolean(riskActionBusy)} demonstrationRules={demonstrationRules} seed={riskEditorSeed} />
-
-            <div className="risk-rules-heading"><div><h4>Saved custom rules</h4><p>Review conditions, approval dates, and earlier versions here.</p></div>{currentRiskRule && <span className="risk-current-label">Currently in use · version {currentRiskRule.version}</span>}</div>
-            {!riskLoading && !riskLoadError && riskRules.length === 0 && <p className="risk-empty-state">No custom rules have been saved.</p>}
-            <div className="risk-rule-list">
-              {riskRules.map((rule) => {
-                const isDraft = rule.status === 'draft';
-                const isCurrent = currentRiskRule?.id === rule.id;
-                const canCopy = !rule.rules?.mode && Boolean(riskRuleFormFromRule(rule));
-                const busy = riskLoading || Boolean(riskActionBusy);
-                const statusLabel = rule.status === 'clinician_approved' ? 'Clinician approved'
-                  : rule.status === 'retired' ? 'No longer active'
-                    : 'Waiting for nurse approval';
-                const approvedAt = rule.approved_at ? new Date(rule.approved_at) : null;
-                const approvedDate = approvedAt && !Number.isNaN(approvedAt.getTime()) ? approvedAt.toLocaleDateString() : '';
-                const approvalRecorded = Boolean(rule.approved_at || rule.status === 'clinician_approved');
-                return <article className="risk-rule-card" key={rule.id}>
-                  <div className="risk-rule-card-heading">
-                    <div><p className="section-kicker">Version {rule.version}</p><h5>{rule.name}</h5></div>
-                    <div className="risk-rule-badges">
-                      <span className={`status-chip ${rule.status === 'clinician_approved' || isCurrent ? 'success' : rule.status === 'retired' ? 'neutral' : 'warn'}`}>{statusLabel}</span>
-                      {isCurrent && <span className="risk-current-label">Currently used</span>}
-                    </div>
-                  </div>
-                  <RiskRuleDetails rule={rule} />
-                  <div className="risk-rule-card-footer">
-                    <span>{approvalRecorded ? `Nurse approval recorded${approvedDate ? ` · ${approvedDate}` : ''}` : rule.status === 'retired' ? 'Retired without recorded approval' : 'Not in use until approved by a verified school nurse'}</span>
-                    <div className="risk-rule-actions">
-                      {canCopy && <button type="button" className="secondary-btn" onClick={() => copyRiskRuleToDraft(rule)} disabled={busy}>Use as starting point</button>}
-                      {user?.role === 'school_nurse' && isDraft && <button type="button" className="primary-btn" onClick={() => approveRiskRule(rule)} disabled={!currentUserLicenseVerified || busy}>{riskActionBusy === `approve:${rule.id}` ? 'Approving…' : `Approve and use version ${rule.version}`}</button>}
-                    </div>
-                    {user?.role === 'system_administrator' && isDraft && <span className="risk-approval-note">Only a verified school nurse can approve these rules.</span>}
-                  </div>
-                  {riskMessage?.position === rule.id && <p className={`risk-feedback ${riskMessage.tone === 'error' ? 'is-error' : 'is-success'}`} role={riskMessage.tone === 'error' ? 'alert' : 'status'}>{riskMessage.text}</p>}
-                </article>;
-              })}
-            </div>
-            {user?.role === 'school_nurse' && !currentUserLicenseVerified && <p className="risk-license-note">Custom rules can be saved now. To approve and use them, ask an administrator to verify and record your PRC license. Nurses cannot record their own verification.</p>}
-          </details>
-        </section>
-      )}
-
       {activeSection === 'security' && isAdmin && (
         <section className="panel settings-tab-panel audit-history-panel">
           <div className="settings-panel-heading">
@@ -1020,6 +894,7 @@ export default function Settings({ data, user, reload, section }) {
 
       {activeSection === 'data' && (
         <div className="settings-layout settings-import-layout">
+          <section className="panel settings-tab-panel data-purpose-note"><div><p className="section-kicker">Choose the right workspace</p><h3>Roster setup and clinic oversight</h3><p><strong>Data &amp; Imports</strong> is for setting up roster identities and loading authorized historical records. Use <strong>Reports</strong> to review clinic activity and oversight summaries; privacy suppression remains in effect for small groups.</p></div></section>
           {isAdmin && <section className="panel settings-tab-panel narrow-panel settings-export-panel">
             <div className="settings-panel-heading"><div><h3>Data & reports</h3><p className="field-hint">Exports include only data visible to this account. CSV imports preview row errors and duplicates before saving.</p></div></div>
             <div className="data-command-grid"><button className="data-action" onClick={exportData}><Download size={17} /><span><strong>Export oversight data</strong><small>Spreadsheet-safe settings and roster export</small></span></button><button className="data-action" onClick={exportOversightSnapshot}><Database size={17} /><span><strong>Download oversight snapshot</strong><small>JSON of the settings and roster visible to this account</small></span></button></div>

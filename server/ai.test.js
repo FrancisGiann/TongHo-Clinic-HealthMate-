@@ -114,7 +114,7 @@ test('Gemini uses the fixed endpoint, key header, bounded request, and configure
     assert.equal(result.provider, 'gemini');
     assert.equal(result.model, 'gemini-3.5-flash-lite');
     assert.ok(result.draft.startsWith('Illness visit for headache; rest was provided.'));
-    assert.match(result.draft, /Not provided: Symptoms; Disposition; Pain score; Temperature; Pulse/);
+    assert.match(result.draft, /Not provided: Symptoms; Disposition; Temperature; Pulse/);
     assert.equal(warnings.length, 0);
   });
 });
@@ -130,14 +130,14 @@ test('Gemini payload contains only bounded allowlisted fields and excludes ident
       const encounterText = request.contents[0].parts[0].text;
       const payload = JSON.parse(encounterText.slice(encounterText.indexOf('\n') + 1));
       assert.deepEqual(Object.keys(payload), [
-        'visitType', 'complaint', 'symptoms', 'treatment', 'disposition', 'painScore', 'temperature', 'pulse',
+        'visitType', 'complaint', 'symptoms', 'treatment', 'disposition', 'temperature', 'pulse',
       ]);
       assert.equal(payload.visitType, 'Injury');
       assert.equal(payload.complaint.length, 300);
       assert.deepEqual(payload.symptoms, ['Swelling']);
       assert.equal(payload.treatment.length, 300);
       assert.equal(payload.disposition.length, 120);
-      assert.equal(payload.painScore, 8);
+      assert.equal(Object.hasOwn(payload, 'painScore'), false);
       assert.equal(payload.temperature, 39.2);
       assert.equal(payload.pulse, 120);
       return completedResponse();

@@ -36,14 +36,13 @@ const nurseNavGroups = [
     { to: "/students", label: "Patients", icon: Users },
     { to: "/health-record-review", label: "Health record review", icon: ClipboardList },
     { to: "/new-visit", label: "New Visit", icon: Stethoscope },
-    { to: "/appointments", label: "Appointments", icon: CalendarDays },
+    { to: "/appointments", label: "Clinic scheduling", icon: CalendarDays },
     { to: "/incidents", label: "Incident reports", icon: ClipboardList },
   ] },
   { label: "Clinic operations", items: [
     { to: "/inventory", label: "Inventory", icon: Package },
     { to: "/reports", label: "Reports", icon: FileBarChart },
     { to: "/data-imports", label: "Data & Imports", icon: Database },
-    { to: "/risk-rules", label: "Risk Rules", icon: ShieldCheck },
   ] },
 ];
 
@@ -57,7 +56,6 @@ const adminNavGroups = [
     { to: "/cms", label: "Content management", icon: Images },
     { to: "/data-imports", label: "Data & Imports", icon: Database },
     { to: "/communications", label: "Communications", icon: Bell },
-    { to: "/risk-rules", label: "Risk Rules", icon: ShieldCheck },
     { to: "/security", label: "Audit history", icon: ShieldCheck },
   ] },
   { label: "Insights", items: [
@@ -68,10 +66,17 @@ const adminNavGroups = [
 const portalNavGroups = [
   { label: "My health", items: [
     { to: "/", label: "My Health Portal", icon: Home },
-    { to: "/appointments", label: "Appointments", icon: CalendarDays },
+    { to: "/appointments", label: "Clinic scheduling", icon: CalendarDays },
     { to: "/visits", label: "Visit History", icon: ClipboardList },
     { to: "/incidents", label: "Incident reports", icon: ClipboardList },
     { to: "/health-records", label: "Student Health Record", icon: HeartPulse },
+  ] },
+];
+
+const studentNavGroups = [
+  { label: "My schedule", items: [
+    { to: "/", label: "Dashboard", icon: Home },
+    { to: "/appointments", label: "Clinic scheduling", icon: CalendarDays },
   ] },
 ];
 
@@ -119,7 +124,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
   const navigate = useNavigate();
   useEffect(() => setLogoFailed(false), [branding.applicationLogo]);
   const isAdmin = user?.role === 'system_administrator';
-  const navGroups = isAdmin ? adminNavGroups : user?.role === 'school_nurse' ? nurseNavGroups : portalNavGroups;
+  const navGroups = isAdmin ? adminNavGroups : user?.role === 'school_nurse' ? nurseNavGroups : user?.role === 'student' ? studentNavGroups : portalNavGroups;
   const nav = navGroups.flatMap((group) => group.items);
   const specialTitle = {
     "/students/new": "New Student Record",
@@ -133,13 +138,20 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
     || (matchPath({ path: "/profiles/:patientId", end: true }, location.pathname) ? "Health Profile" : null)
     || (matchPath({ path: "/visits/:visitId", end: true }, location.pathname) ? "Clinic Visit Details" : null);
   const navTitle = nav.find((item) => matchPath({ path: item.to, end: item.to === '/' }, location.pathname))?.label;
-  const title = specialTitle || navTitle
+  const manilaHour = Number(new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', hour: '2-digit', hourCycle: 'h23' }).format(clock));
+  const greeting = manilaHour < 12 ? 'Good morning' : manilaHour < 18 ? 'Good afternoon' : 'Good evening';
+  const dashboardFirstName = (user?.name || 'User').replace(/^Nurse\s+/i, '').trim().split(/\s+/)[0] || 'User';
+  const dashboardTitle = isAdmin ? 'Administration overview' : `${greeting}, ${dashboardFirstName}`;
+  const title = location.pathname === '/' && ['school_nurse', 'system_administrator', 'student'].includes(user?.role)
+    ? dashboardTitle
+    : specialTitle || navTitle
     || (location.pathname === "/settings" ? "My Account" : "Settings");
   const userDisplayName = user?.name?.replace(/^Nurse\s+/i, "") || settings.nurseName?.replace(/^Nurse\s+/i, "") || 'User';
-  const userRoleLabel = user?.role === "system_administrator" ? "Administrator" : user?.role === "school_nurse" ? "School nurse" : "Guardian";
+  const userRoleLabel = user?.role === "system_administrator" ? "Administrator" : user?.role === "school_nurse" ? "School nurse" : user?.role === "student" ? "Student" : "Guardian";
   
   // Keep local clinic alerts on routes available to the current role.
   const clinicAlerts = [];
+  const unreadNotificationCount = serverNotifications.filter((item) => item.channel === 'in_app' && item.status !== 'read').length;
 
   if (data && user?.role === 'school_nurse') {
     const lowStockItems = (data.inventory || []).filter(item => !item.archived && item.quantity <= item.reorderLevel);
@@ -166,7 +178,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
         clinicAlerts.push({
           title: `${student.name} has an appointment`,
           text: `${apt.reason || 'Appointment'} · ${formatManilaDateTime(apt.startsAt || apt.date, apt.time)}`,
-          action: 'View appointments',
+          action: 'View clinic scheduling',
           to: '/appointments',
         });
       }
@@ -174,7 +186,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
   }
 
   serverNotifications.filter((item) => item.channel === 'in_app' && item.status !== 'read').slice(0, 5).forEach((item) => {
-    clinicAlerts.push({ title: item.subject, text: item.body, id: item.id });
+    clinicAlerts.push({ title: item.subject, text: item.body, id: item.id, createdAt: item.createdAt, unread: true });
   });
   
   useEffect(() => setMobileOpen(false), [location.pathname]);
@@ -213,6 +225,12 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
     return () => clearInterval(timer);
   }, []);
   useEffect(() => {
+    if (user?.role === 'student') {
+      setServerNotifications([]);
+      setNotificationsLoading(false);
+      setNotificationsError('');
+      return undefined;
+    }
     let active = true;
     setServerNotifications([]);
     setNotificationsLoading(true);
@@ -365,7 +383,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
                 <Search size={19} />
               </button>
             )}
-            <button
+            {user?.role !== 'student' && <button
               ref={notificationButtonRef}
               className="icon-btn notification"
               onClick={() => {
@@ -373,14 +391,14 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
                 setShowNotifications(opening);
                 if (opening) setNotificationLoadAttempt((attempt) => attempt + 1);
               }}
-              aria-label={`Open notifications (${clinicAlerts.length} items)`}
+              aria-label={`Open notifications (${unreadNotificationCount} unread, ${clinicAlerts.length} total alerts)`}
               aria-expanded={showNotifications}
               aria-controls="notification-panel"
             >
               <Bell size={19} />
               {clinicAlerts.length > 0 && <i aria-hidden="true">{clinicAlerts.length > 9 ? '9+' : clinicAlerts.length}</i>}
-            </button>
-            <div
+            </button>}
+            {user?.role !== 'student' && <div
                 id="notification-panel"
                 className="notification-panel"
                 hidden={!showNotifications}
@@ -414,9 +432,10 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
                         <small>{alert.action}<ArrowUpRight size={13} aria-hidden="true" /></small>
                       </Link>
                     ) : (
-                      <div key={alert.id || `notification-${index}`}>
-                        <b>{alert.title}</b>
+                      <div className={`notification-item ${alert.unread ? 'is-unread' : ''}`} key={alert.id || `notification-${index}`}>
+                        <div className="notification-item-heading"><b>{alert.title}</b>{alert.unread && <span className="notification-unread-label">Unread</span>}</div>
                         <span>{alert.text}</span>
+                        {alert.createdAt && <time className="notification-time" dateTime={alert.createdAt}>{formatManilaDateTime(alert.createdAt)}</time>}
                         {alert.id && <button type="button" className="table-action" onClick={() => markNotificationRead(alert.id)} disabled={markingNotificationId === alert.id}>{markingNotificationId === alert.id ? 'Marking read…' : 'Mark read'}</button>}
                       </div>
                     )
@@ -426,7 +445,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
                     No alerts at this time
                   </div>
                 ) : null}
-              </div>
+              </div>}
             <button
               className={`theme-toggle ${dark ? "on" : ""}`}
               onClick={() => setDark(!dark)}

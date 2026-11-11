@@ -315,13 +315,14 @@ test('guardian bootstrap resolves linked IDs first, then reads only parameter-sc
   const queryFn = async (sql, params = []) => {
     calls.push({ sql, params });
     if (/FROM guardian_patient_links/.test(sql)) return { rows: [{ id: 'linked-student-1' }] };
+    if (/FROM guardian_student_scheduling_permissions/.test(sql)) return { rows: [] };
     const fields = params[1];
     const data = Object.fromEntries(fields.filter((field) => Object.hasOwn(source, field)).map((field) => [field, source[field]]));
     return clinicReadResult({ students: [{ id: 'linked-student-1', patient_type: 'student', data }] });
   };
 
   const data = await loadClinicData({ id: 'guardian-1', role: 'guardian' }, { queryFn });
-  assert.equal(calls.length, 2, 'guardian lookup remains a dependency before the single scoped bootstrap query');
+  assert.equal(calls.length, 3, 'guardian link lookup and permission projection follow the scoped bootstrap query');
   assert.match(calls[0].sql, /FROM guardian_patient_links/);
   const [read] = calls.slice(1);
   assert.match(read.sql, /FROM clinic_settings/);
@@ -340,7 +341,24 @@ test('guardian bootstrap resolves linked IDs first, then reads only parameter-sc
     allergiesStatus: 'none_reported',
     g6pdDeficiency: false,
     guardianHealthRecord: { allergies: null, allergiesStatus: 'none_reported' },
+    schedulingPermission: false,
+    canManageSchedulingPermission: true,
   });
+});
+
+test('guardian permission projection shows active grant ownership only to its granting guardian', async () => {
+  const source = { name: 'Example Student', studentId: 'PTHI-22', gradeLevel: 'Grade 4' };
+  const loadFor = async (guardianId) => loadClinicData({ id: guardianId, role: 'guardian' }, { queryFn: async (sql, params = []) => {
+    if (/FROM guardian_patient_links/.test(sql)) return { rows: [{ id: 'linked-student-1' }] };
+    if (/FROM guardian_student_scheduling_permissions/.test(sql)) return { rows: [{ patient_id: 'linked-student-1', guardian_user_id: 'guardian-1', allowed: true }] };
+    const fields = params[1];
+    const data = Object.fromEntries(fields.filter((field) => Object.hasOwn(source, field)).map((field) => [field, source[field]]));
+    return clinicReadResult({ students: [{ id: 'linked-student-1', patient_type: 'student', data }] });
+  } });
+  const grantorView = await loadFor('guardian-1');
+  const otherGuardianView = await loadFor('guardian-2');
+  assert.deepEqual([grantorView.students[0].schedulingPermission, grantorView.students[0].canManageSchedulingPermission], [true, true]);
+  assert.deepEqual([otherGuardianView.students[0].schedulingPermission, otherGuardianView.students[0].canManageSchedulingPermission], [true, false]);
 });
 
 test('nurse bootstrap reads all permitted groups once and preserves authoritative hydration and visit sanitization', async () => {

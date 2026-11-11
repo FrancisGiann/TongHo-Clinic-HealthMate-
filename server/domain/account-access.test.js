@@ -1,16 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { activateInvitedAccount, changeAccountStatus, renewPendingInvitation } from './account-access.js';
+import { activateInvitedAccount, changeAccountStatus, renewPendingInvitation, revokeStudentAccountAccess } from './account-access.js';
 
-function createStore({ role = 'school_nurse', status = 'invited', invitations = null, users = null, guardianLinks = [], sessions = [], reservedUsernames = [] } = {}) {
+function createStore({ role = 'school_nurse', status = 'invited', invitations = null, users = null, guardianLinks = [], permissions = [], patients = null, sessions = [], otpChallenges = [], reservedUsernames = [] } = {}) {
   const id = '12345678-1234-4234-8234-123456789abc';
   const email = 'nurse@example.test';
   const now = Date.now();
   return {
     users: users || [{ id, username: `invited-${id.slice(0, 8)}`, email, name: 'Test Nurse', role, status, password_hash: 'placeholder' }],
-    invitations: invitations || [{ id: 'invitation-1', tokenHash: 'hash-1', email, role, patientId: null, acceptedAt: null, expiresAt: new Date(now + 60_000), invitedBy: 'admin-1' }],
+    invitations: invitations || [{ id: 'invitation-1', tokenHash: 'hash-1', email, role, patientId: role === 'student' ? 'student-1' : null, acceptedAt: null, expiresAt: new Date(now + 60_000), invitedBy: 'admin-1' }],
     guardianLinks,
+    permissions,
+    patients: patients || (role === 'student' ? [{ id: 'student-1', userId: id, patientType: 'student' }] : []),
     sessions,
+    otpChallenges,
     reservedUsernames,
     failQuery: null,
     lockTails: new Map(),
@@ -23,7 +26,10 @@ function createTransaction(store, { rollback = true } = {}) {
     const snapshot = structuredClone({
       users: store.users,
       invitations: store.invitations,
+      patients: store.patients,
+      permissions: store.permissions,
       sessions: store.sessions,
+      otpChallenges: store.otpChallenges,
       reservedUsernames: store.reservedUsernames,
     });
     const heldLocks = [];
@@ -48,10 +54,38 @@ function createTransaction(store, { rollback = true } = {}) {
         store.log.push(sql);
         if (store.failQuery && sql.startsWith(store.failQuery)) throw new Error('simulated database failure');
 
-        if (sql.startsWith('select id,email,role from invitations') && !sql.includes('for update')) {
+        if (sql.startsWith('select id,email,role,patient_id from invitations') && !sql.includes('for update')) {
           const row = store.invitations.find((item) => item.tokenHash === params[0]
             && !item.acceptedAt && new Date(item.expiresAt).getTime() > Date.now());
-          return { rows: row ? [{ id: row.id, email: row.email, role: row.role }] : [], rowCount: row ? 1 : 0 };
+          return { rows: row ? [{ id: row.id, email: row.email, role: row.role, patient_id: row.patientId }] : [], rowCount: row ? 1 : 0 };
+        }
+        if (sql.startsWith("select id,user_id from patients where id=$1 and patient_type='student' for update")) {
+          const patient = store.patients.find((item) => item.id === params[0] && item.patientType === 'student');
+          if (patient) await acquire(`patient:${patient.id}`);
+          return { rows: patient ? [{ id: patient.id, user_id: patient.userId }] : [], rowCount: patient ? 1 : 0 };
+        }
+        if (sql === 'select id,role from users where id=$1') {
+          const user = store.users.find((item) => item.id === params[0]);
+          return { rows: user ? [{ id: user.id, role: user.role }] : [], rowCount: user ? 1 : 0 };
+        }
+        if (sql === 'select id,role from users where id=$1 for update') {
+          const user = store.users.find((item) => item.id === params[0]);
+          if (user) await acquire(`user:${user.id}`);
+          return { rows: user ? [{ id: user.id, role: user.role }] : [], rowCount: user ? 1 : 0 };
+        }
+        if (sql.startsWith("select id from patients where user_id=$1 and patient_type='student' for update")) {
+          const patient = store.patients.find((item) => item.userId === params[0] && item.patientType === 'student');
+          if (patient) await acquire(`patient:${patient.id}`);
+          return { rows: patient ? [{ id: patient.id }] : [], rowCount: patient ? 1 : 0 };
+        }
+        if (sql.startsWith('select patient_id from guardian_patient_links')) {
+          const links = store.guardianLinks.filter((item) => item.guardianUserId === params[0]);
+          return { rows: links.map((link) => ({ patient_id: link.patientId })), rowCount: links.length };
+        }
+        if (sql.startsWith('select id from patients where id=any')) {
+          const locked = store.patients.filter((patient) => params[0].includes(patient.id));
+          for (const patient of locked) await acquire(`patient:${patient.id}`);
+          return { rows: locked.map((patient) => ({ id: patient.id })), rowCount: locked.length };
         }
         if (sql.startsWith('select * from users where lower(email)')) {
           const found = store.users.find((item) => item.email.toLowerCase() === String(params[0]).toLowerCase());
@@ -66,13 +100,23 @@ function createTransaction(store, { rollback = true } = {}) {
           const row = found && store.users.find((item) => item.id === found.id);
           return { rows: row ? [structuredClone(row)] : [], rowCount: row ? 1 : 0 };
         }
-        if (sql.startsWith('select id,email,role from invitations') && sql.includes('for update')) {
+        if (sql.startsWith('select id,email,role,patient_id from invitations') && sql.includes('for update')) {
           const found = store.invitations.find((item) => item.id === params[0] && item.tokenHash === params[1]
             && !item.acceptedAt && new Date(item.expiresAt).getTime() > Date.now());
           if (found) await acquire(`invitation:${found.id}`);
           const row = found && store.invitations.find((item) => item.id === found.id && !item.acceptedAt
             && new Date(item.expiresAt).getTime() > Date.now());
-          return { rows: row ? [{ id: row.id, email: row.email, role: row.role }] : [], rowCount: row ? 1 : 0 };
+          return { rows: row ? [{ id: row.id, email: row.email, role: row.role, patient_id: row.patientId }] : [], rowCount: row ? 1 : 0 };
+        }
+        if (sql.startsWith('select 1 from guardian_student_scheduling_permissions')) {
+          const permission = store.permissions.find((item) => item.patientId === params[0] && item.allowed);
+          const guardianLink = permission && store.guardianLinks.some((link) => link.guardianUserId === permission.guardianUserId && link.patientId === params[0] && link.patientType === 'student');
+          const guardian = permission && store.users.find((item) => item.id === permission.guardianUserId && item.role === 'guardian' && item.status === 'active');
+          return { rows: permission && guardianLink && guardian ? [{}] : [], rowCount: permission && guardianLink && guardian ? 1 : 0 };
+        }
+        if (sql.startsWith('select user_id from patients where id=$1')) {
+          const patient = store.patients.find((item) => item.id === params[0]);
+          return { rows: patient ? [{ user_id: patient.userId }] : [], rowCount: patient ? 1 : 0 };
         }
         if (sql.startsWith('select 1 from guardian_patient_links')) {
           const found = store.guardianLinks.some((link) => link.guardianUserId === params[0] && link.patientType === 'student');
@@ -107,6 +151,16 @@ function createTransaction(store, { rollback = true } = {}) {
           user.status = params[0];
           return { rows: [structuredClone(user)], rowCount: 1 };
         }
+        if (sql.startsWith('update guardian_student_scheduling_permissions set allowed=false')) {
+          const permission = store.permissions.find((item) => item.guardianUserId === params[0] && item.patientId === params[1] && item.allowed);
+          if (!permission) return { rows: [], rowCount: 0 };
+          permission.allowed = false;
+          return { rows: [{ patient_id: permission.patientId }], rowCount: 1 };
+        }
+        if (sql.startsWith("update invitations set expires_at=least(expires_at,now()) where role='student' and patient_id=$1")) {
+          for (const invitation of store.invitations) if (invitation.role === 'student' && invitation.patientId === params[0] && !invitation.acceptedAt) invitation.expiresAt = new Date(Date.now());
+          return { rows: [], rowCount: 1 };
+        }
         if (sql.startsWith('update invitations set expires_at=least(expires_at,now())')) {
           const email = String(params[0]).toLowerCase();
           let count = 0;
@@ -120,6 +174,16 @@ function createTransaction(store, { rollback = true } = {}) {
         }
         if (sql.startsWith('delete from sessions where user_id=$1')) {
           store.sessions = store.sessions.filter((session) => session.userId !== params[0]);
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.startsWith('update otp_challenges set consumed_at=now()')) {
+          for (const otp of store.otpChallenges) if (otp.userId === params[0] && !otp.consumedAt) otp.consumedAt = new Date();
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.startsWith("update users set status='deactivated',updated_at=now() where id=$1")) {
+          const user = store.users.find((item) => item.id === params[0]);
+          if (!user) return { rows: [], rowCount: 0 };
+          user.status = 'deactivated';
           return { rows: [], rowCount: 1 };
         }
         if (sql.startsWith('update invitations set accepted_at=now() where lower(email)')) {
@@ -203,10 +267,22 @@ test('activation rejects expired, consumed, missing-account, role-mismatched, an
   }
 });
 
-test('student invitations remain disabled and guardian activation still requires a student link', async () => {
-  const studentInvitation = { id: 'student-invite', tokenHash: 'hash-1', email: 'student@example.test', role: 'student', acceptedAt: null, expiresAt: new Date(Date.now() + 60_000) };
-  const studentStore = createStore({ invitations: [studentInvitation] });
-  await assert.rejects(createTransaction(studentStore)((client) => activateInvitedAccount(client, { tokenHash: 'hash-1', username: 'student.one', passwordHash: 'hash' })), errorIs(410, 'STUDENT_INVITATIONS_REMOVED'));
+test('student activation requires its roster binding and a linked active guardian grant', async () => {
+  const student = { id: 'student-account', username: 'invited-student', email: 'student@example.test', name: 'Student', role: 'student', status: 'invited', password_hash: 'placeholder' };
+  const activeGuardian = { id: 'guardian-1', username: 'parent.one', email: 'guardian@example.test', name: 'Parent', role: 'guardian', status: 'active' };
+  const studentInvitation = { id: 'student-invite', tokenHash: 'hash-1', email: student.email, role: 'student', patientId: 'student-1', acceptedAt: null, expiresAt: new Date(Date.now() + 60_000) };
+  const studentStore = createStore({
+    role: 'student', users: [student, activeGuardian], invitations: [studentInvitation],
+    patients: [{ id: 'student-1', userId: student.id, patientType: 'student' }],
+    guardianLinks: [{ guardianUserId: activeGuardian.id, patientId: 'student-1', patientType: 'student' }],
+    permissions: [{ guardianUserId: activeGuardian.id, patientId: 'student-1', allowed: true }],
+  });
+  const activatedStudent = await createTransaction(studentStore)((client) => activateInvitedAccount(client, { tokenHash: 'hash-1', username: 'student.one', passwordHash: 'new-hash' }));
+  assert.deepEqual(activatedStudent, { id: student.id, role: 'student' });
+  assert.equal(studentStore.users[0].status, 'active');
+
+  const noGrant = createStore({ role: 'student', users: [structuredClone(student), structuredClone(activeGuardian)], invitations: [structuredClone(studentInvitation)], patients: [{ id: 'student-1', userId: student.id, patientType: 'student' }] });
+  await assert.rejects(createTransaction(noGrant)((client) => activateInvitedAccount(client, { tokenHash: 'hash-1', username: 'student.one', passwordHash: 'hash' })), errorIs(400, 'INVALID_INVITATION'));
 
   const guardian = { id: 'guardian-1', username: 'invited-guardian', email: 'guardian@example.test', name: 'Parent', role: 'guardian', status: 'invited', password_hash: 'placeholder' };
   const invitation = { id: 'guardian-invite', tokenHash: 'guardian-hash', email: guardian.email, role: 'guardian', patientId: 'student-1', acceptedAt: null, expiresAt: new Date(Date.now() + 60_000) };
@@ -218,6 +294,34 @@ test('student invitations remain disabled and guardian activation still requires
   guardianStore.guardianLinks.push({ guardianUserId: guardian.id, patientType: 'student' });
   await createTransaction(guardianStore)((client) => activateInvitedAccount(client, { tokenHash: 'guardian-hash', username: 'parent.one', passwordHash: 'hash' }));
   assert.equal(guardianStore.users[0].status, 'active');
+});
+
+test('student reactivation and generic invitation resend require a fresh roster-confirmed invite', async () => {
+  const active = createStore({ role: 'student', status: 'deactivated' });
+  await assert.rejects(createTransaction(active)((client) => changeAccountStatus(client, {
+    userId: active.users[0].id, status: 'active', actorId: 'admin-1',
+  })), errorIs(409, 'STUDENT_REINVITATION_REQUIRED'));
+
+  const invited = createStore({ role: 'student', status: 'invited' });
+  await assert.rejects(createTransaction(invited)((client) => renewPendingInvitation(client, {
+    userId: invited.users[0].id, invitationId: 'invitation-2', tokenHash: 'hash-2', invitedBy: 'admin-1',
+  })), errorIs(409, 'STUDENT_REINVITATION_REQUIRED'));
+  assert.equal(invited.invitations.length, 1);
+});
+
+test('student revocation disables the account and invalidates invite, session, and OTP in one transaction', async () => {
+  const student = createStore({
+    role: 'student',
+    status: 'active',
+    sessions: [{ id: 'student-session', userId: '12345678-1234-4234-8234-123456789abc' }],
+    otpChallenges: [{ id: 'student-otp', userId: '12345678-1234-4234-8234-123456789abc', consumedAt: null }],
+  });
+  const revoked = await createTransaction(student)((client) => revokeStudentAccountAccess(client, 'student-1', student.users[0].id));
+  assert.equal(revoked, true);
+  assert.equal(student.users[0].status, 'deactivated');
+  assert.ok(new Date(student.invitations[0].expiresAt).getTime() <= Date.now());
+  assert.deepEqual(student.sessions, []);
+  assert.ok(student.otpChallenges[0].consumedAt);
 });
 
 test('concurrent use of one invitation activates only once', async () => {

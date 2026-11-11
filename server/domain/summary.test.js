@@ -19,8 +19,8 @@ test('recorded injection retains the complete source only inside a labelled esca
 test('recorded unknown-as-None response is replaced with explicit not-provided fields',()=>{
  const row=recorded.cases.find(x=>x.case==='missing');const result=reviewGeneratedSummary(row.input,row.recordedDraft);
  assert.equal(result.sourceQuoted,true);assert.equal(result.guardReason,'negative_or_normal_wording');
- for(const label of ['Chief complaint','Symptoms','Treatment / care provided','Disposition','Pain score','Temperature','Pulse'])assert.ok(result.draft.includes(`${label}: Not provided`));
- assert.doesNotMatch(result.draft,/: None\b/);assert.equal(result.missingFields.length,7);
+ for(const label of ['Chief complaint','Symptoms','Treatment / care provided','Disposition','Temperature','Pulse'])assert.ok(result.draft.includes(`${label}: Not provided`));
+ assert.doesNotMatch(result.draft,/: None\b/);assert.equal(result.missingFields.length,6);
 });
 test('legitimate negatives and normal-saline care are preserved verbatim as source data',()=>{
  const source={...input,chiefComplaint:'No fever or vomiting reported.',symptoms:['No cough'],treatment:'Normal saline was used for wound care.'};
@@ -39,7 +39,7 @@ test('blank, unknown and not-assessed text remain not provided while original te
 });
 test('positive model wording always receives server-owned missing-information markers',()=>{
  const result=reviewGeneratedSummary(input,'Illness consultation for a fictional headache; rest was provided.');
- assert.equal(result.sourceQuoted,false);assert.match(result.draft,/Not provided: Symptoms; Pain score; Temperature; Pulse\./);
+ assert.equal(result.sourceQuoted,false);assert.match(result.draft,/Not provided: Symptoms; Temperature; Pulse\./);
 });
 for(const draft of ['Symptoms: None. Vitals normal.','No symptoms or abnormal vital signs.','Patient is asymptomatic.','No fever.'])test(`unsupported negative wording abstains: ${draft}`,()=>{
  const result=reviewGeneratedSummary(input,draft);assert.equal(result.sourceQuoted,true);assert.match(result.draft,/Symptoms: Not provided/);assert.match(result.draft,/Temperature: Not provided/);assert.ok(!result.draft.includes(draft));

@@ -268,6 +268,7 @@ function clinicDataReadQuery(user, ids, includeClinical) {
 }
 
 export async function loadClinicData(user, { includeClinical = false, queryFn = query } = {}) {
+  if (user.role === 'student') return loadStudentSchedulingData(user, { queryFn });
   const ids = await accessiblePatientIds(user, { query: queryFn });
   const { sql, params } = clinicDataReadQuery(user, ids, includeClinical);
   const result = await queryFn(sql, params);
@@ -283,7 +284,49 @@ export async function loadClinicData(user, { includeClinical = false, queryFn = 
       ? hydrateAuthoritativeRecord(key, row)
       : key === 'visits' ? publicVisitRecord(row.data) : row.data);
   }
+  if (user.role === 'guardian' && data.students.length) {
+    const permissions = await queryFn(
+      `SELECT patient_id,guardian_user_id,allowed FROM guardian_student_scheduling_permissions
+       WHERE patient_id=ANY($1::text[])`,
+      [data.students.map((patient) => String(patient.id))],
+    );
+    const byPatient = new Map(permissions.rows.map((row) => [String(row.patient_id), { guardianUserId: String(row.guardian_user_id), allowed: row.allowed === true }]));
+    data.students = data.students.map((patient) => {
+      const permission = byPatient.get(String(patient.id));
+      const allowed = permission?.allowed === true;
+      return {
+        ...patient,
+        schedulingPermission: allowed,
+        canManageSchedulingPermission: !allowed || permission?.guardianUserId === String(user.id),
+      };
+    });
+  }
   return data;
+}
+
+export async function loadStudentSchedulingData(user, { queryFn = query } = {}) {
+  const patientResult = await queryFn(
+    `SELECT p.id,p.data->>'name' AS name,p.data->>'studentId' AS student_id
+     FROM patients p WHERE p.user_id=$1 AND p.patient_type='student' LIMIT 1`,
+    [user.id],
+  );
+  const patient = patientResult.rows[0];
+  if (!patient) return { schemaVersion: 1, settings: {}, students: [], visits: [], appointments: [], inventory: [], dispenseLogs: [], stockAdjustments: [] };
+  const appointmentsResult = await queryFn(
+    `SELECT id,starts_at,status FROM appointments WHERE patient_id=$1
+     ORDER BY starts_at DESC NULLS LAST,id LIMIT 100`,
+    [patient.id],
+  );
+  return {
+    schemaVersion: 1,
+    settings: {},
+    students: [{ id: patient.id, name: patient.name || '', studentId: patient.student_id || '' }],
+    visits: [],
+    appointments: appointmentsResult.rows.map((row) => ({ id: row.id, patientId: patient.id, startsAt: timestampValue(row.starts_at), status: row.status })),
+    inventory: [],
+    dispenseLogs: [],
+    stockAdjustments: [],
+  };
 }
 
 async function latestVisitsForPatients(patientIds, queryFn) {
@@ -882,6 +925,7 @@ export async function linkUserToPatient(userId, patientId, role, relationship = 
 export async function listUsers() {
   const result = await query(
     `SELECT id,username,email,name,role,status,school_id,prc_license_number,prc_license_verified_at,prc_license_verified_by,contact_number,school_name,last_login_at,created_at,
+            (SELECT p.id FROM patients p WHERE p.user_id=users.id AND p.patient_type='student' LIMIT 1) AS patient_id,
             EXISTS(SELECT 1 FROM invitations i WHERE LOWER(i.email)=LOWER(users.email) AND i.accepted_at IS NOT NULL) AS invitation_accepted
      FROM users ORDER BY created_at DESC`,
   );

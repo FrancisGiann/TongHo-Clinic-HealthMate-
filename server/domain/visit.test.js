@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clinicCalendarDate, validateVisitPayload, visitRiskInput } from './visit.js';
+import { clinicCalendarDate, validateVisitPayload } from './visit.js';
 
 const validVisit = {
   patientId: 'student-17',
@@ -8,7 +8,8 @@ const validVisit = {
   chiefComplaint: 'Headache',
   treatment: 'Rest and hydration',
   disposition: 'Returned to class',
-  painScore: 5,
+  clinicianRedFlag: false,
+  clinicianRedFlagAssessed: true,
 };
 
 test('visit calendar dates follow the Asia/Manila day across UTC midnight boundaries', () => {
@@ -16,56 +17,49 @@ test('visit calendar dates follow the Asia/Manila day across UTC midnight bounda
   assert.equal(clinicCalendarDate(new Date('2026-09-22T16:00:00.000Z')), '2026-09-23');
 });
 
-test('visit validation normalizes valid inputs without trusting client risk metadata', () => {
-  const result = validateVisitPayload({ ...validVisit, recentVisitCount: 999, riskAssessment: { category: 'high' }, followUp: true, followUpDate: '2026-09-01' }, { now: new Date('2026-08-15T00:00:00.000Z') });
+test('paper-log visit fields validate without a numeric pain score or client scoring metadata', () => {
+  const result = validateVisitPayload({ ...validVisit, recentVisitCount: 999, riskAssessment: { category: 'high' } });
   assert.equal(result.valid, true);
   assert.equal(result.value.patientId, 'student-17');
-  assert.equal(result.value.followUp, true);
-  assert.equal(result.value.clinicianRedFlagAssessed, false);
+  assert.equal(result.value.chiefComplaint, 'Headache');
+  assert.equal(result.value.clinicianRedFlag, false);
+  assert.equal(result.value.clinicianRedFlagAssessed, true);
+  assert.equal('painScore' in result.value, false);
   assert.equal('recentVisitCount' in result.value, false);
   assert.equal('riskAssessment' in result.value, false);
-  assert.deepEqual(visitRiskInput(result.value, 2), {
-    painScore: 5,
-    clinicianRedFlag: null,
-    recentVisitCount: 2,
-    temperature: null,
-    pulse: null,
-  });
 });
 
-test('visit validation distinguishes an unanswered warning-sign screen from an assessed negative screen', () => {
-  const unanswered = validateVisitPayload({ ...validVisit, clinicianRedFlag: null, clinicianRedFlagAssessed: false });
-  assert.equal(unanswered.valid, true);
-  assert.equal(unanswered.value.clinicianRedFlag, false);
-  assert.equal(unanswered.value.clinicianRedFlagAssessed, false);
-  assert.equal(visitRiskInput(unanswered.value, 0).clinicianRedFlag, null);
+test('urgent warning signs require a bounded documented action', () => {
+  const missingAction = validateVisitPayload({ ...validVisit, clinicianRedFlag: true });
+  assert.equal(missingAction.valid, false);
+  assert.ok(missingAction.fields.warningSignAction);
 
-  const assessedNegative = validateVisitPayload({ ...validVisit, clinicianRedFlag: false, clinicianRedFlagAssessed: true });
-  assert.equal(assessedNegative.valid, true);
-  assert.equal(visitRiskInput(assessedNegative.value, 0).clinicianRedFlag, false);
+  const savedAction = validateVisitPayload({ ...validVisit, clinicianRedFlag: true, warningSignAction: 'Referred to emergency services.' });
+  assert.equal(savedAction.valid, true);
+  assert.equal(savedAction.value.warningSignAction, 'Referred to emergency services.');
 
-  const contradictory = validateVisitPayload({ ...validVisit, clinicianRedFlag: true, clinicianRedFlagAssessed: false });
-  assert.equal(contradictory.valid, false);
-  assert.ok(contradictory.fields.clinicianRedFlagAssessed);
-
-  const malformedFlag = validateVisitPayload({ ...validVisit, clinicianRedFlag: 'no' });
-  assert.equal(malformedFlag.valid, false);
-  assert.ok(malformedFlag.fields.clinicianRedFlag);
-
-  const malformedAssessment = validateVisitPayload({ ...validVisit, clinicianRedFlag: false, clinicianRedFlagAssessed: 'false' });
-  assert.equal(malformedAssessment.valid, false);
-  assert.ok(malformedAssessment.fields.clinicianRedFlagAssessed);
-
-  const assessedWithoutAnswer = validateVisitPayload({ ...validVisit, clinicianRedFlagAssessed: true });
-  assert.equal(assessedWithoutAnswer.valid, false);
-  assert.ok(assessedWithoutAnswer.fields.clinicianRedFlag);
+  const tooLong = validateVisitPayload({ ...validVisit, clinicianRedFlag: true, warningSignAction: 'A'.repeat(2001) });
+  assert.equal(tooLong.valid, false);
+  assert.ok(tooLong.fields.warningSignAction);
 });
 
-test('visit validation rejects missing patient, invalid pain and unsafe dispense quantities', () => {
-  const result = validateVisitPayload({ ...validVisit, patientId: '', painScore: 11, medicineId: 'med-1', medicineQuantity: 0 });
+test('visit validation requires a completed explicit warning-sign screen', () => {
+  for (const patch of [
+    { clinicianRedFlag: null, clinicianRedFlagAssessed: false },
+    { clinicianRedFlag: 'no' },
+    { clinicianRedFlagAssessed: 'false' },
+    { clinicianRedFlagAssessed: false },
+  ]) {
+    const invalid = validateVisitPayload({ ...validVisit, ...patch });
+    assert.equal(invalid.valid, false, JSON.stringify(patch));
+  }
+  assert.equal(validateVisitPayload({ ...validVisit, clinicianRedFlag: true, warningSignAction: 'Transferred for urgent evaluation.' }).valid, true);
+});
+
+test('visit validation rejects missing patient and unsafe dispense quantities', () => {
+  const result = validateVisitPayload({ ...validVisit, patientId: '', medicineId: 'med-1', medicineQuantity: 0 });
   assert.equal(result.valid, false);
   assert.ok(result.fields.patientId);
-  assert.ok(result.fields.painScore);
   assert.ok(result.fields.medicineQuantity);
 });
 
@@ -119,9 +113,8 @@ test('scheduled follow-up requires a real clinic date today or later and no date
   assert.equal(staleDate.valid, false);
 });
 
-
 test('clinical numeric fields reject boolean and array coercion while decimal temperatures remain valid', () => {
-  for (const patch of [{ painScore: true }, { painScore: [5] }, { temperature: [36.5] }, { pulse: [70] }, { medicineId: 'qa-item', medicineQuantity: true }, { dispensations: [{ itemId: 'qa-item', quantity: [1] }] }]) {
+  for (const patch of [{ temperature: [36.5] }, { pulse: [70] }, { medicineId: 'qa-item', medicineQuantity: true }, { dispensations: [{ itemId: 'qa-item', quantity: [1] }] }]) {
     assert.equal(validateVisitPayload({ ...validVisit, ...patch }).valid, false, JSON.stringify(patch));
   }
   assert.equal(validateVisitPayload({ ...validVisit, temperature: 36.5, pulse: 70 }).valid, true);

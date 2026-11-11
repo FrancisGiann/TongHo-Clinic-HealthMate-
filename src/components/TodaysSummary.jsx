@@ -66,7 +66,7 @@ export default function TodaysSummary({ data }) {
             </div>
             <div className="summary-stat-content">
               <strong>{openAppointments}</strong>
-              <span>Upcoming Appointments</span>
+              <span>Upcoming clinic appointments</span>
             </div>
           </div>
         )}

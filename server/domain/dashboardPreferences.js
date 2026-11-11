@@ -4,11 +4,11 @@ export const DASHBOARD_WIDGETS = Object.freeze({
     'admin.userAccess', 'admin.shortcuts', 'admin.pendingInvites',
   ]),
   school_nurse: Object.freeze([
-    'nurse.appointmentRequests', 'nurse.upcomingAppointments', 'nurse.todayAppointments', 'nurse.inventoryAttention', 'nurse.recentVisits',
+    'nurse.appointments', 'nurse.inventoryAttention', 'nurse.recentVisits',
   ]),
 });
 
-export const DASHBOARD_PREFERENCES_VERSION = 1;
+export const DASHBOARD_PREFERENCES_VERSION = 2;
 
 export function defaultDashboardPreferences(role) {
   const ids = DASHBOARD_WIDGETS[role] || [];
@@ -38,6 +38,32 @@ export function validateDashboardPreferences(role, input) {
 }
 
 export function normalizeDashboardPreferences(role, input) {
+  if (role === 'school_nurse' && input?.version === 1 && Array.isArray(input.widgets)) {
+    const byId = new Map(input.widgets.filter((item) => item && typeof item.id === 'string').map((item) => [item.id, item]));
+    const oldAppointmentIds = ['nurse.appointmentRequests', 'nurse.upcomingAppointments', 'nurse.todayAppointments'];
+    if (oldAppointmentIds.every((id) => byId.has(id))
+      && byId.has('nurse.inventoryAttention') && byId.has('nurse.recentVisits')) {
+      const visible = oldAppointmentIds.some((id) => byId.get(id)?.visible === true);
+      return {
+        version: DASHBOARD_PREFERENCES_VERSION,
+        widgets: [
+          { id: 'nurse.appointments', visible },
+          { id: 'nurse.inventoryAttention', visible: byId.get('nurse.inventoryAttention')?.visible === true },
+          { id: 'nurse.recentVisits', visible: byId.get('nurse.recentVisits')?.visible === true },
+        ],
+      };
+    }
+  }
+  if (input?.version === 1 && Array.isArray(input.widgets)) {
+    const allowed = DASHBOARD_WIDGETS[role] || [];
+    const byId = new Map(input.widgets.filter((item) => item && typeof item.id === 'string').map((item) => [item.id, item]));
+    if (allowed.length && byId.size === allowed.length && allowed.every((id) => byId.has(id))) {
+      return {
+        version: DASHBOARD_PREFERENCES_VERSION,
+        widgets: allowed.map((id) => ({ id, visible: byId.get(id)?.visible === true })),
+      };
+    }
+  }
   const validated = validateDashboardPreferences(role, input);
   return validated.valid ? validated.value : defaultDashboardPreferences(role);
 }

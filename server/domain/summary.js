@@ -8,7 +8,7 @@ const GENERATED_DIRECTIONS = /\b(?:diagnos(?:is|e|ed)|prescrib(?:e|ed)|(?:low|hi
 const LABELS = {
   visitType: 'Visit type', complaint: 'Chief complaint', symptoms: 'Symptoms',
   treatment: 'Treatment / care provided', disposition: 'Disposition',
-  painScore: 'Pain score', temperature: 'Temperature', pulse: 'Pulse',
+  temperature: 'Temperature', pulse: 'Pulse',
 };
 
 function text(value) { return typeof value === 'string' ? value : ''; }
@@ -24,7 +24,7 @@ function sourceEntries(encounter) {
     visitType: text(input.visitType ?? input.type), complaint: text(input.chiefComplaint),
     symptoms: Array.isArray(input.symptoms) ? input.symptoms.filter((item) => typeof item === 'string' && item.trim()) : [],
     treatment: text(input.treatment), disposition: text(input.disposition),
-    painScore: numeric(input.painScore, 1, 10, true), temperature: numeric(input.temperature, 30, 45), pulse: numeric(input.pulse, 20, 250, true),
+    temperature: numeric(input.temperature, 30, 45), pulse: numeric(input.pulse, 20, 250, true),
   };
 }
 function known(value) {

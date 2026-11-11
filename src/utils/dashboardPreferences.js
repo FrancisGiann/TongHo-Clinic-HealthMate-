@@ -6,21 +6,42 @@ export const DASHBOARD_WIDGETS = Object.freeze({
     ['admin.shortcuts', 'Admin shortcuts'], ['admin.pendingInvites', 'Pending invitations'],
   ],
   school_nurse: [
-    ['nurse.appointmentRequests', 'Appointment requests'], ['nurse.upcomingAppointments', 'Upcoming appointments'],
-    ['nurse.todayAppointments', 'Today’s appointments'], ['nurse.inventoryAttention', 'Inventory attention'],
+    ['nurse.appointments', 'Clinic scheduling shortcut'], ['nurse.inventoryAttention', 'Inventory attention'],
     ['nurse.recentVisits', 'Recent clinic visits'],
   ],
 });
 
+export const DASHBOARD_PREFERENCES_VERSION = 2;
+
 export const defaultDashboardPreferences = (role) => ({
-  version: 1,
+  version: DASHBOARD_PREFERENCES_VERSION,
   widgets: (DASHBOARD_WIDGETS[role] || []).map(([id]) => ({ id, visible: true })),
 });
 
 export function normalizeDashboardPreferences(role, value) {
   const defaults = defaultDashboardPreferences(role);
-  if (!value || value.version !== 1 || !Array.isArray(value.widgets)) return defaults;
+  if (!value || !Array.isArray(value.widgets)) return defaults;
   const byId = new Map(value.widgets.filter((item) => item && typeof item.id === 'string').map((item) => [item.id, item]));
+  if (role === 'school_nurse' && value.version === 1) {
+    const oldAppointments = ['nurse.appointmentRequests', 'nurse.upcomingAppointments', 'nurse.todayAppointments'];
+    if (oldAppointments.every((id) => byId.has(id)) && byId.has('nurse.inventoryAttention') && byId.has('nurse.recentVisits')) {
+      return {
+        version: DASHBOARD_PREFERENCES_VERSION,
+        widgets: [
+          { id: 'nurse.appointments', visible: oldAppointments.some((id) => byId.get(id)?.visible === true) },
+          { id: 'nurse.inventoryAttention', visible: byId.get('nurse.inventoryAttention')?.visible === true },
+          { id: 'nurse.recentVisits', visible: byId.get('nurse.recentVisits')?.visible === true },
+        ],
+      };
+    }
+  }
+  if (value.version === 1) {
+    if (byId.size === defaults.widgets.length && defaults.widgets.every(({ id }) => byId.has(id))) {
+      return { version: DASHBOARD_PREFERENCES_VERSION, widgets: defaults.widgets.map(({ id }) => ({ id, visible: byId.get(id)?.visible === true })) };
+    }
+    return defaults;
+  }
+  if (value.version !== DASHBOARD_PREFERENCES_VERSION) return defaults;
   if (byId.size !== defaults.widgets.length || defaults.widgets.some(({ id }) => !byId.has(id))) return defaults;
-  return { version: 1, widgets: value.widgets.map(({ id }) => ({ id, visible: byId.get(id).visible === true })) };
+  return { version: DASHBOARD_PREFERENCES_VERSION, widgets: defaults.widgets.map(({ id }) => ({ id, visible: byId.get(id).visible === true })) };
 }
