@@ -169,45 +169,22 @@ export default function Students({ directory: directoryInput, directoryReady = t
       </details>
       <p className="field-hint" aria-live="polite">Showing {pageResult.total} of {totalPatientRecords} patient records.</p>
       {loading && <p className="field-hint" role="status">Updating patient directory…</p>}
-      <div className="student-grid">
-        {patients.map((student, index) => (
-          <Link
-            to={`/students/${encodeURIComponent(student.id)}`}
-            className="student-card"
-            key={student.id}
-          >
-            <div className="student-card-top">
-              <div
-                className={`avatar ${["coral", "teal", "amber", "violet", "blue"][index]}`}
-              >
-                {student.name
-                  .split(" ")
-                  .map((part) => part[0])
-                  .join("")
-                  .slice(0, 2)}
-              </div>
-              <span className="grade-badge">{student.patientType === 'faculty' ? 'Faculty' : student.gradeLevel || 'Student'}</span>
-            </div>
-            <h3>{student.name}</h3>
-            <p className="student-id">
-              {student.patientType === 'faculty' ? student.facultyId || student.studentId : student.studentId} <span>·</span> {student.patientType === 'faculty' ? student.department || student.position || 'Faculty' : student.section || 'Student'}
-            </p>
-            <div className="student-meta">
-              <span>{student.patientType === 'faculty' ? 'Position' : 'Adviser'} <b>{student.patientType === 'faculty' ? student.position || 'Not recorded' : student.adviser || 'Not recorded'}</b></span>
-              {student.allergies && (
-                <span className="allergy">
-                  <ShieldAlert size={13} /> {student.allergies}
-                </span>
-              )}
-            </div>
-            <div className="card-footer">
-              <span>
-                Last visit <b>{latestVisits.has(String(student.id)) ? `${latestVisits.get(String(student.id)).date || 'Date unavailable'}${latestVisits.get(String(student.id)).time ? `, ${latestVisits.get(String(student.id)).time}` : ''}` : 'No visits recorded'}</b>
-              </span>
-              <span className="card-arrow">↗</span>
-            </div>
-          </Link>
-        ))}
+      <div className="admin-table-wrap patient-directory-table-wrap">
+        <table className="admin-table patient-directory-table">
+          <thead><tr><th>Patient</th><th>Type</th><th>Grade / department</th><th>Section / position</th><th>Adviser</th><th>Latest visit</th></tr></thead>
+          <tbody>{patients.map((patient) => {
+            const latestVisit = latestVisits.get(String(patient.id));
+            const isFaculty = patient.patientType === 'faculty';
+            return <tr key={patient.id}>
+              <td data-label="Patient"><Link className="patient-directory-profile-link" to={`/students/${encodeURIComponent(patient.id)}`}>{patient.name || 'Unnamed patient'}<small>{isFaculty ? patient.facultyId || patient.studentId || 'ID unavailable' : patient.studentId || 'ID unavailable'}</small></Link></td>
+              <td data-label="Type">{isFaculty ? 'Faculty' : 'Student'}</td>
+              <td data-label="Grade / department">{isFaculty ? patient.department || 'Not recorded' : patient.gradeLevel || 'Not recorded'}</td>
+              <td data-label="Section / position">{isFaculty ? patient.position || 'Not recorded' : patient.section || 'Not recorded'}</td>
+              <td data-label="Adviser">{isFaculty ? '—' : patient.adviser || 'Not recorded'}</td>
+              <td data-label="Latest visit">{latestVisit ? `${latestVisit.date || 'Date unavailable'}${latestVisit.time ? ` · ${latestVisit.time}` : ''}` : 'No visits recorded'}</td>
+            </tr>;
+          })}</tbody>
+        </table>
       </div>
       <ListPagination page={pageResult.page} pageCount={pageResult.pageCount} pageSize={pageResult.pageSize} total={pageResult.total}
         onPageChange={(page) => setListValue('page', page === 1 ? null : page, false)} onPageSizeChange={(pageSize) => updateListParams(searchParams, setSearchParams, { pageSize, page: null }, { resetPage: true })} />

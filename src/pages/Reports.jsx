@@ -208,9 +208,8 @@ export default function Reports({ data = {}, user }) {
   const complaintCounts = serverReport?.complaints || {};
   const complaintSuppressed = serverReport?.suppressedAggregates?.includes('complaints');
   const visitTotalSuppressed = serverReport?.suppressedTotals?.includes('visits');
-  const topComplaint =
-    Object.entries(complaintCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ||
-    "None";
+  const topComplaint = Object.entries(complaintCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+  const timeSeriesEntries = Object.entries(serverReport?.timeSeries || {}).slice(-7);
   const gradeCounts = serverReport?.grades || {};
   
   return (
@@ -231,7 +230,7 @@ export default function Reports({ data = {}, user }) {
         </div>
         <div className="intro-actions"><button type="button" className="secondary-btn" onClick={saveSnapshot} disabled={!reportReady || savingSnapshot}><Save size={16} /> {savingSnapshot ? 'Saving…' : 'Save snapshot'}</button><button type="button" className="secondary-btn" onClick={exportReport} disabled={!reportReady}><Download size={16} /> Print / PDF</button></div>
       </div>
-      <section className="panel inline-entry-form"><div className="report-filter-grid"><label>Report period<select value={period} onChange={(event) => choosePeriod(event.target.value)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="custom">Custom</option></select></label><label>Start date<input type="date" value={start} max={end} onChange={(event) => { setPeriod('custom'); setStart(event.target.value); }} /></label><label>End date<input type="date" value={end} min={start} max={today} onChange={(event) => { setPeriod('custom'); setEnd(event.target.value); }} /></label></div>{reportLoading && <p className="field-hint" role="status">Loading the selected date range…</p>}{reportMessage && <p className="success-message" role="status">{reportMessage}</p>}{reportError && <div className="error-banner" role="alert">{reportError}</div>}</section>
+      <section className="panel inline-entry-form" aria-label="Report date filters"><div className="report-filter-grid"><label>Report period<select value={period} onChange={(event) => choosePeriod(event.target.value)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="custom">Custom</option></select></label><label>Start date<input type="date" value={start} max={end} onChange={(event) => { setPeriod('custom'); setStart(event.target.value); }} /></label><label>End date<input type="date" value={end} min={start} max={today} onChange={(event) => { setPeriod('custom'); setEnd(event.target.value); }} /></label></div>{reportLoading && <p className="field-hint" role="status">Loading the selected date range…</p>}{reportMessage && <p className="success-message" role="status">{reportMessage}</p>}{reportError && <div className="error-banner" role="alert">{reportError}</div>}</section>
       <div className="report-kpis">
         <div>
           <span>Visits this period</span>
@@ -240,8 +239,8 @@ export default function Reports({ data = {}, user }) {
         </div>
         <div>
           <span>Top complaint</span>
-          <strong className="report-word">{complaintSuppressed ? 'Withheld' : Object.entries(serverReport?.complaints || complaintCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || topComplaint}</strong>
-          <small>{complaintSuppressed ? 'Small categories are suppressed' : 'Most recorded concern'}</small>
+          <strong className="report-word">{!reportReady ? (reportLoading ? 'Loading…' : 'Unavailable') : complaintSuppressed ? 'Withheld' : topComplaint || 'No records'}</strong>
+          <small>{!reportReady ? 'For the selected date range' : complaintSuppressed ? 'Small categories are suppressed' : topComplaint ? 'Most recorded concern' : 'No complaint records in this period'}</small>
         </div>
       </div>
       <section className="panel table-panel"><div className="panel-heading"><h3>Patients with visits by type</h3></div>{serverReport?.suppressedAggregates?.includes('patientTypes') ? <p className="field-hint" role="note">Small patient-type groups are suppressed to protect privacy.</p> : Object.entries(serverReport?.patientTypes || {}).map(([type, count]) => <div className="queue-row" key={type}><span>{type === 'faculty' ? 'Faculty' : 'Students'}</span><strong>{count}</strong></div>)}{serverReport && !serverReport.suppressedAggregates?.includes('patientTypes') && !Object.keys(serverReport.patientTypes || {}).length && <p className="empty-state">No visits were recorded in this period.</p>}</section>
@@ -256,12 +255,13 @@ export default function Reports({ data = {}, user }) {
           </div>
           {serverReport?.timeSeriesSuppressed && <p className="field-hint" role="note">Daily totals are suppressed to protect small groups.</p>}
           <div className="report-bars">
-            {Object.entries(serverReport?.timeSeries || {}).slice(-7).map(([date, count]) => (
+            {timeSeriesEntries.map(([date, count]) => (
               <div key={date}>
                 <span aria-label={count === null ? 'Daily total suppressed' : `${count} visits`} style={{ height: `${count === null ? 4 : Math.min(120, Math.max(4, Number(count) * 18))}px` }} />
                 <small>{new Date(`${date}T12:00:00`).toLocaleDateString([], { weekday: 'short' })}</small>
               </div>
             ))}
+            {reportReady && !serverReport?.timeSeriesSuppressed && !timeSeriesEntries.length && <p className="empty-state">No visits were recorded in this period.</p>}
           </div>
         </section>
         <section className="panel report-chart">
@@ -285,7 +285,7 @@ export default function Reports({ data = {}, user }) {
             )}
             {complaintSuppressed && <p className="field-hint" role="note">Some complaint categories are suppressed to protect privacy.</p>}
             {visitTotalSuppressed && !complaintSuppressed && <p className="field-hint" role="note">Category shares are withheld with the visit total.</p>}
-            {!complaintSuppressed && !Object.keys(complaintCounts).length && <p className="empty-state">No complaint records in this period.</p>}
+            {reportReady && !complaintSuppressed && !Object.keys(complaintCounts).length && <p className="empty-state">No complaint records in this period.</p>}
           </div>
         </section>
       </div>
@@ -331,7 +331,7 @@ export default function Reports({ data = {}, user }) {
                 <td>{visitTotalSuppressed ? 'Withheld' : `${Math.round((count / (serverReport?.totals?.visits || 1)) * 100)}%`}</td>
               </tr>
             ))}
-            {!Object.keys(gradeCounts).length && <tr><td colSpan="3" className={serverReport?.suppressedAggregates?.includes('grades') ? 'field-hint' : 'empty-state'}>{serverReport?.suppressedAggregates?.includes('grades') ? 'Small grade categories are suppressed to protect privacy.' : 'No grade-level visit records in this period.'}</td></tr>}
+            {!Object.keys(gradeCounts).length && <tr><td colSpan="3" className={serverReport?.suppressedAggregates?.includes('grades') ? 'field-hint' : 'empty-state'}>{serverReport?.suppressedAggregates?.includes('grades') ? 'Small grade categories are suppressed to protect privacy.' : reportReady ? 'No grade-level visit records in this period.' : 'Report data is not available yet.'}</td></tr>}
           </tbody>
         </table>
       </section>
