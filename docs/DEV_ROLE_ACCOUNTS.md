@@ -1,6 +1,6 @@
 # Fictional development accounts
 
-These reserved `.test` accounts are for local development only. They are not real users and must never be created in a production database. A fictional student patient is linked to the guardian account; students do not sign in to HealthMate+.
+These reserved `.test` accounts are for local development only. They are not real users and must never be created in a production database. A fictional student patient is linked to the guardian account. Student access is available only after a linked guardian grants scheduling permission and an administrator confirms the roster identity and sends an individual invitation; the student account is limited to its own appointment dates, statuses, and booking.
 
 | Role | Email | Password |
 | --- | --- | --- |

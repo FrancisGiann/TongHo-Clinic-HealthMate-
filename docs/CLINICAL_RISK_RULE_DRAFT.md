@@ -1,5 +1,7 @@
 # Conservative clinical risk-rule draft
 
+> **Retired historical design note.** HealthMate+ no longer calculates automated risk scores, exposes Risk Rules pages, or accepts risk API requests. New visits do not require numeric pain scores. Keep this document only as an archived proposal; do not use these rules for clinical decisions or describe them as active application behavior. Existing scores and acknowledgements on historical records remain for report compatibility.
+
 HealthMate+ automatically uses the built-in **Sample risk rules** when no clinician-approved custom rules exist. The sample keeps the existing weighted indicators and is explicitly unapproved; it does not claim clinical validation. Settings explains the sample without requiring setup. Custom rules and the optional non-weighted **WHO IITT-informed partial screening** candidate remain available under Advanced settings. Saved rules stay out of use until a school nurse with a PRC license verified and recorded by an administrator approves them. Approval retires the previously approved version.
 
 ## Candidate behavior

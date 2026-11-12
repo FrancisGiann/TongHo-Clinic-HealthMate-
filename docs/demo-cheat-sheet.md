@@ -2,9 +2,10 @@
 
 ## 01. Invite and activate an account
 
-1. **Administrator:** Open **Users** and choose **Add new user**. Enter **Name**, **Email**, and **Role**. For a guardian, select a **Linked student** and enter the **Relationship**; choose **Send invitation**. The account stays invited until the recipient accepts the email link.
-2. **Invitee:** Open the secure email link within 72 hours. On **Activate your account**, enter a **Username**, **Password**, and **Confirm password**, then choose **Activate account**. A guardian must already be linked to a student. Students do not have sign-in accounts.
-3. **Result:** The account becomes active and can sign in. If the email does not arrive or the link expires, the administrator can choose **Resend invitation** from **Users**; the recipient must still activate the renewed link.
+1. **Administrator:** For an administrator, nurse, or guardian, open **Users**, choose **Add new user**, enter **Name**, **Email**, and **Role**, then send the invitation. For a guardian, also select a **Linked student** and enter the **Relationship**.
+2. **Guardian and administrator — student account:** The linked guardian grants **Student scheduling permission**. The administrator then chooses **Invite student**, selects the verified roster record, re-enters its student ID, and provides the student's email. Each invitation is scoped to that one roster record. Generic invitation resend and account reactivation are not used for student accounts.
+3. **Invitee:** Open the secure email link within 72 hours. On **Activate your account**, enter a **Username**, **Password**, and **Confirm password**, then choose **Activate account**. Continue through the existing email OTP and password setup flow.
+4. **Result:** An invited account becomes active after activation. If a student loses permission or is disabled, their current sessions and invitation stop working; restore access by granting permission again and issuing a fresh identity-checked student invitation. Other invited accounts may use **Resend invitation** under **Users**.
 
 ## 02. Sign in or recover a password
 
@@ -17,7 +18,7 @@
 
 1. **Choose one account task; these actions are separate, not a required sequence.**
 2. **Administrator — link a guardian:** In **Users**, choose **Link student**, select a **Student record**, enter **Guardian relationship**, then choose **Save guardian link**. If the guardian is suspended, choose **Activate** separately after relinking.
-3. **Administrator — change account status:** For an account row, choose **Deactivate** to remove access or **Activate** to restore eligible access. Deactivation signs out that account and expires unused invitations. An invited account must use its email link to activate.
+3. **Administrator — change account status:** For an eligible account row, choose **Disable** to remove access. Disabling signs out the account and expires unused invitations. Restoring student scheduling requires a current guardian grant and the **Confirm and re-invite** flow with a reselected roster record and exact student ID; generic activation is not available for students.
 4. **Administrator — record a nurse license:** Choose **Record verified license**, enter the PRC license number, confirm **I independently verified this license against an authoritative source.**, and choose **Record verified license**. Choose **Clear license record** only to remove an existing record. The app records the administrator’s check; it does not independently verify the license.
 5. **Account holder — change a password:** Under **My Account**, enter **Current password**, **New password**, and **Confirm password**, then choose **Update password**. This signs out all sessions.
 6. **Staff account holder — manage sessions:** Under **Active sessions**, choose **Sign out** beside one session, or enter **Current password** and choose **Sign out everywhere**.
@@ -62,19 +63,19 @@
 ## 09. Record a clinic visit and any care given
 
 1. **School nurse:** In **New Visit**, choose **Patient**, review the allergy information, then enter **Visit type**, **Chief complaint**, **Disposition**, and **Treatment and care provided**.
-2. **School nurse:** Enter available **Temperature** and **Pulse rate**, enter **Pain score (1–10)**, and complete **Clinician warning-sign screen**.
+2. **School nurse:** Enter available **Temperature** and **Pulse rate**, then complete **Clinician warning-sign screen**. The form no longer asks for a numeric pain score or generates an automated risk classification.
 3. **School nurse:** Before saving, add care if needed: choose **Add item** under **Items dispensed**, select an eligible **Medication or supply**, and enter **Quantity**. Optionally choose **Schedule follow-up** and enter **Follow-up due date**. To prepare an AI-assisted note, choose **Generate summary draft**, review or edit it, then check **I reviewed and approve this summary for the record**. Generating the draft does not save the visit.
-4. **School nurse:** Choose **Save visit**. The app evaluates the assessment and recent visits. A missing warning-sign screen or other required assessment data blocks saving. High-risk and review-required results need **Nurse review / acknowledgement** before the visit can be saved. This is decision support, not a diagnosis.
-5. **School nurse, only if saving stops or review is required:** Correct missing fields or unavailable stock, add any required **Nurse review / acknowledgement**, then choose **Save visit** again. If the save result is uncertain, choose **Retry same visit**; if a saved-record conflict is reported, open **Review patient history** before starting another visit.
-6. **Result:** A successful save records the visit and any dispensing together, updates stock, and attempts a care-summary notice to linked guardians for a student. Guardians can view student visit details in **Visit History**. Faculty visits do not send guardian notices.
-   **Flow note:** With the **WHO IITT-informed partial screening (draft)** rule active, temperature alone may be missing if the nurse records **Nurse review / acknowledgement**. Other missing required inputs still block saving.
+4. **School nurse:** If the warning-sign assessment identifies an urgent sign, document **Urgent warning-sign action** before saving. A missing assessment or required urgent action blocks the visit save. Record clinic date, complaint or illness, remarks, and signed-in nurse attribution alongside vitals, treatment, and disposition.
+5. **School nurse:** Choose **Save visit**. If the save result is uncertain, choose **Retry same visit**; if a saved-record conflict is reported, open **Review patient history** before starting another visit.
+6. **Result:** A successful save records the visit and any dispensing together, updates stock, and attempts a care-summary notice to linked guardians for a student. Guardians can view student visit details in **Visit History**. Faculty visits do not send guardian notices. Historical risk scores are preserved for old records only.
 
 ## 10. Manage appointments
 
-1. **Guardian:** Open **Appointments**, choose a linked **Student**, **Appointment date**, **Available time**, and enter **Reason**. Choose **Request appointment**. The request is recorded as **Requested** and the clinic tries to notify linked users.
-2. **School nurse:** Open **Appointments** → **Patient appointments and requests**. For a request, choose **Confirm** to make it **Scheduled**, or **Cancel** to make it **Cancelled**. The nurse may choose **Reschedule**, enter **New date and time**, and choose **Save new time** for an open request or scheduled appointment.
-3. **School nurse:** After the appointment has taken place and its status is **Scheduled**, choose **Complete** to set **Completed**. This changes appointment status only; it does not save a clinic visit. A nurse may also choose **Schedule appointment** and create a **Scheduled** appointment directly, without a guardian request.
-4. **Result:** The guardian can view the current status and any decision reason under **Appointments**. For a **Requested** appointment, the nurse can **Confirm**, **Reject**, or **Cancel**; reject and cancel require a reason. A **Scheduled** appointment can be completed or cancelled, and open appointments can be rescheduled. Online scheduling is not an emergency service.
+1. **Guardian:** Open **Clinic scheduling**, choose a linked **Student**, **Appointment date**, **Available time**, and enter **Reason**. Choose **Request appointment**. The request is recorded as **Requested** and the clinic tries to notify linked users.
+2. **Student:** After a guardian grants permission and an administrator sends a fresh identity-checked invitation, open **Clinic scheduling**, choose an available date and time, and request an appointment for yourself. The server derives the student patient identity from the authenticated account.
+3. **School nurse:** Open **Clinic scheduling** → **Patient appointments and requests**. For a request, choose **Confirm** to make it **Scheduled**, or **Cancel** to make it **Cancelled**. The nurse may choose **Reschedule**, select a date and available time, and choose **Save new time** for an open request or scheduled appointment.
+4. **School nurse:** After the appointment has taken place and its status is **Scheduled**, choose **Complete** to set **Completed**. This changes appointment status only; it does not save a clinic visit. A nurse may also choose **Schedule appointment** and create a **Scheduled** appointment directly, without a guardian request.
+5. **Result:** Guardians can view the current status and decision reason for linked students; students see only their own appointment dates and statuses. For a **Requested** appointment, the nurse can **Confirm**, **Reject**, or **Cancel**; reject and cancel require a reason. A **Scheduled** appointment can be completed or cancelled, and open appointments can be rescheduled. Online scheduling is not an emergency service.
 
 ## 11. Maintain clinic inventory and restock items
 
@@ -101,8 +102,8 @@
 2. **Administrator:** Check **I’ve checked the message and selected recipient roles.** and choose **Send clinic notice**. The system creates in-app notices and attempts email delivery for the selected active accounts.
 3. **Result:** The screen reports the recipient count, in-app notices, emails sent, and email failures. Failed emails are not automatically retried; check delivery and follow up through the approved clinic channel.
 
-## 15. Save and activate a risk-rule version
+## 15. Use Data & Imports and Reports
 
-1. **Administrator or school nurse:** Open **Risk Rules** → **Advanced: manage custom rules**. Create or copy a rule and choose **Save for nurse review** (or **Save candidate for nurse review**). Saving creates a draft; assessments continue using the current rule.
-2. **School nurse:** After an administrator has recorded the nurse’s verified PRC license, review the draft and choose **Approve and use version N**. The app checks that license record and then marks the version approved and in use. Administrators cannot approve the rule.
-3. **Result and limit:** The app uses an approved version for later assessment prompts, while a sample rule is used if no custom version is approved. The sample is demonstration-only. The app’s license check does not establish that a rule has been clinically validated or approved by the school; a licensed PTHI clinician must approve the actual clinical indicators before live use.
+1. **Administrator or school nurse:** Open **Data & Imports** to set up a roster or load an authorized supported data file. Student imports contain roster identity and class placement only; they do not load health records.
+2. **School nurse or administrator:** Open **Reports** to review clinic activity for a selected period. Small groups remain suppressed where needed to protect privacy; export and print follow the same suppression.
+3. **Result:** Use imports for roster/data setup and reports for clinic oversight. Automated risk scoring and Risk Rules management are retired; historical scores remain only with old records for compatibility.
