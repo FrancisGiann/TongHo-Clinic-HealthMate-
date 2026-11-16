@@ -56,7 +56,7 @@ export default function HealthRecordFields({ value, onChange, disabled = false, 
         <div className="three-fields">
           <label>Date of birth<input type="date" value={form.birthDate} onChange={(event) => setField('birthDate', event.target.value)} disabled={disabled} /></label>
           <label>Age<input value={ageFromBirthDate(form.birthDate) ?? ''} placeholder="Calculated from birth date" readOnly /></label>
-          <label>Gender<select value={form.gender} onChange={(event) => setField('gender', event.target.value)} disabled={disabled}><option value="">Choose</option><option>Female</option><option>Male</option><option>Other</option><option>Prefer not to say</option></select></label>
+          <label>Sex<select value={form.gender} onChange={(event) => setField('gender', event.target.value)} disabled={disabled}><option value="">Choose</option><option>Female</option><option>Male</option><option>Other</option><option>Prefer not to say</option></select></label>
         </div>
         <div className="two-fields">
           <label>Mother’s name<input maxLength={160} value={form.motherName} onChange={(event) => setField('motherName', event.target.value)} disabled={disabled} /></label>
