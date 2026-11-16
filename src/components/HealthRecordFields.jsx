@@ -26,14 +26,19 @@ export function ageFromBirthDate(value, today = new Date()) {
 
 const pastIllnesses = [
   ['chickenpox', 'Chickenpox'], ['pneumonia', 'Pneumonia'], ['dengue', 'Dengue'], ['measles', 'Measles'],
-  ['gastroenteritis', 'Gastroenteritis'], ['amoebasis', 'Amoebiasis'], ['typhoidFever', 'Typhoid fever'],
-  ['heartDisease', 'Heart disease'], ['asthma', 'Asthma'], ['headInjury', 'Head injury'],
+  ['amoebasis', 'Amoebiasis'], ['typhoidFever', 'Typhoid fever'], ['heartDisease', 'Heart disease'],
+  ['asthma', 'Asthma'], ['headInjury', 'Head injury'],
 ];
+const legacyPastIllness = ['gastroenteritis', 'Gastroenteritis (existing answer)'];
 const presentIllnesses = [
   ['allergicRhinitis', 'Allergic rhinitis'], ['hyperacidity', 'Hyperacidity'], ['asthma', 'Asthma'],
-  ['skinDisorder', 'Skin disorder'], ['eyeDisorder', 'Eye disorder'],
+  ['skinDisorder', 'Skin disorder', 'skinDisorderDetails', 'Skin disorder, specify'],
+  ['eyeDisorder', 'Eye disorder', 'eyeDisorderDetails', 'Eye disorder, specify'],
 ];
-const homeMedicines = [['pain', 'Pain reliever', 'painName'], ['fever', 'Fever medicine', 'feverName'], ['allergies', 'Allergy medicine', 'allergiesName'], ['stomachache', 'Stomach medicine', 'stomachacheName']];
+const homeMedicines = [
+  ['pain', 'Pain reliever', 'painName', 'Pain reliever name'], ['fever', 'Fever medicine', 'feverName', 'Fever medicine name'],
+  ['allergies', 'Allergy medicine', 'allergiesName', 'Allergy medicine name'], ['stomachache', 'Stomach medicine', 'stomachacheName', 'Stomach medicine name'],
+];
 const documents = [['psychiatricEvaluation', 'Psychiatric evaluation'], ['diagnosticAssessment', 'Diagnostic assessment'], ['medicationRecords', 'Medication records']];
 
 export default function HealthRecordFields({ value, onChange, disabled = false, section }) {
@@ -41,6 +46,9 @@ export default function HealthRecordFields({ value, onChange, disabled = false, 
   const setField = (key, next) => onChange({ ...form, [key]: next });
   const setFields = (updates) => onChange({ ...form, ...updates });
   const setNested = (key, field, next) => onChange({ ...form, [key]: { ...form[key], [field]: next } });
+  const pastIllnessItems = form.pastIllness.gastroenteritis === true || form.pastIllness.gastroenteritis === false
+    ? [...pastIllnesses, legacyPastIllness]
+    : pastIllnesses;
   return (
     <>
       {(section === undefined || section === 0) && <section className="form-section">
@@ -70,19 +78,23 @@ export default function HealthRecordFields({ value, onChange, disabled = false, 
         <NoneOrDetails label="Known allergies" field="allergies" statusField="allergiesStatus" form={form} setField={setField} setFields={setFields} disabled={disabled} />
         <NoneOrDetails label="Existing medical conditions" field="conditions" statusField="conditionsStatus" form={form} setField={setField} setFields={setFields} disabled={disabled} />
         <NoneOrDetails label="Current medications and dosage" field="medications" statusField="medicationsStatus" form={form} setField={setField} setFields={setFields} disabled={disabled} />
-        <ChoiceGroup title="Past illnesses" items={pastIllnesses} value={form.pastIllness} setValue={(field, next) => setNested('pastIllness', field, next)} disabled={disabled} />
-        <label>Other past illnesses<input maxLength={1000} value={form.pastIllness.otherPastIllness || ''} onChange={(event) => setNested('pastIllness', 'otherPastIllness', event.target.value)} disabled={disabled} /></label>
-        <ChoiceGroup title="Current or present conditions" items={presentIllnesses} value={form.presentIllness} setValue={(field, next) => setNested('presentIllness', field, next)} disabled={disabled} />
-        {form.presentIllness.skinDisorder === true && <label>Skin disorder, specify<input maxLength={200} value={form.presentIllness.skinDisorderDetails || ''} onChange={(event) => setNested('presentIllness', 'skinDisorderDetails', event.target.value)} disabled={disabled} /></label>}
-        {form.presentIllness.eyeDisorder === true && <label>Eye disorder, specify<input maxLength={200} value={form.presentIllness.eyeDisorderDetails || ''} onChange={(event) => setNested('presentIllness', 'eyeDisorderDetails', event.target.value)} disabled={disabled} /></label>}
-        <label>Other current conditions<input maxLength={1000} value={form.presentIllness.otherPresentIllness || ''} onChange={(event) => setNested('presentIllness', 'otherPresentIllness', event.target.value)} disabled={disabled} /></label>
+        <CheckboxGroup
+          title="Past illnesses"
+          items={pastIllnessItems}
+          value={form.pastIllness}
+          setValue={(field, next) => setNested('pastIllness', field, next)}
+          disabled={disabled}
+        />
+        <label>Other past illness (specify)<input maxLength={1000} value={form.pastIllness.otherPastIllness || ''} onChange={(event) => setNested('pastIllness', 'otherPastIllness', event.target.value)} disabled={disabled} /></label>
+        <CheckboxGroup title="Present illnesses and conditions" items={presentIllnesses} value={form.presentIllness} setValue={(field, next) => setNested('presentIllness', field, next)} disabled={disabled} />
+        <label>Other present condition (specify)<input maxLength={1000} value={form.presentIllness.otherPresentIllness || ''} onChange={(event) => setNested('presentIllness', 'otherPresentIllness', event.target.value)} disabled={disabled} /></label>
       </section>}
 
       {(section === undefined || section === 2) && <section className="form-section">
         <h3 className="section-title">Care history</h3>
         <label>Hospitalized in the past year<BinarySelect value={form.hospitalizationHistory} onChange={(next) => setField('hospitalizationHistory', next)} disabled={disabled} /></label>
         {form.hospitalizationHistory && <label>Reason and dates<textarea maxLength={1000} rows={2} value={form.hospitalizationDetails} onChange={(event) => setField('hospitalizationDetails', event.target.value)} disabled={disabled} /></label>}
-        <ChoiceGroup title="Medication kept at home" items={homeMedicines} value={form.medicationAtHome} setValue={(field, next) => setNested('medicationAtHome', field, next)} disabled={disabled} />
+        <CheckboxGroup title="Medication given at home" items={homeMedicines} value={form.medicationAtHome} setValue={(field, next) => setNested('medicationAtHome', field, next)} disabled={disabled} />
         <label>Other medication kept at home<input maxLength={1000} value={form.medicationAtHome.otherMedication || ''} onChange={(event) => setNested('medicationAtHome', 'otherMedication', event.target.value)} disabled={disabled} /></label>
         <div className="two-fields">
           <label>Regular medication<select value={form.takingRegularMedication} onChange={(event) => setField('takingRegularMedication', event.target.value)} disabled={disabled}><option value="">Unknown</option><option value="yes">Yes</option><option value="no">No</option></select></label>
@@ -100,6 +112,33 @@ export default function HealthRecordFields({ value, onChange, disabled = false, 
 
 function ChoiceGroup({ title, items, value, setValue, disabled }) {
   return <fieldset className="form-section"><legend className="section-title">{title}</legend><div className="three-fields">{items.map(([field, label, nameField]) => <div key={field}><label>{label}<BinarySelect value={value?.[field]} onChange={(next) => setValue(field, next)} disabled={disabled} /></label>{nameField && value?.[field] === true && <label>Medicine name<input maxLength={200} value={value?.[nameField] || ''} onChange={(event) => setValue(nameField, event.target.value)} disabled={disabled} /></label>}</div>)}</div></fieldset>;
+}
+
+function CheckboxGroup({ title, items, value, setValue, disabled }) {
+  return (
+    <fieldset className="form-section">
+      <legend className="section-title">{title}</legend>
+      <p className="field-hint">Check all that apply. Unchecking clears a selection to unknown; untouched saved answers are preserved.</p>
+      <div className="three-fields">
+        {items.map(([field, label, nameField, detailLabel]) => (
+          <div key={field}>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={value?.[field] === true}
+                onChange={(event) => setValue(field, event.target.checked ? true : null)}
+                disabled={disabled}
+              />
+              {label}
+            </label>
+            {nameField && value?.[field] === true && (
+              <label>{detailLabel || `${label} details`}<input maxLength={200} value={value?.[nameField] || ''} onChange={(event) => setValue(nameField, event.target.value)} disabled={disabled} /></label>
+            )}
+          </div>
+        ))}
+      </div>
+    </fieldset>
+  );
 }
 
 function BinarySelect({ value, onChange, disabled }) {
