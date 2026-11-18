@@ -286,7 +286,6 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
           </div>
           <div className="brand-copy">
             <strong>HealthMate+</strong>
-            <span>PRO</span>
           </div>
           <button
             type="button"
