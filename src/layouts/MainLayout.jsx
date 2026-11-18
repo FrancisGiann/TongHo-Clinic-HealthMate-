@@ -109,7 +109,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
   const notificationButtonRef = useRef(null);
   const mobileMenuButtonRef = useRef(null);
   const mobileCloseButtonRef = useRef(null);
-  const pageTitleRef = useRef(null);
+  const mainContentRef = useRef(null);
   const topbarRef = useRef(null);
   useEffect(() => {
     const header = topbarRef.current;
@@ -201,7 +201,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
     if (previousPathRef.current === location.pathname) return;
     previousPathRef.current = location.pathname;
     window.scrollTo({ top: 0, behavior: 'auto' });
-    pageTitleRef.current?.focus({ preventScroll: true });
+    mainContentRef.current?.focus({ preventScroll: true });
   }, [location.pathname]);
   useEffect(() => {
     if (!location.state?.openNotifications) return;
@@ -359,7 +359,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
         </div>
       </aside>
       {mobileOpen && <button type="button" className="mobile-nav-scrim" onClick={() => { setMobileOpen(false); mobileMenuButtonRef.current?.focus(); }} aria-label="Close navigation menu" />}
-      <main className="main-content">
+      <main className="main-content" ref={mainContentRef} tabIndex={-1}>
         <header className="topbar" ref={topbarRef}>
           <button
             ref={mobileMenuButtonRef}
@@ -371,7 +371,7 @@ export default function MainLayout({ settings, dark, setDark, user, onLogout, lo
           >
             <Menu size={21} />
           </button>
-          <div><h1 ref={pageTitleRef} tabIndex={-1}>{title}</h1></div>
+          <div className="topbar-title-slot"><h1 className="sr-only">{title}</h1></div>
           <div className="top-actions">
             <span className="live-clock">{clock.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
             {user?.role === 'school_nurse' && (

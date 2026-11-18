@@ -309,6 +309,7 @@ nav a.protected-link:hover .lock-badge {
   margin: 0;
   letter-spacing: -0.3px;
 }
+.topbar-title-slot { flex: 1; min-width: 0; }
 .top-actions {
   display: flex;
   gap: 10px;

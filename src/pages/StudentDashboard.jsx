@@ -12,9 +12,9 @@ export default function StudentDashboard({ data, user }) {
   ));
 
   return (
-    <main className="student-dashboard">
+    <div className="student-dashboard">
       <header className="page-intro">
-        <div><p className="section-kicker">Student schedule</p><p>View your appointment dates and request a clinic time.</p></div>
+        <div><p className="section-kicker">Student schedule</p><h2>My schedule</h2><p>View your appointment dates and request a clinic time.</p></div>
         <Link className="primary-btn" to="/appointments"><CalendarDays size={16} aria-hidden="true" /> Request appointment</Link>
       </header>
       <section className="panel portal-detail-panel" aria-labelledby="student-appointments-heading">
@@ -28,6 +28,6 @@ export default function StudentDashboard({ data, user }) {
         </div> : <div className="portal-empty-state"><CalendarDays size={22} aria-hidden="true" /><div><strong>No appointments yet</strong><p>Request an available clinic time when you need an appointment.</p></div></div>}
         {upcoming.length === 0 && appointments.length > 0 && <p className="field-hint">You have no upcoming appointment requests.</p>}
       </section>
-    </main>
+    </div>
   );
 }

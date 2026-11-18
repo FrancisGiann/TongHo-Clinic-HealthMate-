@@ -121,6 +121,7 @@ export default function Dashboard({ data, user }) {
     <div className={`dashboard${isAdmin ? " admin-dashboard" : ""}`}>
       <section className="welcome-band">
         <div>
+          {isAdmin && <h2>Administration dashboard</h2>}
           <p className="welcome-copy">
             {isAdmin
               ? "Review account access and open school reports."
@@ -258,6 +259,9 @@ function Action({ icon: Icon, label, text, tone, onClick }) {
 function NurseDashboard({ data, user, preferences, preferenceControl }) {
   const now = new Date();
   const today = toDateKey(now);
+  const manilaHour = Number(new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', hour: '2-digit', hourCycle: 'h23' }).format(now));
+  const greeting = manilaHour < 12 ? 'Good morning' : manilaHour < 18 ? 'Good afternoon' : 'Good evening';
+  const greetingName = (user?.name || 'User').replace(/^Nurse\s+/i, '').trim().split(/\s+/)[0] || 'User';
   const summary = data.dashboardSummary;
   const patients = data.students || [];
   const getPatient = (id) => patients.find((patient) => String(patient.id) === String(id));
@@ -309,6 +313,7 @@ function NurseDashboard({ data, user, preferences, preferenceControl }) {
     <div className="nurse-dashboard">
       <header className="nurse-dashboard-header">
         <div>
+          <h2>{greeting}, {greetingName}</h2>
           <p className="nurse-dashboard-date">{todayLabel} · {data.settings?.schoolYear || 'School clinic'}</p>
           <p>Here’s what needs your attention at the clinic today.</p>
         </div>
