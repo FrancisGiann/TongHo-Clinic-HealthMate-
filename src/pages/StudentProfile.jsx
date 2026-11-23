@@ -243,7 +243,7 @@ export default function StudentProfile({ data, reload }) {
           </div>
           <div className="detail-list">
             <Detail label="Date of birth" value={student.birthDate} />
-            <Detail label="Gender" value={student.gender} />
+            <Detail label="Sex" value={student.gender} />
             <Detail label="Blood type" value={student.bloodType} />
             <Detail
               label="Medical conditions"
@@ -439,9 +439,9 @@ export default function StudentProfile({ data, reload }) {
             </div>
 
             <label>
-              Gender
+              Sex
               <select name="gender" value={form.gender || ""} onChange={update}>
-                <option value="">Select gender</option>
+                <option value="">Select sex</option>
                 <option value="Male">Male</option>
                 <option value="Female">Female</option>
                 <option value="Other">Other</option>

@@ -99,7 +99,7 @@ export default function Students({ directory: directoryInput, directoryReady = t
       Department: student.department,
       Position: student.position,
       "Birth Date": student.birthDate,
-      Gender: student.gender,
+      Sex: student.gender,
       "Guardian Name": student.guardianName,
       "Guardian Phone": student.guardianPhone,
       "Guardian Relation": student.guardianRelation || "Parent",

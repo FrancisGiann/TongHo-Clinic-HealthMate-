@@ -5,7 +5,7 @@ import { api } from '../utils/api';
 import './HealthRecordReview.css';
 
 const summaryFields = [
-  ['motherName', 'Mother’s name'], ['fatherName', 'Father’s name'], ['guardianRelation', 'Relationship'], ['lastTreatmentDate', 'Last treatment date'], ['takingRegularMedication', 'Taking regular medication'], ['birthDate', 'Date of birth'], ['gender', 'Gender'], ['guardianName', 'Parent or guardian'], ['guardianPhone', 'Contact number'],
+  ['motherName', 'Mother’s name'], ['fatherName', 'Father’s name'], ['guardianRelation', 'Relationship'], ['lastTreatmentDate', 'Last treatment date'], ['takingRegularMedication', 'Taking regular medication'], ['birthDate', 'Date of birth'], ['gender', 'Sex'], ['guardianName', 'Parent or guardian'], ['guardianPhone', 'Contact number'],
   ['bloodType', 'Blood type'], ['allergies', 'Allergies'], ['conditions', 'Medical conditions'], ['medications', 'Current medications'],
   ['hospitalizationDetails', 'Hospitalization'], ['g6pdDeficiency', 'G6PD deficiency'], ['regularMedicationName', 'Regular medication'],
   ['therapistName', 'Therapy professional'], ['therapyInterventions', 'Therapy/intervention occasions'], ['concernsDetails', 'Family concerns'],

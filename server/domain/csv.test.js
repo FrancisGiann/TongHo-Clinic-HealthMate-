@@ -25,3 +25,11 @@ test('student CSV imports preserve only minimal roster fields and accept Kinderg
   assert.equal(validateStudentImport(parseCsv('Student ID,Name,Grade\nPTHI-K-2,Fictional Child,Kindergarten')).valid, true);
   assert.equal(validateStudentImport(parseCsv('Student ID,Name,Grade\nPTHI-X,Fictional Child,Grade 11')).valid, false);
 });
+
+test('faculty CSV imports map both Sex and legacy Gender headers to the gender field', async () => {
+  const { importCsvRecords } = await import('../../src/utils/csv.js');
+  const sex = importCsvRecords(parseCsv('Faculty ID,Name,Sex\nFAC-1,Fictional Nurse,Female'), 'faculty');
+  const gender = importCsvRecords(parseCsv('Faculty ID,Name,Gender\nFAC-2,Fictional Nurse,Male'), 'faculty');
+  assert.deepEqual(sex, [{ facultyId: 'FAC-1', name: 'Fictional Nurse', gender: 'Female' }]);
+  assert.deepEqual(gender, [{ facultyId: 'FAC-2', name: 'Fictional Nurse', gender: 'Male' }]);
+});

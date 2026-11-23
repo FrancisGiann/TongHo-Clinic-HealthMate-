@@ -390,7 +390,7 @@ export function PatientSummaryDocument({ summary, patient, schoolName }) {
   const identityDetails = identity.patientType === 'faculty'
     ? [identity.department, identity.position].filter(Boolean).join(' · ')
     : [identity.gradeLevel, identity.section].filter(Boolean).join(' · ');
-  const demographics = [health.birthDate && `Birth date: ${formatDisplayDate(health.birthDate)}`, health.gender && `Gender: ${health.gender}`, health.bloodType && `Blood type: ${health.bloodType}`].filter(Boolean).join(' · ');
+  const demographics = [health.birthDate && `Birth date: ${formatDisplayDate(health.birthDate)}`, health.gender && `Sex: ${health.gender}`, health.bloodType && `Blood type: ${health.bloodType}`].filter(Boolean).join(' · ');
   const fields = [['Allergies', 'allergies'], ['Conditions', 'conditions'], ['Medications', 'medications'], ['Blood type', 'bloodType'], ['Past illness', 'pastIllness'], ['Present illness', 'presentIllness'], ['Hospitalization history', 'hospitalizationHistory'], ['Therapy and interventions', 'therapyInterventions'], ['Health concerns', 'concernsDetails']];
   return <article className="report-print-document patient-summary-print">
     <header><p>{schoolName || 'Philippine Tong Ho Institute'}</p><h1>Patient Health Summary</h1><p>{identity.name || 'Patient'} · {identity.patientType === 'faculty' ? 'Faculty' : 'Student'} · ID: {patientId || 'Unavailable'}</p><p>{identityDetails || (identity.patientType === 'faculty' ? 'Faculty' : 'Student')}</p>{demographics && <p>{demographics}</p>}<p>Period: {summary?.period?.start} to {summary?.period?.end} · Generated: {formatManilaDateTime(new Date())}</p></header>

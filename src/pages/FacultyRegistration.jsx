@@ -71,7 +71,7 @@ export default function FacultyRegistration({ schemaVersion, reload, embedded = 
           </div>
           </div></details><details className="optional-form-group"><summary>Personal details (optional)</summary><div className="three-fields">
             <label>Birth date<input name="birthDate" type="date" value={form.birthDate} onChange={update} disabled={saving} /></label>
-            <label>Gender<select name="gender" value={form.gender} onChange={update} disabled={saving}><option value="">Select</option><option>Female</option><option>Male</option><option>Prefer not to say</option></select></label>
+            <label>Sex<select name="gender" value={form.gender} onChange={update} disabled={saving}><option value="">Select</option><option>Female</option><option>Male</option><option>Prefer not to say</option></select></label>
             <label>Blood type<select name="bloodType" value={form.bloodType} onChange={update} disabled={saving}><option value="">Not recorded</option>{['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map((value) => <option key={value}>{value}</option>)}</select></label>
           </div>
           </details>

@@ -34,7 +34,7 @@ function normalizeRosterRow(type, row) {
         email: bounded(row?.email, 254, 'Email', errors).toLowerCase(),
         contactNumber: bounded(row?.contactNumber || row?.phone, 40, 'Contact number', errors),
         birthDate: bounded(row?.birthDate, 10, 'Birth date', errors),
-        gender: bounded(row?.gender, 30, 'Gender', errors),
+        gender: bounded(row?.gender, 30, 'Sex', errors),
         bloodType: bounded(row?.bloodType, 10, 'Blood type', errors),
         allergies: bounded(row?.allergies, 2000, 'Allergies', errors),
         conditions: bounded(row?.conditions, 2000, 'Medical conditions', errors),

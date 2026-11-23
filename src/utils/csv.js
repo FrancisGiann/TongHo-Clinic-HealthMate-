@@ -73,7 +73,7 @@ const importHeaderAliases = {
   facultyid: 'facultyId', staffid: 'facultyId',
   name: 'name', fullname: 'name', patientname: 'name',
   grade: 'gradeLevel', gradelevel: 'gradeLevel',
-  section: 'section', adviser: 'adviser', birthdate: 'birthDate', gender: 'gender',
+  section: 'section', adviser: 'adviser', birthdate: 'birthDate', gender: 'gender', sex: 'gender',
   department: 'department', position: 'position', title: 'position', email: 'email', contact: 'contactNumber', contactnumber: 'contactNumber',
   patientid: 'patientId', visitdate: 'date', date: 'date', type: 'type', complaint: 'chiefComplaint', chiefcomplaint: 'chiefComplaint',
   treatment: 'treatment', disposition: 'disposition', notes: 'notes',
